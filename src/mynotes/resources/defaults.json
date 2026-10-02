@@ -1,0 +1,40 @@
+{
+  "workspace_schema_version": 2,
+  "onboarding": {
+    "completed_groups": [],
+    "next_group": "personal",
+    "status": "not_started"
+  },
+  "personal": {
+    "institution": null,
+    "interface_language": "en",
+    "primary_goal": "understanding",
+    "study_period": null,
+    "study_program": null
+  },
+  "paths": {
+    "recording_dirs": []
+  },
+  "ingestion": {
+    "stable_seconds": 90,
+    "audio_extensions": [".m4a", ".wav", ".mp3", ".caf"]
+  },
+  "courses": [],
+  "providers": {
+    "configured": {},
+    "default": null,
+    "quota_behavior": "pause_and_resume"
+  },
+  "style": {
+    "detail": {
+      "cases": "standard",
+      "code": "standard",
+      "derivations": "standard",
+      "exercises": "standard",
+      "formulas": "standard"
+    },
+    "freeform_preferences": "",
+    "quality": "standard",
+    "recap": true
+  }
+}

@@ -1,0 +1,40 @@
+[project]
+name = "mynotes"
+version = "0.1.0"
+description = "Local-first, workspace-separated lecture notes assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Gabriele Zanni", email = "232783751+gabrizanni@users.noreply.github.com" }]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "av>=14,<17",
+  "pillow>=12,<13",
+  "pypdfium2>=5.13.0",
+  "python-docx==1.2.0",
+  "python-pptx==1.0.2",
+]
+
+[project.scripts]
+mynotes = "mynotes.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mynotes"]
+artifacts = ["src/mynotes/resources/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

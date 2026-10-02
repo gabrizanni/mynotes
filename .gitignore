@@ -1,0 +1,26 @@
+# Python build and test outputs
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+# Local environments and editor state
+.venv/
+.DS_Store
+
+# User workspaces are always external to this repository. This guard also
+# prevents an accidental local workspace from being committed during development.
+MyNotes Personal/
+workspace/
+
+# The original phase specifications and working progress record are retained
+# locally as the user's private planning record. They are deliberately not
+# publishable source files or release contents.
+/00-index.md
+/PROGRESS.md
+/docs/0[1-7]-*.md
+/docs/remediation/
+/private-reports/

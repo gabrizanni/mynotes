@@ -1,0 +1,4 @@
+Source: https://www.python.org/about/
+Retrieved: 2026-09-29
+
+The official overview presents beginner guidance, community channels, documentation, a broad package ecosystem, multiple application areas, and an open-source license as complementary parts of the language's accessibility and use.

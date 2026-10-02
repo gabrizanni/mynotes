@@ -1,0 +1,2 @@
+A control system compares a target with an observed value. FORMULA: e = target - observation
+The error guides the next adjustment. Repeated observations show whether the process converges. A small table makes the comparison explicit. A line graph shows the improving observations.

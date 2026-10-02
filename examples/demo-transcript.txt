@@ -1,0 +1,2 @@
+Feedback loops compare an observed result with a target and adjust the next action.
+In a simple model, error equals target minus observation.

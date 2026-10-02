@@ -1,0 +1,1 @@
+Use a feedback loop when a system can observe a result and change its next action.
