@@ -17,7 +17,12 @@
   },
   "ingestion": {
     "stable_seconds": 90,
-    "audio_extensions": [".m4a", ".wav", ".mp3", ".caf"]
+    "audio_extensions": [
+      ".m4a",
+      ".wav",
+      ".mp3",
+      ".caf"
+    ]
   },
   "courses": [],
   "providers": {
@@ -33,8 +38,16 @@
       "exercises": "standard",
       "formulas": "standard"
     },
-    "freeform_preferences": "",
+    "freeform_preferences": "Word design: margins 1.5 cm on every side; built-in Heading 1 for lesson titles, Heading 2 for sections and Heading 3 for subsections; orange key terms use the character style Termine tecnico.",
     "quality": "standard",
-    "recap": true
+    "recap": true,
+    "profile": {
+      "writing_style": "clear_study",
+      "list_density": "balanced",
+      "image_policy": "essential",
+      "question_count": 5,
+      "recap": true,
+      "recap_language": "it"
+    }
   }
 }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -89,7 +90,7 @@ def _pptx_visual_scores(path: Path) -> dict[int, dict[str, int | float]]:
 
 
 def _render_pptx_as_pdf(path: Path, output_dir: Path) -> Path | None:
-    executable = shutil.which("soffice") or shutil.which("libreoffice")
+    executable = os.environ.get("MYNOTES_LIBREOFFICE") or shutil.which("soffice") or shutil.which("libreoffice")
     if not executable:
         return None
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -101,12 +102,64 @@ def _render_pptx_as_pdf(path: Path, output_dir: Path) -> Path | None:
     return candidate if completed.returncode == 0 and candidate.is_file() else None
 
 
+def extract_ppt(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extract legacy PowerPoint through a local LibreOffice PDF conversion."""
+    with tempfile.TemporaryDirectory(prefix="mynotes-ppt-") as temporary:
+        pdf = _render_pptx_as_pdf(path, Path(temporary))
+        if pdf is None:
+            raise ExtractionError(
+                "Legacy .ppt extraction requires LibreOffice; configure MYNOTES_LIBREOFFICE or install soffice"
+            )
+        chunks, visuals = extract_pdf(pdf, visual_dir)
+    for visual in visuals:
+        visual["source_file"] = str(path)
+    return chunks, visuals
+
+
+def extract_xlsx(path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read formulas and cached values with sheet and cell provenance."""
+    try:
+        from openpyxl import load_workbook
+    except ImportError as error:
+        raise ExtractionError("Excel extraction requires openpyxl") from error
+    formulas = load_workbook(path, read_only=True, data_only=False)
+    values = load_workbook(path, read_only=True, data_only=True)
+    chunks: list[dict[str, Any]] = []
+    try:
+        for sheet in formulas.worksheets:
+            cached = values[sheet.title]
+            for row_formula, row_cached in zip(sheet.iter_rows(), cached.iter_rows()):
+                parts: list[str] = []
+                for cell, value_cell in zip(row_formula, row_cached):
+                    if cell.value is None:
+                        continue
+                    if cell.data_type == "f":
+                        cached_value = value_cell.value if value_cell.value is not None else "not available"
+                        parts.append(f"{cell.coordinate}: formula {cell.value}; cached value {cached_value}")
+                    else:
+                        parts.append(f"{cell.coordinate}: {cell.value}")
+                if parts:
+                    chunks.append({"content": "; ".join(parts), "sheet": sheet.title, "row": row_formula[0].row})
+    finally:
+        formulas.close()
+        values.close()
+    return chunks, []
+
+
 def extract_pptx(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     from pptx import Presentation
 
     chunks: list[dict[str, Any]] = []
     for number, slide in enumerate(Presentation(path).slides, start=1):
-        texts = [shape.text.strip() for shape in slide.shapes if hasattr(shape, "text") and shape.text.strip()]
+        texts: list[str] = []
+        table_number = 0
+        for shape in slide.shapes:
+            if getattr(shape, "has_table", False):
+                table_number += 1
+                rows = [" | ".join(" ".join(cell.text.split()) for cell in row.cells) for row in shape.table.rows]
+                texts.append(f"Table {table_number} (source rows):\n" + "\n".join(rows))
+            elif hasattr(shape, "text") and shape.text.strip():
+                texts.append(shape.text.strip())
         if texts:
             chunks.append({"content": "\n".join(texts), "page": number})
     signals = _pptx_visual_scores(path)
@@ -184,6 +237,10 @@ def extract_material(path: Path, *, visual_dir: Path | None = None, lesson_numbe
             return extract_pdf(path, visual_dir)
         if suffix == ".pptx":
             return extract_pptx(path, visual_dir)
+        if suffix == ".ppt":
+            return extract_ppt(path, visual_dir)
+        if suffix == ".xlsx":
+            return extract_xlsx(path)
         if suffix == ".docx":
             return extract_docx(path, lesson_number)
         if suffix in {".txt", ".md"}:

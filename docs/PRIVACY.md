@@ -1,8 +1,9 @@
 # Privacy and release boundary
 
 The public release contains application code, generic documentation, synthetic
-examples, locked dependencies, and generic integration templates only. It does
-not contain a private workspace, configuration, provider credentials, logs,
+examples, locked dependencies, a content-free Word design template, and generic
+integration templates only. It does not contain a private workspace,
+configuration, provider credentials, logs,
 audio, transcripts, course materials, or generated handouts.
 
 By default, a private workspace is created under macOS Application Support.

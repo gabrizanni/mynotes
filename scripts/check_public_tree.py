@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from zipfile import BadZipFile, ZipFile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +42,7 @@ PUBLIC_FILES = (
     "integrations/README.md",
     "scripts/README.md",
     "scripts/build_release.py",
+    "scripts/build_base_template.py",
     "scripts/check_public_tree.py",
     "scripts/install-mynotes.sh",
     "scripts/validate_word_pipeline.py",
@@ -58,6 +60,15 @@ PRIVATE_TERMS = (
     "Bocc" + "oni",
 )
 PRIVATE_REFERENCE = re.compile("|".join(re.escape(term) for term in PRIVATE_TERMS), re.IGNORECASE)
+TEMPLATE_PARTS = frozenset({
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "word/document.xml",
+    "word/_rels/document.xml.rels",
+    "word/styles.xml",
+    "word/numbering.xml",
+    "word/theme/theme1.xml",
+})
 
 
 def public_paths(root: Path = ROOT) -> list[Path]:
@@ -76,6 +87,22 @@ def validate(root: Path = ROOT) -> list[str]:
     for path in public_paths(root):
         if not path.is_file():
             errors.append(f"missing public file: {path.relative_to(root)}")
+            continue
+        if path.suffix == ".docx":
+            if path.relative_to(root).as_posix() != "src/mynotes/resources/base-template.docx":
+                errors.append(f"unexpected public document: {path.relative_to(root)}")
+                continue
+            try:
+                with ZipFile(path) as archive:
+                    members = set(archive.namelist())
+                    if members != TEMPLATE_PARTS:
+                        errors.append(f"unexpected template package parts: {path.relative_to(root)}")
+                    for member in members & TEMPLATE_PARTS:
+                        content = archive.read(member).decode("utf-8")
+                        if PRIVATE_REFERENCE.search(content):
+                            errors.append(f"private reference in template part: {member}")
+            except (BadZipFile, UnicodeDecodeError):
+                errors.append(f"invalid public document: {path.relative_to(root)}")
             continue
         try:
             content = path.read_text(encoding="utf-8")

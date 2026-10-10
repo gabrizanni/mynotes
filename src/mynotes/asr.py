@@ -33,6 +33,16 @@ def timestamp(seconds: float) -> str:
     return f"{whole // 3600:02d}:{(whole % 3600) // 60:02d}:{whole % 60:02d}"
 
 
+def speaker_role(speaker: Any) -> str:
+    """Only an explicit role label establishes professor or student status."""
+    label = str(speaker or "UNKNOWN").strip().casefold()
+    if label in {"professor", "teacher", "instructor", "lecturer"}:
+        return "Professor"
+    if re.fullmatch(r"student(?:\s+\d+)?", label):
+        return "Student"
+    return "UNKNOWN"
+
+
 def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
     """Normalize WhisperKit, FluidAudio and common Whisper JSON shapes."""
     if isinstance(payload, list):
@@ -334,7 +344,10 @@ def merge_passes(primary: list[dict[str, Any]], secondary: list[dict[str, Any]],
             {
                 "id": f"T{index:03d}", "start_seconds": start, "end_seconds": end,
                 "start": timestamp(start), "end": timestamp(end),
-                "speaker": str(segment.get("speaker", "UNKNOWN")), "text": str(segment["text"]),
+                "speaker": str(segment.get("speaker", "UNKNOWN")),
+                "speaker_role": speaker_role(segment.get("speaker")),
+                "speaker_role_source": "asr_label" if speaker_role(segment.get("speaker")) != "UNKNOWN" else "unverified",
+                "text": str(segment["text"]),
                 "alternative": alternative or None, "agreement": round(agreement, 4),
                 "confidence": round(_number(segment.get("confidence"), 0.0), 4), "needs_review": needs_review,
                 **({"words": segment["words"]} if segment.get("words") else {}),
@@ -389,8 +402,12 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
     turns = _parse_turns(json.loads(diarization.read_text(encoding="utf-8"))) if diarization.is_file() else []
     professor_label: str | None = None
     reference_path = Path(settings["professor_reference"]) if settings.get("professor_reference") else None
+    if reference_path and not reference_path.is_file():
+        raise ASRError(f"Configured professor reference is missing: {reference_path}")
     profile_path = workspace.state_dir / "speaker_profiles" / f"{course_code}.json"
-    if reference_path and reference_path.is_file() and not profile_path.is_file():
+    reference_hash = file_sha256(reference_path) if reference_path and reference_path.is_file() else None
+    cached_profile = json.loads(profile_path.read_text(encoding="utf-8")) if profile_path.is_file() else None
+    if reference_hash and (cached_profile is None or cached_profile.get("source_sha256") != reference_hash):
         enrollment_dir = workspace.state_dir / "speaker_profiles" / f"{course_code}-enrollment"
         enrollment_dir.mkdir(parents=True, exist_ok=True)
         reference_embeddings = enrollment_dir / "embeddings.json"
@@ -398,8 +415,8 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
         center = _centroid([row["embedding256"] for row in _embedding_rows(reference_embeddings)])
         if not center:
             raise ASRError("Professor enrollment clip produced no usable embedding")
-        atomic_json_write(profile_path, {"course_code": course_code, "source_sha256": file_sha256(reference_path), "centroid": center})
-    if profile_path.is_file():
+        atomic_json_write(profile_path, {"course_code": course_code, "source_sha256": reference_hash, "centroid": center})
+    if profile_path.is_file() and (not reference_hash or json.loads(profile_path.read_text(encoding="utf-8")).get("source_sha256") == reference_hash):
         reference = json.loads(profile_path.read_text(encoding="utf-8")).get("centroid", [])
         clusters: dict[int, list[list[float]]] = {}
         for row in _embedding_rows(embeddings):
@@ -411,22 +428,30 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             cluster, score = max(scores.items(), key=lambda item: item[1])
             if score >= 0.75:
                 professor_label = f"S{cluster + 1}"
-    students: dict[str, str] = {}
+    speakers: dict[str, str] = {}
     for segment in transcript:
         best = max(
             turns,
             key=lambda turn: max(0.0, min(segment["end_seconds"], turn["end"]) - max(segment["start_seconds"], turn["start"])),
             default=None,
         )
-        if not best or best["confidence"] < 0.5:
+        overlap = (
+            max(0.0, min(segment["end_seconds"], best["end"]) - max(segment["start_seconds"], best["start"]))
+            if best else 0.0
+        )
+        if not best or overlap <= 0 or best["confidence"] < 0.5:
             segment["speaker"] = "UNKNOWN"
         elif professor_label and best["speaker"] == professor_label:
             segment["speaker"] = "Professor"
         elif best["speaker"] == "UNKNOWN":
             segment["speaker"] = "UNKNOWN"
         else:
-            students.setdefault(best["speaker"], f"Student {len(students) + 1}")
-            segment["speaker"] = students[best["speaker"]]
+            prefix = "Student" if professor_label else "Speaker"
+            speakers.setdefault(best["speaker"], f"{prefix} {len(speakers) + 1}")
+            segment["speaker"] = speakers[best["speaker"]]
+        segment["speaker_role"] = speaker_role(segment["speaker"])
+        segment["speaker_role_source"] = "diarization" if segment["speaker_role"] != "UNKNOWN" else "unverified"
+        segment["speaker_role_confidence"] = round(best["confidence"], 4) if best and overlap > 0 else None
     return {"status": "completed", "professor_identified": professor_label is not None, "turns": len(turns)}
 
 
@@ -464,6 +489,8 @@ def transcribe_audio(
             "agreement_threshold", "diarization_engine", "professor_reference",
         )
     }
+    reference = Path(settings["professor_reference"]) if settings.get("professor_reference") else None
+    relevant["professor_reference_sha256"] = file_sha256(reference) if reference and reference.is_file() else None
     settings_hash = hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()
     cache_key = hashlib.sha256(f"{audio_hash}:{settings_hash}".encode()).hexdigest()
     manifest_path = run_dir / "transcript.json"

@@ -2,7 +2,7 @@
 
 > Assistente AI agentico local-first e motore transazionale di pubblicazione Word per macOS.
 
-[![Tests](https://img.shields.io/badge/tests-52%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-80%20passed-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-black.svg)]()
 [![Package Manager](https://img.shields.io/badge/built%20with-uv-purple.svg)]()
@@ -91,7 +91,7 @@ cd mynotes
 # 2. Sincronizza le dipendenze in <3 secondi
 uv sync
 
-# 3. Esegui la suite di test completa (52 test)
+# 3. Esegui la suite di test completa
 uv run pytest
 
 # 4. Esegui il test end-to-end della pipeline Word
@@ -114,6 +114,16 @@ mynotes prepare CS101-L01 \
   --material "~/Courses/CS101/slides.pdf" \
   --personal-notes "~/Courses/CS101/notes.docx"
 
+# Riusa una trascrizione normalizzata già disponibile, senza ripetere l'ASR;
+# puoi aggiungere --audio per mantenere il riferimento alla registrazione.
+mynotes prepare CS101-L01 --workspace "~/Documents/MyNotes-Workspace" \
+  --transcript "~/Courses/CS101/transcript.json"
+
+# Se i nomi dei file sono ambigui, imposta course.lesson_sources["1"] nella
+# configurazione privata: {"materials": ["/percorso/slides.pptx"],
+# "personal_notes": "/percorso/notes.docx"}. Le fonti esatte prevalgono
+# sulla ricerca automatica; sono supportati anche .ppt e .xlsx.
+
 # 3. Genera la bozza con il provider configurato (Codex o Antigravity)
 mynotes generate CS101-L01 --workspace "~/Documents/MyNotes-Workspace" --provider agy --quality standard
 
@@ -127,6 +137,30 @@ mynotes publish CS101-L01 --workspace "~/Documents/MyNotes-Workspace"
 mynotes history CS101 --workspace "~/Documents/MyNotes-Workspace"
 mynotes status --workspace "~/Documents/MyNotes-Workspace"
 ```
+
+### Stile delle dispense
+
+MyNotes include uno stile di studio codificato: elenco numerato degli argomenti
+all'inizio della lezione, paragrafi esplicativi, veri elenchi Word, termini tecnici
+selezionati in arancione, immagini motivate dalle fonti, domande con risposte,
+riepilogo in italiano e numeri di pagina continui. L'impaginazione usa un
+modello Word neutro incluso nell'applicazione: non serve fornire una dispensa
+personale come riferimento. Il disegno usa Aptos a 11 pt per il testo, Aptos
+Display per i titoli di 16/14/12 pt, termini chiave arancioni in grassetto e
+didascalie grigie in corsivo.
+
+Il primo setup chiede le preferenze per scrittura, elenchi, immagini, riepilogo e
+domande. Ogni corso eredita tali scelte, ma può modificarle separatamente:
+
+I margini sono 1,5 cm su tutti i lati. Titolo della lezione, paragrafo e sottoparagrafo usano gli stili Word nativi Titolo 1, Titolo 2 e Titolo 3. I termini arancioni hanno lo stile carattere visibile `Termine tecnico`, modificabile insieme in Word. I livelli JSON 3/4 del provider restano invariati e vengono tradotti in Titolo 2/3.
+
+```sh
+mynotes style show --workspace "~/Documents/MyNotes-Workspace"
+mynotes style edit --workspace "~/Documents/MyNotes-Workspace" --course CS101
+mynotes style preview --workspace "~/Documents/MyNotes-Workspace" --course CS101
+```
+
+Le modifiche valgono per i candidati successivi e non riscrivono le dispense già pubblicate.
 
 ---
 

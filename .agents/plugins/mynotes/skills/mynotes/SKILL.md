@@ -5,7 +5,8 @@ description: Coordinate MyNotes course setup, evidence preparation, note generat
 # MyNotes
 
 Use the installed `mynotes` command and the workspace in `MYNOTES_WORKSPACE`.
-Run `mynotes doctor` and `mynotes status` first. For a new lecture use the real
+At an empty-chat launch, greet the user and wait. Before any concrete task, run
+`mynotes doctor` and `mynotes status`. For a new lecture use the real
 pipeline: `prepare`, `generate`, `build`, then `publish`. Building is candidate-only;
 publishing requires a validated rendered DOCX. Never invent a provider success,
 silently drop evidence, overwrite an externally edited Word, or launch `mynotes chat`

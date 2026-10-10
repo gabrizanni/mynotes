@@ -16,8 +16,10 @@ from .configuration import (
     clean_path,
     configured_directories,
     course_template,
+    effective_style,
     merge_course,
     merge_group_answers,
+    normalize_style_profile,
     provider_availability,
 )
 from .workspace import Workspace
@@ -64,6 +66,41 @@ def _write_directories(configuration: dict[str, Any]) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
 
+def _prompt_style_profile(current: dict[str, Any], *, changed_only: bool = False) -> dict[str, Any]:
+    """Ask about editorial choices, keeping all visual rules code-owned."""
+    fields = (
+        ("writing_style", "Writing [clear_study/concise/detailed]"),
+        ("list_density", "Lists [balanced/prose_first/list_first]"),
+        ("image_policy", "Images [essential/none/explanatory]"),
+        ("question_count", "Maximum study questions [1-5]"),
+        ("recap", "End-of-lesson recap [yes/no]"),
+        ("recap_language", "Recap language [it/en/same_as_notes]"),
+    )
+    result: dict[str, Any] = {}
+    for key, label in fields:
+        existing = current[key]
+        shown = "yes" if existing is True else "no" if existing is False else str(existing)
+        raw = input(f"{label} [{shown}]: ").strip()
+        if not raw:
+            if not changed_only:
+                result[key] = existing
+            continue
+        if key == "question_count":
+            try:
+                value: Any = int(raw)
+            except ValueError as error:
+                raise ConfigurationError("Maximum study questions must be 1 to 5") from error
+        elif key == "recap":
+            if raw.casefold() not in {"yes", "y", "no", "n", "si", "sì"}:
+                raise ConfigurationError("Recap must be yes or no")
+            value = raw.casefold() in {"yes", "y", "si", "sì"}
+        else:
+            value = raw.lower()
+        if not changed_only or value != existing:
+            result[key] = value
+    return normalize_style_profile(result, partial=changed_only)
+
+
 def _interactive_group(group: str, configuration: dict[str, Any]) -> dict[str, Any]:
     """Ask a small, provider-free batch of questions and return its answers."""
     if group == "personal":
@@ -100,9 +137,21 @@ def _interactive_group(group: str, configuration: dict[str, Any]) -> dict[str, A
             courses.append(course)
         return {"courses": courses}
     if group == "style":
+        quality = input(f"Default quality [{configuration['style']['quality']}]: ").strip() or configuration["style"]["quality"]
+        freeform_answer = input("Additional style preferences (blank keeps current, '-' clears): ").strip()
+        freeform = ("" if freeform_answer == "-" else freeform_answer) if freeform_answer else configuration["style"]["freeform_preferences"]
+        profile = _prompt_style_profile(effective_style(configuration))
+        selected_global = effective_style({"style": {"profile": profile}})
+        course_profiles: dict[str, dict[str, Any]] = {}
+        for course in configuration["courses"]:
+            code = course["code"]
+            if input(f"Customize style for {code} beyond global choices? [y/N]: ").strip().lower() in {"y", "yes", "s", "si", "sì"}:
+                course_profiles[code] = _prompt_style_profile(selected_global, changed_only=True)
         return {
-            "quality": input("Default quality [standard]: ").strip() or "standard",
-            "freeform_preferences": input("Additional style preferences (optional): ").strip(),
+            "quality": quality,
+            "freeform_preferences": freeform,
+            "profile": profile,
+            "course_profiles": course_profiles,
         }
     if group == "providers":
         provider = input("Default provider [codex/agy/none]: ").strip().lower() or "none"
@@ -159,6 +208,21 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--instruction", help="natural-language preference to persist safely")
     configure.add_argument("--course", help="course code for a persistent instruction")
     configure.add_argument("--create-missing-dirs", action="store_true", help="create displayed configured folders")
+    style = subparsers.add_parser("style", help="inspect, edit, or preview the coded note style")
+    style_subparsers = style.add_subparsers(dest="style_command", required=True)
+    for name, help_text in (
+        ("show", "show the effective style"),
+        ("edit", "change global defaults or one course's overrides"),
+        ("preview", "build a synthetic Word preview without source documents"),
+    ):
+        command = style_subparsers.add_parser(name, help=help_text)
+        command.add_argument("--workspace", help="private workspace path")
+        command.add_argument("--course", help="course code; omit for global defaults")
+        if name == "edit":
+            command.add_argument("--file", help="JSON object with style fields; omit for guided questions")
+            command.add_argument("--reset", action="store_true", help="clear course overrides or reset global defaults")
+        if name == "preview":
+            command.add_argument("--output", help="destination .docx; defaults to private workspace/previews")
     course = subparsers.add_parser("course", help="add or edit a configured course")
     course_subparsers = course.add_subparsers(dest="course_command", required=True)
     for name, help_text in (("add", "add a course from JSON"), ("edit", "replace a course from JSON")):
@@ -206,7 +270,8 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("lecture_id", help="COURSE-LNN")
     prepare.add_argument("--workspace", help="private workspace path")
     prepare.add_argument("--audio", help="recording path; otherwise use the configured recording inventory")
-    prepare.add_argument("--material", action="append", default=[], help="PDF, PPTX, DOCX, text, or notebook; repeatable")
+    prepare.add_argument("--transcript", help="existing normalized transcript to reuse without ASR")
+    prepare.add_argument("--material", action="append", default=[], help="PDF, PPT/PPTX, XLSX, DOCX, text, or notebook; repeatable")
     prepare.add_argument("--personal-notes", help="DOCX, Markdown, or text containing the lesson block")
     prepare.add_argument("--web-snapshot", action="append", default=[], help="local snapshot of a linked online source; repeatable")
     generate = subparsers.add_parser("generate", help="generate a reviewable candidate from a prepared source pack")
@@ -289,7 +354,7 @@ def _course(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     store = workspace.configuration_store()
     configuration = store.load()
-    course = _load_json(arguments.file) if arguments.file else _interactive_course_entry()
+    course = _load_json(arguments.file) if arguments.file else _interactive_course_entry(configuration)
     if arguments.course_command == "add":
         configuration["courses"].append(course)
     else:
@@ -305,7 +370,7 @@ def _course(arguments: argparse.Namespace) -> int:
     return 0
 
 
-def _interactive_course_entry() -> dict[str, Any]:
+def _interactive_course_entry(configuration: dict[str, Any]) -> dict[str, Any]:
     course = course_template()
     course["code"] = input("Course code: ").strip().upper()
     course["name"] = input("Course name: ").strip()
@@ -320,12 +385,60 @@ def _interactive_course_entry() -> dict[str, Any]:
     course["folders"]["personal_notes"] = input("Personal notes folder: ").strip()
     course["folders"]["handout"] = input("Cumulative Word folder: ").strip()
     course["folders"]["syllabus"] = input("Syllabus path/folder (optional): ").strip()
-    course["folders"]["style_reference"] = input("Reference notes DOCX/PDF (optional): ").strip()
     course["transcription"]["accent"] = input("Accent/speech characteristics (optional): ").strip()
     course["transcription"]["vocabulary"] = [item.strip() for item in input("Technical vocabulary, comma-separated (optional): ").split(",") if item.strip()]
     persistent = input("Persistent note preferences for this course (optional): ").strip()
     course["preferences"]["persistent_instructions"] = [persistent] if persistent else []
+    if input("Customize writing, lists, images and recap for this course? [y/N]: ").strip().lower() in {"y", "yes", "s", "si", "sì"}:
+        course["style"] = _prompt_style_profile(effective_style(configuration), changed_only=True)
     return course
+
+
+def _style(arguments: argparse.Namespace) -> int:
+    workspace = _workspace(arguments)
+    store = workspace.configuration_store()
+    configuration = store.load()
+    code = arguments.course.upper() if arguments.course else None
+    resolved = effective_style(configuration, code)
+    if arguments.style_command == "show":
+        print(json.dumps({"scope": code or "global", "effective": resolved}, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+    if arguments.style_command == "preview":
+        from .publication import preview_style_document
+
+        name = f"{code or 'global'}-style-preview.docx"
+        output = Path(arguments.output).expanduser() if arguments.output else workspace.root / "previews" / name
+        generated = preview_style_document(resolved, output)
+        print(json.dumps({"scope": code or "global", "preview": str(generated)}, ensure_ascii=False))
+        return 0
+    if arguments.file and arguments.reset:
+        raise ConfigurationError("Choose --file or --reset, not both")
+    if arguments.reset:
+        patch: dict[str, Any] = {}
+    elif arguments.file:
+        patch = normalize_style_profile(_load_json(arguments.file), partial=True)
+    else:
+        patch = _prompt_style_profile(resolved, changed_only=code is not None)
+    if code is None:
+        configuration["style"]["profile"] = (
+            normalize_style_profile({}) if arguments.reset else
+            normalize_style_profile({**configuration["style"].get("profile", {}), **patch})
+        )
+    else:
+        course = next(item for item in configuration["courses"] if item["code"] == code)
+        if arguments.reset:
+            for key in ("writing_style", "list_density", "image_policy", "question_count", "recap", "recap_language"):
+                course["style"].pop(key, None)
+        else:
+            global_profile = effective_style(configuration)
+            for key, value in patch.items():
+                if value == global_profile[key]:
+                    course["style"].pop(key, None)
+                else:
+                    course["style"][key] = value
+    saved = store.save(configuration)
+    print(json.dumps({"scope": code or "global", "effective": effective_style(saved, code)}, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
 
 
 def _config(arguments: argparse.Namespace) -> int:
@@ -395,11 +508,12 @@ def _prepare(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     configuration = workspace.configuration_store().load()
     audio = Path(arguments.audio).expanduser() if arguments.audio else None
-    if audio is None:
+    if audio is None and not arguments.transcript:
         inventory = discover_recordings(workspace, configuration)
         audio = recording_for_lecture(inventory, arguments.lecture_id.upper())
     pack = build_source_pack(
         workspace, arguments.lecture_id.upper(), audio=audio,
+        transcript_path=Path(arguments.transcript).expanduser() if arguments.transcript else None,
         materials=[Path(value).expanduser() for value in arguments.material],
         personal_notes=Path(arguments.personal_notes).expanduser() if arguments.personal_notes else None,
         web_snapshots=[Path(value).expanduser() for value in arguments.web_snapshot],
@@ -450,6 +564,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "configure":
             return _configure(arguments)
+        if arguments.command == "style":
+            return _style(arguments)
         if arguments.command == "course":
             return _course(arguments)
         if arguments.command == "config":

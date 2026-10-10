@@ -2,7 +2,7 @@
 
 > Local-first, multi-agent AI lecture synthesizer and transactional Word publishing engine for macOS.
 
-[![Tests](https://img.shields.io/badge/tests-52%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-80%20passed-brightgreen.svg)]()
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-black.svg)]()
 [![Package Manager](https://img.shields.io/badge/built%20with-uv-purple.svg)]()
@@ -91,7 +91,7 @@ cd mynotes
 # 2. Sync locked dependencies in <3 seconds
 uv sync
 
-# 3. Run the complete automated test suite (52 tests)
+# 3. Run the complete automated test suite
 uv run pytest
 
 # 4. Run an end-to-end smoke test (builds and validates a Word handout)
@@ -114,6 +114,16 @@ mynotes prepare CS101-L01 \
   --material "~/Courses/CS101/slides.pdf" \
   --personal-notes "~/Courses/CS101/notes.docx"
 
+# Reuse an existing normalized transcript without running ASR again;
+# --audio can also be supplied to retain recording provenance.
+mynotes prepare CS101-L01 --workspace "~/Documents/MyNotes-Workspace" \
+  --transcript "~/Courses/CS101/transcript.json"
+
+# For courses with ambiguous filenames, set course.lesson_sources["1"] in the
+# private workspace configuration to {"materials": ["/absolute/slides.pptx"],
+# "personal_notes": "/absolute/notes.docx"}. Exact sources take precedence
+# over automatic discovery; .ppt and .xlsx materials are supported.
+
 # 3. Generate candidate notes via configured provider (Codex or Antigravity)
 mynotes generate CS101-L01 --workspace "~/Documents/MyNotes-Workspace" --provider agy --quality standard
 
@@ -127,6 +137,27 @@ mynotes publish CS101-L01 --workspace "~/Documents/MyNotes-Workspace"
 mynotes history CS101 --workspace "~/Documents/MyNotes-Workspace"
 mynotes status --workspace "~/Documents/MyNotes-Workspace"
 ```
+
+### Note style
+
+MyNotes includes a built-in study-handout style. It uses a numbered lecture overview,
+clear explanatory paragraphs, real Word lists, selected orange technical terms,
+source-grounded visuals and question-and-answer review, an Italian recap, and
+continuous page numbers. Pages use 1.5 cm margins on every side. Lesson titles, sections and subsections use Word built-in Heading 1, Heading 2 and Heading 3. Orange terms use the visible character style `Termine tecnico`, so their formatting can be changed together in Word. Provider JSON heading levels 3/4 remain unchanged and map to Word Heading 2/3. Formatting comes from a neutral Word template bundled
+with the app; no personal handout is needed at runtime. The fixed design uses
+11 pt Aptos for body text, Aptos Display for the 16/14/12 pt heading hierarchy,
+bold orange key terms, and gray italic captions.
+
+The first setup asks for writing, list, image, recap, and review-question
+preferences. A course inherits those choices unless you set an override:
+
+```sh
+mynotes style show --workspace "~/Documents/MyNotes-Workspace"
+mynotes style edit --workspace "~/Documents/MyNotes-Workspace" --course CS101
+mynotes style preview --workspace "~/Documents/MyNotes-Workspace" --course CS101
+```
+
+Style changes affect future candidates and do not rewrite published handouts.
 
 ---
 

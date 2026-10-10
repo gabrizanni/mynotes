@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from pathlib import Path
 
 from docx import Document
+from openpyxl import Workbook
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Inches
@@ -31,7 +33,7 @@ from mynotes.asr import EngineResult, transcribe_audio
 from mynotes.configuration import course_template
 from mynotes.extraction import extract_material
 from mynotes.ingestion import discover_recordings, parse_recording_name
-from mynotes.sourcepack import build_source_pack, validate_source_pack
+from mynotes.sourcepack import build_source_pack, discover_materials, validate_source_pack
 from mynotes.workspace import Workspace
 
 
@@ -138,8 +140,13 @@ def test_pdf_pptx_and_lesson_scoped_docx_extraction(tmp_path) -> None:
     presentation = Presentation()
     slide = presentation.slides.add_slide(presentation.slide_layouts[6])
     slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(1), Inches(1), Inches(3), Inches(2))
+    table = slide.shapes.add_table(3, 2, Inches(1), Inches(4), Inches(3), Inches(1)).table
+    for row, values in zip(table.rows, (("Month", "Demand"), ("1", "97"), ("2", "90"))):
+        for cell, value in zip(row.cells, values):
+            cell.text = value
     presentation.save(pptx)
-    _, ppt_visuals = extract_material(pptx, visual_dir=tmp_path / "ppt-images")
+    ppt_chunks, ppt_visuals = extract_material(pptx, visual_dir=tmp_path / "ppt-images")
+    assert "Month | Demand\n1 | 97\n2 | 90" in ppt_chunks[0]["content"]
     assert ppt_visuals[0]["signals"]["groups"] == 0
 
     notes = tmp_path / "notes.docx"
@@ -198,3 +205,57 @@ def test_material_only_source_pack_reports_missing_audio(tmp_path) -> None:
     assert pack["availability"]["transcript"] is False
     assert pack["evidence"][0]["id"] == "S001"
     assert any(item["lecture_id"] == "OPS7-L03" and item["status"] == "PREPARED" for item in __import__("mynotes.workflow", fromlist=["status"]).status(workspace))
+
+
+def test_imported_long_transcript_keeps_speakers_and_explicit_nested_sources(tmp_path) -> None:
+    workspace, configuration = configured_workspace(tmp_path)
+    course = configuration["courses"][0]
+    slides = tmp_path / "course" / "slide"
+    slides.mkdir(parents=True)
+    material = slides / "L3 inventory.md"
+    material.write_text("Inventory decisions under uncertain demand.", encoding="utf-8")
+    unrelated = slides / "L3_COURSE_NOTES.docx"
+    Document().save(unrelated)
+    notebook = tmp_path / "course" / "MY_NOTES.docx"
+    document = Document()
+    document.add_heading("Lecture 3", level=2)
+    document.add_paragraph("Review the in-class example.")
+    document.save(notebook)
+    course["folders"]["materials"] = str(tmp_path / "course")
+    course["lesson_sources"] = {"3": {"materials": [str(material)], "personal_notes": str(notebook)}}
+    workspace.configuration_store().save(configuration)
+
+    transcript = tmp_path / "transcript.json"
+    transcript.write_text(json.dumps({"language": "en", "segments": [
+        {"id": f"T{number:03d}", "start_seconds": float(number),
+         "end_seconds": float(number) + 0.5, "text": f"Explanation {number}",
+         "speaker": "Professor" if number % 2 else "Student 1"}
+        for number in range(1, 1002)
+    ]}), encoding="utf-8")
+
+    materials, selected_notebook = discover_materials(workspace.configuration_store().load()["courses"][0], 3)
+    assert materials == [material]
+    assert selected_notebook == notebook
+    pack = build_source_pack(workspace, "OPS7-L03", transcript_path=transcript)
+    validate_source_pack(pack)
+    assert len([row for row in pack["evidence"] if row["id"].startswith("T")]) == 1001
+    assert next(row for row in pack["evidence"] if row["id"] == "T1001")["speaker_role"] == "Professor"
+    assert {Path(row["path"]).name for row in pack["sources"]} == {material.name, notebook.name, transcript.name}
+    assert pack["transcription"]["imported"] is True
+
+
+def test_excel_formulas_keep_cell_and_cached_value_provenance(tmp_path) -> None:
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Model"
+    sheet["A1"] = 12
+    sheet["B1"] = "=A1*2"
+    path = tmp_path / "L3 exercise.xlsx"
+    book.save(path)
+
+    chunks, visuals = extract_material(path)
+    assert visuals == []
+    assert chunks[0]["sheet"] == "Model"
+    assert chunks[0]["row"] == 1
+    assert "A1: 12" in chunks[0]["content"]
+    assert "B1: formula =A1*2; cached value not available" in chunks[0]["content"]

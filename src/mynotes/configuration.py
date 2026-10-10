@@ -19,6 +19,39 @@ COURSE_CODE_RE = re.compile(r"^[A-Z0-9]+$")
 COURSE_KINDS = {"quantitative", "theoretical", "cases", "programming", "mixed"}
 QUALITY_LEVELS = {"base", "standard", "approfondito", "revisione"}
 SUPPORTED_PROVIDERS = {"codex", "agy"}
+STYLE_PROFILE_DEFAULTS: dict[str, Any] = {
+    "writing_style": "clear_study",
+    "list_density": "balanced",
+    "image_policy": "essential",
+    "question_count": 5,
+    "recap": True,
+    "recap_language": "it",
+    # The Word design is specified in code, without a reference document.
+    "page_size": "A4",
+    "margin_cm": 1.5,
+    "body_font": "Aptos",
+    "heading_font": "Aptos Display",
+    "body_pt": 11,
+    "body_after_pt": 3,
+    "body_line_spacing": 1.15,
+    "lesson_heading_pt": 16,
+    "section_heading_pt": 14,
+    "subsection_heading_pt": 12,
+    "heading_before_pt": 8,
+    "heading_after_pt": 4,
+    "heading_color": "0F4761",
+    "accent_color": "ED7D31",
+    "question_color": "4F81BD",
+    "caption_color": "595959",
+    "page_numbers": True,
+    "page_number_position": "center",
+}
+EDITABLE_STYLE_FIELDS = {
+    "writing_style": {"clear_study", "concise", "detailed"},
+    "list_density": {"balanced", "prose_first", "list_first"},
+    "image_policy": {"essential", "none", "explanatory"},
+    "recap_language": {"it", "en", "same_as_notes"},
+}
 
 
 class ConfigurationError(ValueError):
@@ -62,8 +95,10 @@ def course_template() -> dict[str, Any]:
             "personal_notes": "",
             "handout": "",
             "syllabus": "",
-            "style_reference": "",
         },
+        # Exact per-lesson sources take precedence over filename discovery.
+        # Paths remain private workspace configuration, never bundled with code.
+        "lesson_sources": {},
         "style": {},
         "preferences": {"persistent_instructions": []},
         "web_access": "disabled",
@@ -89,6 +124,44 @@ def _string_list(value: Any, field: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigurationError(f"{field} must be a list of text values")
     return [item.strip() for item in value if item.strip()]
+
+
+def normalize_style_profile(value: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
+    """Validate user-editable style fields; visual rules remain code-owned."""
+    if not isinstance(value, dict):
+        raise ConfigurationError("Style profile must be an object")
+    allowed = set(EDITABLE_STYLE_FIELDS) | {"question_count", "recap"}
+    unknown = set(value) - allowed
+    if unknown:
+        raise ConfigurationError(f"Unknown style profile field: {', '.join(sorted(unknown))}")
+    result = {} if partial else {key: STYLE_PROFILE_DEFAULTS[key] for key in allowed}
+    result.update(value)
+    for key, choices in EDITABLE_STYLE_FIELDS.items():
+        if key in result and (not isinstance(result[key], str) or result[key] not in choices):
+            raise ConfigurationError(f"Style {key} must be one of: {', '.join(sorted(choices))}")
+    if "question_count" in result and (
+        type(result["question_count"]) is not int or not 1 <= result["question_count"] <= 5
+    ):
+        raise ConfigurationError("Style question_count must be an integer between 1 and 5")
+    if "recap" in result and type(result["recap"]) is not bool:
+        raise ConfigurationError("Style recap must be true or false")
+    return result
+
+
+def effective_style(configuration: dict[str, Any], course_code: str | None = None) -> dict[str, Any]:
+    """Resolve the built-in study design, global choices, then course overrides."""
+    profile = copy.deepcopy(STYLE_PROFILE_DEFAULTS)
+    global_style = configuration.get("style", {})
+    profile.update(normalize_style_profile(global_style.get("profile", {}), partial=True))
+    if course_code is not None:
+        code = course_code.upper()
+        course = next((item for item in configuration.get("courses", []) if item["code"] == code), None)
+        if course is None:
+            raise ConfigurationError(f"Course not found: {code}")
+        overrides = {key: value for key, value in course.get("style", {}).items()
+                     if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap"}}
+        profile.update(normalize_style_profile(overrides, partial=True))
+    return profile
 
 
 def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
@@ -119,13 +192,41 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Course languages must include non-empty lesson and notes values")
     if not isinstance(course["folders"], dict):
         raise ConfigurationError("Course folders must be an object")
+    # Legacy style-reference paths are ignored and removed on the next save;
+    # generating notes never reads an external style document.
+    course["folders"].pop("style_reference", None)
     for field in course_template()["folders"]:
         path = course["folders"].get(field, "")
         if not isinstance(path, str):
             raise ConfigurationError(f"Course folder {field} must be text")
         course["folders"][field] = clean_path(path) if path.strip() else ""
+    lesson_sources = course.get("lesson_sources")
+    if not isinstance(lesson_sources, dict):
+        raise ConfigurationError("Course lesson_sources must be an object")
+    normalized_sources: dict[str, dict[str, Any]] = {}
+    for lesson, sources in lesson_sources.items():
+        try:
+            number = int(str(lesson).removeprefix("L").removeprefix("l"))
+        except ValueError as error:
+            raise ConfigurationError(f"Invalid lesson_sources key: {lesson}") from error
+        if number < 1 or number > 999 or not isinstance(sources, dict):
+            raise ConfigurationError(f"Invalid lesson_sources entry: {lesson}")
+        materials = _string_list(sources.get("materials", []), "lesson materials")
+        personal_notes = sources.get("personal_notes", "")
+        if not isinstance(personal_notes, str):
+            raise ConfigurationError("Lesson personal_notes must be a path or empty text")
+        normalized_sources[str(number)] = {
+            "materials": list(dict.fromkeys(clean_path(path) for path in materials)),
+            "personal_notes": clean_path(personal_notes) if personal_notes.strip() else "",
+        }
+    course["lesson_sources"] = normalized_sources
     if not isinstance(course["style"], dict) or not isinstance(course["preferences"], dict):
         raise ConfigurationError("Course style and preferences must be objects")
+    normalize_style_profile(
+        {key: value for key, value in course["style"].items()
+         if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap"}},
+        partial=True,
+    )
     course["preferences"]["persistent_instructions"] = _string_list(
         course["preferences"].get("persistent_instructions", []),
         "course persistent instructions",
@@ -227,6 +328,9 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Invalid default quality")
     if not isinstance(style.get("freeform_preferences"), str):
         raise ConfigurationError("Style preferences must be text")
+    # Old version-2 workspaces remain loadable; the profile is filled with
+    # deterministic defaults instead of consulting any external Word file.
+    style["profile"] = normalize_style_profile(style.get("profile", {}))
     providers = configuration.get("providers")
     if not isinstance(providers, dict) or not isinstance(providers.get("configured"), dict):
         raise ConfigurationError("Providers must include a configured object")
@@ -266,6 +370,19 @@ def merge_group_answers(configuration: dict[str, Any], group: str, answers: dict
     updated = copy.deepcopy(configuration)
     if group == "courses":
         updated["courses"] = answers.get("courses", [])
+    elif group == "style":
+        style_answers = {key: value for key, value in answers.items() if key != "course_profiles"}
+        updated["style"].update(style_answers)
+        course_profiles = answers.get("course_profiles", {})
+        if not isinstance(course_profiles, dict):
+            raise ConfigurationError("Course style choices must be an object")
+        for code, patch in course_profiles.items():
+            if not isinstance(code, str):
+                raise ConfigurationError("Course style code must be text")
+            target = next((item for item in updated["courses"] if item["code"] == code.upper()), None)
+            if target is None:
+                raise ConfigurationError(f"Course not found: {code}")
+            target["style"].update(normalize_style_profile(patch, partial=True))
     else:
         updated[group].update(answers)
     completed = updated["onboarding"]["completed_groups"]

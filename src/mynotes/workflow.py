@@ -23,7 +23,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 
-from .configuration import ConfigurationError
+from .configuration import ConfigurationError, effective_style
 from .providers import (
     ProviderAdapter,
     ProviderError,
@@ -57,6 +57,7 @@ QUALITY_PHASES: dict[str, tuple[tuple[str, str], ...]] = {
     "approfondito": (("writing", "thorough"), ("scoped_review", "thorough")),
     "revisione": (("writing", "thorough"), ("evidence_audit", "thorough"), ("editorial_review", "thorough")),
 }
+GENERATION_CONTRACT_VERSION = 6
 
 
 class WorkflowError(RuntimeError):
@@ -600,9 +601,106 @@ def process(
             state.close()
 
 
-def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any]) -> dict[str, Any]:
+def _validate_integer_table_totals(rows: list[list[str]]) -> None:
+    """Catch exact count errors in model-produced Total rows before Word build."""
+    if len(rows) < 3 or not rows[-1] or str(rows[-1][0]).strip().casefold() != "total":
+        return
+    integer = re.compile(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)")
+    for column in range(1, len(rows[-1])):
+        values = [str(row[column]).strip() for row in rows[1:] if len(row) > column]
+        if len(values) != len(rows) - 1 or not all(integer.fullmatch(value) for value in values):
+            continue
+        actual = int(values[-1].replace(",", ""))
+        expected = sum(int(value.replace(",", "")) for value in values[:-1])
+        if actual != expected:
+            raise WorkflowError(f"Candidate table total disagrees with row values in column {column + 1}: {actual} != {expected}")
+
+
+_NUMBER_IN_TEXT_RE = re.compile(r"(?<![\w])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w])")
+
+
+def _validate_numeric_table_support(block: dict[str, Any], evidence: dict[str, dict[str, Any]]) -> None:
+    """Require a numeric table to cite sources with actual numeric content.
+
+    A qualitative personal note about an allocation rule cannot support a
+    multi-row table of invented phase boundaries and marginal-profit values.
+    This deliberately does not certify every computed cell; detailed source
+    comparisons remain part of candidate review.
+    """
+    rows = block["rows"]
+    numeric_cells = sum(bool(_NUMBER_IN_TEXT_RE.search(cell)) for row in rows[1:] for cell in row)
+    if numeric_cells < 4:
+        return
+    cited_numbers = set()
+    for identifier in block["evidence_ids"]:
+        item = evidence[identifier]
+        cited_numbers.update(_NUMBER_IN_TEXT_RE.findall(str(item.get("content", item.get("text", "")))))
+    if len(cited_numbers) < 2:
+        raise WorkflowError("Numeric candidate table lacks numeric values in its cited evidence")
+
+
+_TERM_MARKER_RE = re.compile(r"\[\[term:([^\[\]\n]+)\]\]")
+
+
+def _validate_inline_term_markers(value: str) -> int:
+    """Reject malformed orange-term markup before it reaches the Word renderer."""
+    matches = list(_TERM_MARKER_RE.finditer(value))
+    if (value.count("[[term:") != len(matches)
+            or (bool(matches) and value.count("]]") != len(matches))
+            or any(not match.group(1).strip() for match in matches)):
+        raise WorkflowError("Candidate contains a malformed technical-term marker")
+    return len(matches)
+
+
+def ordinary_emphasis_diagnostics(notes: dict[str, Any], source_pack: dict[str, Any]) -> dict[str, Any]:
+    """Measure only body emphasis that the renderer will keep black, not orange terms."""
+    declared = {
+        term.strip().casefold()
+        for block in notes.get("blocks", [])
+        for value in (block.get("text", ""), block.get("answer", ""), *block.get("items", []))
+        for term in re.findall(r"\[\[term:([^\]]+)\]\]", str(value))
+    }
+    body = [str(value) for block in notes.get("blocks", [])
+            for value in ([block.get("text", "")] if block.get("kind") == "paragraph"
+                          else block.get("items", []) if block.get("kind") == "bullets" else [])]
+    words = sum(len(re.findall(r"\b[\w’-]+\b", text)) for text in body)
+    spans = [span for text in body for span in re.findall(r"\*\*([^*]+)\*\*", text)
+             if span.strip() and "[[term:" not in span and span.strip().casefold() not in declared]
+    technical = bool(notes.get("formulas") or source_pack.get("glossary")
+                     or any(block.get("kind") in {"table", "formula"} for block in notes.get("blocks", [])))
+    required = technical and words >= 500
+    return {"narrative_words": words, "ordinary_emphasis_spans": len(spans),
+            "required": required, "missing": required and not spans}
+
+
+def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True) -> dict[str, Any]:
     """Reject a polished-looking draft unless it accounts for its actual evidence."""
     result = _validate_notes(notes, lecture_id)
+    # Some providers repeat the document title as a level-2 block even though
+    # the Word renderer inserts that heading itself. Remove only that exact
+    # duplicate; other unexpected levels remain validation errors.
+    if style is not None and isinstance(result.get("blocks"), list):
+        result["blocks"] = [
+            block for block in result["blocks"]
+            if not (isinstance(block, dict) and block.get("kind") == "heading"
+                    and block.get("level") == 2 and str(block.get("text", "")).strip() == result["title"].strip())
+        ]
+        # Agy may put an equation in the required top-level formulas list but
+        # leave the corresponding ordered formula block's expression empty.
+        # An exact label match lets us place that same source text in the Word
+        # narrative without inventing or rewriting an equation.
+        formulas_by_label = {
+            str(item.get("label", "")).strip(): str(item.get("expression", "")).strip()
+            for item in result["formulas"] if str(item.get("label", "")).strip()
+        }
+        result["blocks"] = [
+            {**block, "expression": formulas_by_label[str(block.get("label", "")).strip()]}
+            if (isinstance(block, dict) and block.get("kind") == "formula"
+                and not str(block.get("expression", "")).strip()
+                and str(block.get("label", "")).strip() in formulas_by_label)
+            else block
+            for block in result["blocks"]
+        ]
     required = {
         "sections": list, "evidence_coverage": list, "visual_decisions": list, "model_knowledge": list,
     }
@@ -610,6 +708,7 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
         if not isinstance(result.get(key), expected):
             raise WorkflowError(f"Candidate notes require {key} as {expected.__name__}")
     evidence_ids = {str(item["id"]) for item in source_pack["evidence"]}
+    evidence_by_id = {str(item["id"]): item for item in source_pack["evidence"]}
     coverage: dict[str, dict[str, Any]] = {}
     for item in result["evidence_coverage"]:
         if not isinstance(item, dict) or item.get("evidence_id") not in evidence_ids:
@@ -626,12 +725,21 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     if missing:
         raise WorkflowError(f"Candidate omits required evidence coverage: {', '.join(sorted(missing))}")
     for section in result["sections"]:
-        if not isinstance(section, dict) or section.get("level") not in {3, 4}:
-            raise WorkflowError("Each candidate section needs level 3 or 4")
+        if not isinstance(section, dict) or section.get("level") not in {2, 3, 4}:
+            raise WorkflowError("Each candidate section needs level 2, 3 or 4")
         identifiers = section.get("evidence_ids")
         if not isinstance(identifiers, list) or not identifiers or any(item not in evidence_ids for item in identifiers):
             raise WorkflowError("Each candidate section needs existing evidence ids")
     visual_ids = {item.get("evidence_id") for item in source_pack["visuals"] if item.get("visual_decision") != "exclude" and item.get("evidence_id")}
+    excluded_visual_ids = {item.get("evidence_id") for item in source_pack["visuals"] if item.get("visual_decision") == "exclude" and item.get("evidence_id")}
+    # A source-pack visual already excluded before generation needs no model
+    # decision. Drop only a matching redundant "exclude"; any attempted
+    # inclusion or unknown ID remains an error.
+    result["visual_decisions"] = [
+        item for item in result["visual_decisions"]
+        if not (isinstance(item, dict) and item.get("evidence_id") in excluded_visual_ids
+                and item.get("decision") == "exclude")
+    ]
     decisions: set[str] = set()
     for item in result["visual_decisions"]:
         if not isinstance(item, dict) or item.get("evidence_id") not in visual_ids:
@@ -643,6 +751,114 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
         raise WorkflowError("Candidate does not decide every available visual")
     if not all(isinstance(item, str) for item in result["model_knowledge"]):
         raise WorkflowError("Candidate model knowledge must be a list of strings")
+    result.setdefault("review_questions", [])
+    if not isinstance(result["review_questions"], list) or any(not isinstance(item, str) or not item.strip() for item in result["review_questions"]):
+        raise WorkflowError("Candidate review_questions must be a list of non-empty questions")
+    blocks = result.get("blocks", [])
+    if not isinstance(blocks, list):
+        raise WorkflowError("Candidate blocks must be a list")
+    visual_decisions = {str(item["evidence_id"]): item["decision"] for item in result["visual_decisions"]}
+    narrative_text: list[str] = []
+    narrative_term_count = 0
+    technical_structure = bool(result["formulas"] or source_pack.get("glossary"))
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("kind") not in {"overview", "heading", "paragraph", "bullets", "formula", "table", "visual", "qa", "recap"}:
+            raise WorkflowError("Candidate has an invalid ordered block")
+        identifiers = block.get("evidence_ids")
+        if not isinstance(identifiers, list) or not identifiers or any(item not in evidence_ids for item in identifiers):
+            raise WorkflowError("Each ordered block needs existing evidence ids")
+        kind = block["kind"]
+        for field in ("text", "question", "answer", "label"):
+            if isinstance(block.get(field), str):
+                count = _validate_inline_term_markers(block[field])
+                if kind in {"heading", "qa"} and field in {"text", "question"} and count:
+                    raise WorkflowError("Technical-term markers belong in explanations, not headings or questions")
+                if kind == "paragraph" and field == "text":
+                    narrative_text.append(block[field])
+                    narrative_term_count += count
+        if isinstance(block.get("items"), list):
+            for item in block["items"]:
+                if isinstance(item, str):
+                    count = _validate_inline_term_markers(item)
+                    if kind == "bullets":
+                        narrative_text.append(item)
+                        narrative_term_count += count
+        if kind in {"heading", "paragraph", "recap"} and not str(block.get("text", "")).strip():
+            raise WorkflowError(f"Candidate {kind} block needs text")
+        if kind == "heading" and block.get("level") not in {3, 4}:
+            raise WorkflowError("Candidate heading block needs level 3 or 4")
+        if style is not None and kind == "heading" and re.match(r"^\s*\d+(?:\.\d+)*[.)]?\s+", block["text"]):
+            raise WorkflowError("Editorial headings must omit written section numbers")
+        if kind == "formula" and not str(block.get("expression", "")).strip():
+            raise WorkflowError("Candidate formula block needs an expression")
+        if kind in {"overview", "bullets"} and (not isinstance(block.get("items"), list) or not block["items"] or any(not isinstance(item, str) or not item.strip() for item in block["items"])):
+            raise WorkflowError("Candidate bullets block needs non-empty items")
+        if style is not None and kind == "overview" and any(re.match(r"^\s*\d+[.)]\s+", item) for item in block["items"]):
+            raise WorkflowError("Overview items must omit written numbers; Word numbers the list")
+        if kind == "qa" and (not str(block.get("question", "")).strip() or not str(block.get("answer", "")).strip()):
+            raise WorkflowError("Candidate qa block needs a question and answer")
+        if kind == "table" and (not isinstance(block.get("rows"), list) or not block["rows"] or any(not isinstance(row, list) or not row or any(not isinstance(cell, str) for cell in row) for row in block["rows"])):
+            raise WorkflowError("Candidate table block needs rows of text")
+        if kind == "table":
+            technical_structure = True
+            for row in block["rows"]:
+                for cell in row:
+                    _validate_inline_term_markers(cell)
+            _validate_integer_table_totals(block["rows"])
+            _validate_numeric_table_support(block, evidence_by_id)
+        if kind == "formula":
+            technical_structure = True
+        if kind == "visual" and visual_decisions.get(str(block.get("visual_id"))) != "include":
+            raise WorkflowError("Candidate visual block needs an included visual decision")
+    # The requirement applies only to fresh editorial generations. Saved v1
+    # candidates remain readable/buildable, and short or nontechnical lessons
+    # are not forced to add decorative orange text.
+    narrative_words = sum(len(re.findall(r"\b[\w’-]+\b", text)) for text in narrative_text)
+    if style is not None and technical_structure and narrative_words >= 500 and narrative_term_count == 0:
+        raise WorkflowError("Long technical candidate needs a [[term:...]] key term in its narrative")
+    if style is not None and final_phase and ordinary_emphasis_diagnostics(result, source_pack)["missing"]:
+        raise WorkflowError("Long technical candidate needs ordinary black **emphasis** in its narrative, distinct from orange terms")
+    # Saved candidates from earlier versions may contain only legacy blocks.
+    # Once a draft opts into the explicit editorial structure, validate its
+    # sequence rather than trusting a prompt alone to produce it consistently.
+    kinds = [block["kind"] for block in blocks]
+    if style is not None or "overview" in kinds or "qa" in kinds:
+        if not kinds or kinds[0] != "overview" or kinds.count("overview") != 1:
+            raise WorkflowError("Editorial candidate must start with one overview block")
+        count = sum(kind == "qa" for kind in kinds)
+        maximum = (style or {}).get("question_count", 5)
+        if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum not in range(1, 6):
+            maximum = 5
+        if not 1 <= count <= maximum:
+            raise WorkflowError(f"Editorial candidate needs between one and {maximum} qa blocks")
+        first_question = kinds.index("qa")
+        if any(kind not in {"qa", "recap"} for kind in kinds[first_question:]):
+            raise WorkflowError("Question blocks must follow the main narrative")
+        want_recap = (style or {}).get("recap", True)
+        if want_recap and (kinds[-1] != "recap" or kinds.count("recap") != 1):
+            raise WorkflowError("Editorial candidate must end with one recap block")
+        if not want_recap and "recap" in kinds:
+            raise WorkflowError("Editorial candidate has a recap disabled by its style")
+        if (style or {}).get("image_policy") == "none" and any(item.get("decision") == "include" for item in result["visual_decisions"]):
+            raise WorkflowError("Editorial candidate includes an image despite image_policy=none")
+    if blocks:
+        included = {identifier for identifier, decision in visual_decisions.items() if decision == "include"}
+        if any(item.get("decision") == "include" and item.get("inspected") is not True for item in result["visual_decisions"]):
+            raise WorkflowError("An included visual in ordered blocks must be confirmed as inspected")
+        if included:
+            visual_paths = {str(item.get("evidence_id")): item.get("image_path") for item in source_pack["visuals"]}
+            # A path plus a provider assertion cannot prove visual understanding,
+            # but both the image and the narrowly granted lecture folder must
+            # be available before accepting an inclusion.
+            for identifier in included:
+                value = visual_paths.get(identifier)
+                if not value or not Path(str(value)).is_file():
+                    raise WorkflowError(f"Included visual image is missing: {identifier}")
+                if source_root is not None and not Path(str(value)).resolve().is_relative_to(source_root.resolve()):
+                    raise WorkflowError(f"Included visual is outside the lecture source folder: {identifier}")
+        placed = [str(block["visual_id"]) for block in blocks if block["kind"] == "visual"]
+        if set(placed) != included or len(placed) != len(set(placed)):
+            raise WorkflowError("Every included visual must appear exactly once in ordered blocks")
     result["lecture_id"] = lecture_id
     return result
 
@@ -681,7 +897,12 @@ def generate_candidate(
         raise WorkflowError(f"Invalid source pack: {error}") from error
     if pack.get("lecture_id") != lecture_id:
         raise WorkflowError("Source pack lecture id does not match the requested lecture")
-    input_hash = hashlib.sha256(json.dumps({"source_pack": file_sha256(path), "requested": requested.__dict__, "quality": requested.quality}, sort_keys=True).encode()).hexdigest()
+    editorial_style = effective_style(configuration, course_code)
+    editorial_style["question_language"] = str(configuration.get("personal", {}).get("interface_language") or course.get("languages", {}).get("notes", "en"))
+    # Existing free-form instructions remain part of the editorial request
+    # until the user chooses to replace them in the guided style editor.
+    editorial_style["freeform_preferences"] = configuration["style"].get("freeform_preferences", "")
+    input_hash = hashlib.sha256(json.dumps({"source_pack": file_sha256(path), "requested": requested.__dict__, "quality": requested.quality, "style": editorial_style, "course": course, "generation_contract": GENERATION_CONTRACT_VERSION}, sort_keys=True).encode()).hexdigest()
     run_dir = workspace.runs_dir / lecture_id
     candidate_path = run_dir / "lecture_notes.candidate.json"
     sources = {key: bool(value) for key, value in pack.get("availability", {}).items()}
@@ -689,14 +910,17 @@ def generate_candidate(
     try:
         if state.candidate_completed(lecture_id, input_hash):
             return {"lecture_id": lecture_id, "status": "SKIPPED", "reason": "identical candidate already exists", "candidate": str(candidate_path)}
-        base = ProviderRequest(lecture_id, course, {}, requested, source_pack=pack, run_dir=run_dir)
+        base = ProviderRequest(lecture_id, course, {}, requested, source_pack=pack, run_dir=run_dir, style=editorial_style)
         previous: dict[str, Any] | None = None
         response: ProviderResponse | None = None
+        editorial_diagnostics: list[dict[str, Any]] = []
         for phase, context_mode in QUALITY_PHASES[requested.quality]:
             request = with_phase(base, phase, context_mode, previous)
             try:
                 response = invoke_provider(request, provider_adapter)
-                previous = _validate_candidate_notes(response.notes, lecture_id, pack)
+                previous = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
+                                                     final_phase=phase == QUALITY_PHASES[requested.quality][-1][0])
+                editorial_diagnostics.append({"phase": phase, **ordinary_emphasis_diagnostics(previous, pack)})
                 state.record_attempt(lecture_id, requested, status=f"SUCCESS_{phase.upper()}", response=response)
             except ProviderQuotaError as error:
                 state.record_attempt(lecture_id, requested, status="QUOTA_EXHAUSTED", error=str(error))
@@ -715,6 +939,7 @@ def generate_candidate(
             "actual_model": {"provider": response.provider, "model": response.model, "effort": response.effort},
             "quality": requested.quality, "phases": [phase for phase, _ in QUALITY_PHASES[requested.quality]],
             "usage": response.usage, "published_to_word": False,
+            "editorial_diagnostics": editorial_diagnostics,
         })
         state.record_candidate(lecture_id, input_hash, response, requested.quality, candidate_path)
         _write_status_markdown(workspace, state.rows())

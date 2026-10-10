@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+from zipfile import ZipFile
 
 from mynotes.cli import main
 from mynotes.configuration import (
+    ConfigurationError,
     course_template,
+    effective_style,
     merge_group_answers,
     provider_availability,
 )
+import pytest
 from mynotes.utils import file_sha256
 from mynotes.workspace import Workspace
 
@@ -175,3 +179,114 @@ def test_provider_detection_reports_unavailable_without_substitution(monkeypatch
     monkeypatch.setattr("mynotes.configuration.shutil.which", lambda _: None)
     status = provider_availability("agy")
     assert status == {"provider": "agy", "available": False, "detail": "local launcher not detected"}
+
+
+def test_coded_style_inheritance_and_course_edit_preserve_other_courses(tmp_path) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    workspace.initialize()
+    configuration = workspace.configuration_store().load()
+    operations = course("OPS7")
+    operations["aliases"] = ["operations"]
+    configuration["courses"] = [course("QNT9"), operations]
+    workspace.configuration_store().save(configuration)
+
+    global_file = tmp_path / "global-style.json"
+    global_file.write_text('{"writing_style":"concise","image_policy":"none"}', encoding="utf-8")
+    assert main(["style", "edit", "--workspace", str(workspace.root), "--file", str(global_file)]) == 0
+    course_file = tmp_path / "course-style.json"
+    course_file.write_text('{"list_density":"list_first","image_policy":"explanatory"}', encoding="utf-8")
+    assert main(["style", "edit", "--workspace", str(workspace.root), "--course", "QNT9", "--file", str(course_file)]) == 0
+
+    saved = workspace.configuration_store().load()
+    assert effective_style(saved, "QNT9")["image_policy"] == "explanatory"
+    assert effective_style(saved, "QNT9")["list_density"] == "list_first"
+    assert effective_style(saved, "OPS7")["image_policy"] == "none"
+    assert effective_style(saved, "OPS7")["writing_style"] == "concise"
+    assert saved["courses"][0]["style"] == {"list_density": "list_first", "image_policy": "explanatory"}
+
+    assert main(["style", "edit", "--workspace", str(workspace.root), "--course", "QNT9", "--reset"]) == 0
+    reset = workspace.configuration_store().load()
+    assert effective_style(reset, "QNT9")["image_policy"] == "none"
+    assert reset["courses"][0]["style"] == {}
+
+
+def test_legacy_reference_path_is_removed_without_reading_document(tmp_path) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    workspace.initialize()
+    configuration = workspace.configuration_store().load()
+    legacy = course()
+    legacy["folders"]["style_reference"] = "/path/that/does/not/exist/external-reference.docx"
+    configuration["courses"] = [legacy]
+    workspace.configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+
+    normalized = workspace.configuration_store().load()
+    assert "style_reference" not in normalized["courses"][0]["folders"]
+    workspace.configuration_store().save(normalized)
+    assert "external-reference.docx" not in workspace.configuration_path.read_text(encoding="utf-8")
+    assert effective_style(normalized, "QNT9")["heading_color"] == "0F4761"
+
+
+def test_style_edit_rejects_invalid_values_without_changing_config(tmp_path) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    workspace.initialize()
+    original = file_sha256(workspace.configuration_path)
+    bad = tmp_path / "bad.json"
+    bad.write_text('{"question_count":7}', encoding="utf-8")
+    assert main(["style", "edit", "--workspace", str(workspace.root), "--file", str(bad)]) == 2
+    assert file_sha256(workspace.configuration_path) == original
+    with pytest.raises(ConfigurationError, match="Course not found"):
+        effective_style(workspace.configuration_store().load(), "MISSING")
+
+
+def test_onboarding_style_group_applies_course_choices_after_global(tmp_path) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    workspace.initialize()
+    configuration = workspace.configuration_store().load()
+    configuration["courses"] = [course()]
+    workspace.configuration_store().save(configuration)
+
+    completed = save_group(workspace, "style", {
+        "profile": {"writing_style": "detailed", "image_policy": "none", "recap_language": "it"},
+        "course_profiles": {"QNT9": {"image_policy": "explanatory", "list_density": "prose_first"}},
+    })
+    assert completed["style"]["profile"]["writing_style"] == "detailed"
+    assert effective_style(completed, "QNT9")["image_policy"] == "explanatory"
+    assert effective_style(completed, "QNT9")["recap_language"] == "it"
+    assert effective_style(completed)["image_policy"] == "none"
+
+
+def test_style_preview_creates_synthetic_word_document(tmp_path, capsys) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    workspace.initialize()
+    destination = tmp_path / "style-preview.docx"
+
+    assert main(["style", "preview", "--workspace", str(workspace.root), "--output", str(destination)]) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["preview"] == str(destination)
+    with ZipFile(destination) as document:
+        word = document.read("word/document.xml").decode("utf-8")
+        assert "external-reference" not in word
+        assert "style_reference" not in word
+
+
+def test_first_run_questions_offer_course_style_after_global_style(monkeypatch, tmp_path) -> None:
+    workspace = Workspace.from_value(tmp_path / "private")
+    monkeypatch.setenv("MYNOTES_WORKSPACE", str(workspace.root))
+    stages = (
+        ["it", "none", "MSc", "2026", "understanding"],
+        [""],
+        ["1", "Quantitative Methods", "QNT9", "", "en", "en", "mixed", "", "", ""],
+        ["", "", "detailed", "balanced", "essential", "5", "yes", "it",
+         "yes", "", "list_first", "", "", "", "en"],
+        ["none"],
+    )
+    for answers in stages:
+        iterator = iter(answers)
+        monkeypatch.setattr("builtins.input", lambda _prompt: next(iterator))
+        assert main([]) == 0
+    saved = workspace.configuration_store().load()
+    assert saved["onboarding"]["status"] == "complete"
+    assert effective_style(saved, "QNT9")["writing_style"] == "detailed"
+    assert effective_style(saved, "QNT9")["list_density"] == "list_first"
+    assert effective_style(saved, "QNT9")["recap_language"] == "en"
+    assert effective_style(saved)["recap_language"] == "it"
