@@ -39,10 +39,14 @@ def main(argv: list[str] | None = None) -> int:
     if len(wheels) != 1:
         raise SystemExit(f"expected one wheel for {version}, found {len(wheels)}")
     archive = dist / f"mynotes-{version}-macos-release.zip"
-    members = public_paths() + [wheels[0]]
+    run([sys.executable, "scripts/build_capture.py"])
+    capture_app = ROOT / "capture/output/MyNotes Capture.app"
+    app_members = [path for path in sorted(capture_app.rglob("*")) if path.is_file()]
+    members = public_paths() + [wheels[0]] + app_members
     manifest = {
         "name": "mynotes",
         "version": version,
+        "capture": {"bundle_id": "com.gabrizanni.mynotes-capture", "architectures": ["arm64", "x86_64"]},
         "files": {str(path.relative_to(ROOT)): digest(path) for path in members},
     }
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:

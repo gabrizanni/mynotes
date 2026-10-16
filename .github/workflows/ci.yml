@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   test-build-audit:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -27,11 +27,14 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+      - name: Check native Capture behavior
+        run: uv run python scripts/test_capture_native.py
+
       - name: Audit public contents
         run: uv run python scripts/check_public_tree.py
 
-      - name: Build release candidate
-        run: uv run python scripts/build_release.py
+      - name: Build Apple Silicon DMG candidate
+        run: uv run python scripts/build_dmg.py
 
       - name: Upload release candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -40,3 +43,6 @@ jobs:
           path: |
             dist/*-macos-release.zip
             dist/*-macos-release.zip.sha256
+            dist/MyNotes-*-macOS-arm64.dmg
+            dist/MyNotes-*-macOS-arm64.dmg.sha256
+          if-no-files-found: error

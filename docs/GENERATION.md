@@ -1,0 +1,285 @@
+# Model selection and coordinated notes
+
+MyNotes keeps these shortcuts: **Gemini Flash 3.8 High**, **Gemini Flash
+3.8 Medium**, and **GPT Terra High**. They are separate from the dynamic CLI
+catalog and are enabled only when their model and effort are reported.
+New unset choices use Agy High or Terra
+High; explicitly saved choices, including an agent-default choice, are retained.
+The setup shows default effort, selected effort, and catalog/access status.
+Changing preferences affects the next chat and future generation, not a chat
+already running. A model being listed is not proof of subscription access.
+
+```sh
+mynotes models --provider codex --refresh --json
+mynotes models --provider agy --refresh --json
+mynotes preferences --provider agy --model gemini-3.8-flash-medium --effort medium
+```
+
+An explicit Refresh action queries the installed CLI without generation: Codex app-server metadata,
+Agy's model-list command, or Claude's SDK initialization protocol. New model and
+effort identifiers appear without an application release. Saved models absent
+from the new catalog are removed from the menu while the previous selection is
+retained for identification. Until a successful explicit refresh, the saved list
+stays selectable; opening the app or changing agents never rediscovers models.
+Unknown effort defaults are explicitly marked, and Automatic
+delegates the choice to the CLI. See [dynamic catalog behavior](MODEL-CATALOG.md).
+
+## Prepare, plan, generate, inspect
+
+```sh
+mynotes generate-batch OPS --lessons 1-6 --plan-only
+mynotes generate-batch OPS --lessons 1-6 --selection ownership.json
+mynotes generate-batch OPS --resume OPS-0123456789ab --selection ownership.json
+mynotes usage --batch OPS-0123456789ab --json
+mynotes batch-status OPS-0123456789ab --json
+mynotes generate-batch OPS --resume OPS-0123456789ab --build-word
+```
+
+Replace the example batch ID with the returned ID. Planning reads existing
+packs, writes nothing and invokes no provider. Missing or changed sources return
+`NEEDS_PREPARATION`; normal generation prepares relevant sources, preserving
+explicit source selections and using the existing extraction/ASR caches.
+Ambiguous shared-slide ownership returns `NEEDS_SELECTION` before generation.
+The coordinating conversation asks only about those unresolved boundaries.
+
+Ownership uses the verified source-file SHA-256 and actual page/slide number,
+including pages with images but no extracted text. One lesson owns each complete
+explanation. When a deck spans lessons, later slides belong to the lesson that
+actually treats them; an earlier lesson must not complete the entire deck in
+advance. A later lesson can briefly reference earlier content or add a new
+teacher-supported insight, without repeating the complete text, table or figure.
+
+The selection file maps returned canonical IDs to reviewed choices:
+
+```json
+{
+  "sha256:REPLACE_WITH_RETURNED_HASH:page:10": {
+    "owner": "OPS-L01",
+    "status": "supplement",
+    "anchor": {"after": "S009", "before": "S011"}
+  }
+}
+```
+
+Allowed statuses are `taught`, `supplement`, and `material` (associated material,
+without claiming it was taught). Supplementary content is visibly labelled and
+placed inline beside the relevant explanation. Same-deck neighboring anchors
+can be inferred; unclear placement requires selection, not a final appendix.
+Verified earlier published ownership is retained. Older overlapping notes with
+no trustworthy slide provenance require review rather than invented coverage.
+
+During the same source planning pass, a visually inspected cover or section
+divider containing no teaching content may use `status: "material"` plus
+`structural_review: {"kind": "title", "reason": "...", "image_sha256": "..."}`
+(or kind `section_divider`). Hash the actual source-pack image after inspecting
+it. The page remains in the inventory and coverage ledger, but needs no invented
+full explanation. Short or missing extracted text alone never establishes this
+classification; diagrams and image-only teaching slides still require coverage.
+The writer's own exclusion cannot grant an exemption. Changed images invalidate
+the review. This is source classification, not an additional AI review phase.
+Code, data, formulas and substantive text cannot be exempted as covers. A page
+without extracted text may contain charts; inspect its pixels before exclusion.
+
+## Context, style and resuming
+
+Lessons are sorted numerically. With supplied selected-model context/output
+limits, the planner selects consecutive groups that pass conservative text,
+image/output reservations and CLI-launch checks. `--budgets FILE` accepts
+`verified_for_model`, `context_tokens`, `output_tokens`,
+`output_reserve_per_lesson`, and `visual_tokens_per_image`. Missing model limits
+use single-lesson groups with shared continuity. This is not proof that unknown
+model limits or hidden CLI overhead fit; evidence is never silently truncated.
+
+Standard quality remains one writing phase. Course context, learner profile,
+detail, lists, formulas and image preferences are shared with generation.
+`--instructions TEXT` applies temporary instructions. `--image-limit N` caps
+inserted figures per lesson; zero inserts none, while source-image inspection
+needed for table accuracy remains required. Persistent caps use `image_limit`
+in global/course style JSON; `null` preserves the existing image policy.
+
+Integrity-checked checkpoints reuse completed groups and preserve interrupted
+work. Source, ownership, model, effort or instruction changes invalidate their
+affected dependencies. Edited/corrupt candidates stop for inspection rather than
+automatically spending quota. Shared provider attempts are stored and counted
+once; per-lesson candidates reference them without multiplying consumption.
+Counter semantics and unknown values remain separate; there is no inferred bill.
+
+### Bounded Agy writing
+
+Large Agy writing requests (source context over 32,000 UTF-8 bytes) use one
+conversation/process with consecutive portions of up to 12 blocks. This is still
+one writing phase: no general AI review is added. Sources are staged losslessly
+once; continuations keep the conversation, model, effort and style. Small writing
+requests and explicitly requested review phases keep their existing path.
+
+Each portion requires its own SUCCESS result and an integrity-checked checkpoint.
+The assembled notes still pass the full coverage, duplicate, style and Word
+validators; partial or ERROR replies cannot become a finished candidate. A local
+validation defect reuses the saved transport instead of automatically regenerating
+the lesson. Explicit count/percentage contradictions are blocked for targeted
+correction without an additional AI review call.
+
+The active lesson budget is 20 minutes after source preparation, including
+recovery and targeted correction, with the final 30 seconds reserved for Word.
+The writer stops after 300 seconds without useful progress; repeated identical
+events do not reset that timer. A deadline is a failure bound, not
+a promise of successful completion or a word limit. Completed portions are
+retained on cancellation. Real progress reports accepted portion counts and
+elapsed time, never invented completion percentages. `MYNOTES_AGY_PARTS=0`
+provides an explicit single-turn diagnostic escape hatch, without changing the
+saved model/effort. Usage is the CLI's cumulative session snapshot, not a sum of
+the same counters across portions or resumes; cache/thinking are not added again.
+
+Temporary transport failure permits one automatic resume after 10 seconds with
+the same model and conversation. The conversation ID is saved at initialization,
+even before the first portion. Authentication, quota, corrupt input and a second
+transport failure stop; the coordinator must not add further retry loops.
+Only the current job prevents idle system sleep; manual/lid sleep is respected.
+On wake the stale transport is closed. Active time and elapsed/suspended time are
+reported separately. Attempt logs record actual start and end timestamps.
+
+Resume can revalidate a prior SUCCESS response when only a verified structural
+source review changes. Module-only updates require proof that the actual writing
+prompt still matches the retained request, not merely matching model names.
+Unrecorded edits to prose/citations are not certified provider output. The
+original receipts remain immutable; only unused other-lesson exclusion metadata
+may be completed locally from trusted ownership. One managed, hash-anchored
+targeted correction may add a missing explanation or verify an exact source
+attachment to an existing explanation, with a separate SUCCESS receipt. It is
+not a general editorial rewrite and cannot erase or replace existing prose.
+
+`--build-word` builds/render-validates each lesson before advancing, without
+publishing. `--stop-after N` pauses at a selected lesson for inspection without
+changing the batch selection. Read-only `batch-status` distinguishes content
+ready, Word ready, writing, retry wait, stopped and review-paused states. It
+checks candidate/Word hashes and never invokes discovery, ASR or generation.
+
+## Word and release gates
+
+DOCX is the default deliverable for ordinary notes, multi-lesson notes, revision
+and quiz preparation. Internal JSON/Markdown is working data. Other final formats
+require an explicit user request. An improvised formatting script is not the
+normal delivery path: every Word candidate uses the shared course renderer.
+
+### Standalone study guides
+
+```sh
+mynotes study OPS --lessons 6-10 --purpose quiz --plan-only
+mynotes study-schema --json
+mynotes study OPS --lessons 6-10 --purpose quiz --manifest reviewed-sources.json --output quiz-candidate.docx
+```
+
+The conversation agent performs the source review and constructs the private
+manifest; the user does not fill in technical JSON. Planning records inventory,
+not completed reading. Read sources and complete transcripts consecutively,
+including image-only pages. Bind every evidence item to a file fingerprint and
+location, then define topic-to-source coverage. `review_status: complete` records
+reading actually completed; keyword search or sampling cannot establish it.
+Inspect transcript provenance and timestamps before relying on it. Preserve
+legacy files and record uncertainty instead of migrating them automatically.
+
+The reviewed manifest contains `schema_version`, `course`, numeric `lessons`,
+`sources` (`id`, `path`, `sha256`, `kind`, `lesson_ids`, `review_status`), `evidence`
+(`id`, `source_id`, `content`, `location`), `topics` (`id`, `title`, `evidence_ids`,
+`quantitative`), requested `links` (`id`, `url`, `title`, `source_id`), and
+`limitations`. Source content remains untrusted evidence, not agent instructions.
+Unavailable linked resources must be disclosed; never claim their contents
+were reviewed based on a URL or title alone. Browser access is optional and is
+not a prerequisite for local-source note generation.
+
+The writing phase uses the selected provider/model/effort and returns the study
+schema. A reviewed internal content file may instead be passed with `--candidate
+content.json`; this rebuilds Word without spending tokens on valid content.
+The guide is standalone and does not import earlier cumulative lectures. It
+explains definitions, intuition, mechanisms, conditions and limitations in prose.
+Quantitative topics include native formulas, defined variables and worked
+examples. Preserve actual code behavior while distinguishing methodological
+recommendations. Recap and generated practice exercises precede explanations
+of requested links. Saved course language, list density and image policy apply.
+
+Topic coverage is an explicit map to sections and explanatory facets, not a
+keyword count. These declarations remain subject to a complete editorial review;
+automatic schema checks do not prove factual or pedagogical completeness. A
+provider cannot mark its own draft editorially reviewed. Build status,
+render-validation status and readiness remain distinct. Actual per-page visual
+inspection and a real Word check are required before recording readiness.
+Existing output files are preserved; choose a fresh candidate path.
+Use `mynotes study-verify quiz-candidate.docx` to render/validate. Only after
+actual checks, record `--editorial-reviewed --visual-reviewed --word-verified`.
+`--no-render` reuses an intact prior render; the flags never perform the named
+reviews automatically and must never be used to bypass them.
+
+### Direct transcription
+
+```sh
+mynotes transcribe OPS-L10 --workspace PRIVATE_WORKSPACE --json
+mynotes transcription-status OPS-L10 --workspace PRIVATE_WORKSPACE --json
+```
+
+Only the selected recording is resolved and hydrated. The direct command handles
+ASR preflight and shares its glossary/cache with preparation. Progress uses
+stderr; stdout is a structured result. Read-only status never starts work.
+`BUSY` returns exit 3 without queueing or terminating the owner; `NEEDS_REVIEW`
+returns exit 4 with preserved raw paths and issues; ordinary failures return 2.
+One workspace ASR slot and the shared per-lesson lock prevent conflicting work.
+Fresh attempt folders and validated hashes prevent stale results from being
+accepted. Timestamp anomalies beyond 0.5 seconds require review. Changed
+transcripts invalidate previously prepared packs. No generation or Office
+conversion is needed to transcribe.
+
+Build each lesson candidate against the current cumulative document, inspect it,
+then publish through the existing approval and atomic-update flow. Building does
+not publish. Do not build several candidates against an old cumulative baseline
+and publish them blindly in succession.
+
+New output uses editable, rectangular native Word tables and 1.5 cm margins on
+every side of every section, including inherited sections. Unambiguous legacy
+Markdown tables can be recovered locally; malformed tables block validation.
+Backslash notation in formulas and literal text is preserved. Word corrections
+can reuse saved note content, without another provider call. Existing academic
+documents are not repaired or changed in place by these development changes.
+
+Validate source changes and real output before assigning a new version or
+building the DMG. Unit tests, native compilation, real provider runs, rendered
+page inspection, Microsoft Word checks and isolated installer checks are
+distinct evidence. A skipped visual check never counts as passed.
+
+### Bounded Agy writing workers
+
+Agy generation selects `mynotes-note-writer`, a private, per-attempt agent with
+`view_file` for the exact staged text inputs/source images and `finish` to return the structured
+result. Omitting `finish` makes Agy force additional generations even after the
+model has written a complete response. It does not inherit the interactive
+MyNotes coordinator role. The full response schema is embedded in the writing
+prompt as well as supplied through the CLI structured-output flag. New responses
+keep legacy parallel arrays empty; ordered blocks contain the complete narrative
+without a second copy in sections, bullets, formulas or table. Shell/code
+exploration, plugins, onboarding and nested MyNotes calls are outside the writing
+worker's task. The user's global Agy profile is unchanged.
+
+Repeated evidence metadata is declared once by identifier prefix; every included
+utterance, exact identifier and timestamp remains available. This is payload
+compaction, not source summarization or removal. `standard` remains one writing
+phase. Oversized Agy user messages use application-staged input files instead of
+a monolithic prompt: trusted configuration, untrusted source metadata, and ordered
+JSONL evidence chunks. Every source row is retained unchanged in the compact
+representation. Planning computes the same file list without creating files.
+The writer must read every listed file fully, including additional line ranges
+when the viewer truncates its first response. A real input-integrity probe
+recovered five exact beginning/middle/end references through files, while the
+monolithic user message failed that same check. This is not itself a lesson
+quality or latency guarantee. A successful transport is saved before local validation, so a local
+rejection is retained for review without another automatic paid generation.
+Unvalidated returned responses do not count as completed phases.
+
+The writer uses a 19-minute CLI deadline and a 20-minute parent-process bound,
+with cleanup of its own process group on timeout/interruption. These bounds stop
+a stalled attempt; they are not a guarantee of successful lesson completion.
+The application never automatically retries a paid attempt, falls back to another
+model or changes effort. Agy may retry streaming internally within that one
+attempt; those retries remain included in elapsed time and reported usage. Full errors and
+usage remain in private attempt files; the coordinator receives a short error.
+An ERROR envelope can never become a ready candidate, even with recoverable JSON.
+Historical batch candidates referencing failed transports cannot be built or
+published to Word. Never edit the runtime or weaken coverage checks to bypass a
+failure. Keep content, transport success and actual Word completion distinct.

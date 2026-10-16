@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from typing import Any
 from docx import Document
 
 from .utils import file_sha256
+from .office import OfficeError, convert_to_pdf
 
 
 class ExtractionError(RuntimeError):
@@ -38,8 +38,9 @@ def extract_pdf(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[s
             textpage = page.get_textpage()
             raw_text = textpage.get_text_range()
             text = re.sub(r"\s+", " ", raw_text).strip()
-            if text:
-                chunks.append({"content": text, "page": number})
+            # Even an image-only page is a slide with stable provenance.
+            # Empty content is intentional; never invent text from a picture.
+            chunks.append({"content": text, "page": number, "textless": not bool(text)})
             image_count = 0
             drawing_count = 0
             for obj in page.get_objects():
@@ -89,17 +90,19 @@ def _pptx_visual_scores(path: Path) -> dict[int, dict[str, int | float]]:
     return scores
 
 
+def libreoffice_executable() -> str | None:
+    from .onboarding import managed_tool
+    return os.environ.get("MYNOTES_LIBREOFFICE") or managed_tool("soffice") or shutil.which("soffice") or shutil.which("libreoffice")
+
+
 def _render_pptx_as_pdf(path: Path, output_dir: Path) -> Path | None:
-    executable = os.environ.get("MYNOTES_LIBREOFFICE") or shutil.which("soffice") or shutil.which("libreoffice")
+    executable = libreoffice_executable()
     if not executable:
         return None
-    output_dir.mkdir(parents=True, exist_ok=True)
-    completed = subprocess.run(
-        [executable, "--headless", "--convert-to", "pdf", "--outdir", str(output_dir), str(path)],
-        capture_output=True, text=True, timeout=300,
-    )
-    candidate = output_dir / f"{path.stem}.pdf"
-    return candidate if completed.returncode == 0 and candidate.is_file() else None
+    try:
+        return convert_to_pdf(executable, path, output_dir, timeout=300)
+    except OfficeError as error:
+        raise ExtractionError(str(error)) from error
 
 
 def extract_ppt(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -160,13 +163,19 @@ def extract_pptx(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[
                 texts.append(f"Table {table_number} (source rows):\n" + "\n".join(rows))
             elif hasattr(shape, "text") and shape.text.strip():
                 texts.append(shape.text.strip())
-        if texts:
-            chunks.append({"content": "\n".join(texts), "page": number})
+        chunks.append({"content": "\n".join(texts), "page": number, "textless": not bool(texts)})
     signals = _pptx_visual_scores(path)
     rendered: dict[int, str] = {}
+    render_error = "LibreOffice rendering unavailable"
     if visual_dir is not None and any(float(item["score"]) >= 0.25 for item in signals.values()):
         with tempfile.TemporaryDirectory(prefix="mynotes-pptx-") as temporary:
-            pdf = _render_pptx_as_pdf(path, Path(temporary))
+            try:
+                pdf = _render_pptx_as_pdf(path, Path(temporary))
+            except ExtractionError as error:
+                # Text/tables remain extractable with python-pptx. Retain the
+                # failure on every affected visual instead of claiming success.
+                render_error = str(error)
+                pdf = None
             if pdf:
                 _, pages = extract_pdf(pdf, visual_dir)
                 rendered = {int(item["page"]): str(item["image_path"]) for item in pages if item.get("image_path")}
@@ -183,7 +192,7 @@ def extract_pptx(path: Path, visual_dir: Path | None = None) -> tuple[list[dict[
                     else "Raster image requires semantic review before inclusion" if decision == "review"
                     else "Text-only slide; use extracted prose"
                 ),
-                **({"render_error": "LibreOffice rendering unavailable"} if decision in {"candidate", "review"} and number not in rendered else {}),
+                **({"render_error": render_error} if decision in {"candidate", "review"} and number not in rendered else {}),
             }
         )
     return chunks, visuals
@@ -215,7 +224,13 @@ def extract_docx(path: Path, lesson_number: int | None = None) -> tuple[list[dic
     items = _docx_items(path)
     if lesson_number is None:
         return items, []
-    starts = [index for index, item in enumerate(items) if (match := LECTURE_HEADING_RE.match(item["content"])) and int(match.group(1)) == lesson_number]
+    headings = [(index, int(match.group(1))) for index, item in enumerate(items)
+                if (match := LECTURE_HEADING_RE.match(item["content"]))]
+    # An explicitly selected standalone note file need not contain lesson
+    # headings. Only a structured notebook requires a matching lesson scope.
+    if not headings:
+        return items, []
+    starts = [index for index, number in headings if number == lesson_number]
     if not starts:
         return [], []
     if len(starts) > 1:
@@ -260,14 +275,16 @@ def extract_material(path: Path, *, visual_dir: Path | None = None, lesson_numbe
 
 
 def split_directives(chunks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Separate explicit user directives without interpreting source prose as commands."""
-    evidence: list[dict[str, Any]] = []
+    """Classify imported note markers without trusting or removing their text.
+
+    Marker syntax does not authenticate the author. The original content stays
+    available as source evidence; candidates are metadata for user review only.
+    """
+    evidence = [{**chunk} for chunk in chunks if str(chunk.get("content", "")).strip()]
     directives: list[dict[str, Any]] = []
     multiline: list[str] | None = None
     for chunk in chunks:
-        lines = str(chunk.get("content", "")).splitlines()
-        kept: list[str] = []
-        for line in lines:
+        for line in str(chunk.get("content", "")).splitlines():
             if multiline is not None:
                 if INSTRUCTION_END_RE.match(line):
                     directives.append({"kind": "instruction", "text": "\n".join(multiline).strip(), "locator": chunk.get("paragraph")})
@@ -284,14 +301,9 @@ def split_directives(chunks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
                     multiline = []
                 elif value:
                     directives.append({"kind": kind, "text": value, "locator": chunk.get("paragraph")})
-                continue
-            kept.append(line)
-        content = "\n".join(kept).strip()
-        if content:
-            evidence.append({**chunk, "content": content})
     if multiline is not None:
         directives.append({"kind": "instruction", "text": "\n".join(multiline).strip(), "warning": "missing explicit end marker"})
-    return evidence, directives
+    return evidence, [{**item, "untrusted_evidence": True, "requires_user_confirmation": True} for item in directives]
 
 
 def source_descriptor(path: Path) -> dict[str, Any]:

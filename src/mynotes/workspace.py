@@ -84,8 +84,11 @@ class Workspace:
 
     def initialize(self) -> None:
         """Create an empty private workspace without reading any legacy data."""
+        # Newly created technical state must not expose notes/attempts to other
+        # local accounts. Preserve permissions on any existing user directory.
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         for directory in self.required_directories():
-            directory.mkdir(parents=True, exist_ok=True)
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         if not self.configuration_path.exists():
             atomic_json_write(self.configuration_path, default_configuration())
         if not self.database_path.exists():

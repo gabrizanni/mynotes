@@ -10,7 +10,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .utils import atomic_json_write, now_compact_utc
 
@@ -18,11 +18,12 @@ ONBOARDING_GROUPS = ("personal", "paths", "courses", "style", "providers")
 COURSE_CODE_RE = re.compile(r"^[A-Z0-9]+$")
 COURSE_KINDS = {"quantitative", "theoretical", "cases", "programming", "mixed"}
 QUALITY_LEVELS = {"base", "standard", "approfondito", "revisione"}
-SUPPORTED_PROVIDERS = {"codex", "agy"}
+SUPPORTED_PROVIDERS = {"codex", "agy", "claude"}
 STYLE_PROFILE_DEFAULTS: dict[str, Any] = {
     "writing_style": "clear_study",
     "list_density": "balanced",
     "image_policy": "essential",
+    "image_limit": None,
     "question_count": 5,
     "recap": True,
     "recap_language": "it",
@@ -88,6 +89,8 @@ def course_template() -> dict[str, Any]:
         "instructors": [],
         "modules": [],
         "assessment": "",
+        "context": "",
+        "context_setup": "not_requested",
         "preparation": "",
         "difficult_topics": [],
         "folders": {
@@ -130,7 +133,7 @@ def normalize_style_profile(value: dict[str, Any], *, partial: bool = False) -> 
     """Validate user-editable style fields; visual rules remain code-owned."""
     if not isinstance(value, dict):
         raise ConfigurationError("Style profile must be an object")
-    allowed = set(EDITABLE_STYLE_FIELDS) | {"question_count", "recap"}
+    allowed = set(EDITABLE_STYLE_FIELDS) | {"question_count", "recap", "image_limit"}
     unknown = set(value) - allowed
     if unknown:
         raise ConfigurationError(f"Unknown style profile field: {', '.join(sorted(unknown))}")
@@ -145,6 +148,10 @@ def normalize_style_profile(value: dict[str, Any], *, partial: bool = False) -> 
         raise ConfigurationError("Style question_count must be an integer between 1 and 5")
     if "recap" in result and type(result["recap"]) is not bool:
         raise ConfigurationError("Style recap must be true or false")
+    if "image_limit" in result and result["image_limit"] is not None and (
+        type(result["image_limit"]) is not int or result["image_limit"] < 0
+    ):
+        raise ConfigurationError("Style image_limit must be a non-negative integer or null")
     return result
 
 
@@ -159,7 +166,7 @@ def effective_style(configuration: dict[str, Any], course_code: str | None = Non
         if course is None:
             raise ConfigurationError(f"Course not found: {code}")
         overrides = {key: value for key, value in course.get("style", {}).items()
-                     if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap"}}
+                     if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap", "image_limit"}}
         profile.update(normalize_style_profile(overrides, partial=True))
     return profile
 
@@ -179,6 +186,12 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
     course["name"] = str(course["name"]).strip()
     if not course["name"]:
         raise ConfigurationError("Course name is required")
+    if not isinstance(course["context"], str):
+        raise ConfigurationError("Course context must be text")
+    if course["context_setup"] not in {"not_requested", "pending", "deferred", "complete"}:
+        raise ConfigurationError("Invalid course context setup state")
+    if course["context"].strip() and course["context_setup"] in {"pending", "deferred"}:
+        course["context_setup"] = "complete"
     course["aliases"] = _string_list(course["aliases"], "course aliases")
     course["instructors"] = _string_list(course["instructors"], "course instructors")
     course["modules"] = _string_list(course["modules"], "course modules")
@@ -224,7 +237,7 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Course style and preferences must be objects")
     normalize_style_profile(
         {key: value for key, value in course["style"].items()
-         if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap"}},
+         if key in EDITABLE_STYLE_FIELDS or key in {"question_count", "recap", "image_limit"}},
         partial=True,
     )
     course["preferences"]["persistent_instructions"] = _string_list(
@@ -305,6 +318,10 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Personal interface language is required")
     if personal.get("primary_goal") not in {"exam", "understanding", "exercises", "work", "personal"}:
         raise ConfigurationError("Invalid primary goal")
+    if not isinstance(personal.get("background", ""), str):
+        raise ConfigurationError("Personal background must be text")
+    if type(personal.get("background_confirmed", False)) is not bool:
+        raise ConfigurationError("Background confirmation must be true or false")
     paths = configuration.get("paths")
     if not isinstance(paths, dict):
         raise ConfigurationError("Paths must be an object")
@@ -336,7 +353,7 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Providers must include a configured object")
     selected = providers.get("default")
     if selected is not None and selected not in SUPPORTED_PROVIDERS:
-        raise ConfigurationError("Default provider must be codex, agy, or null")
+        raise ConfigurationError("Default provider must be codex, agy, claude, or null")
     if providers.get("quota_behavior") not in {"pause_and_resume", "stop"}:
         raise ConfigurationError("Invalid quota behavior")
     for provider, options in providers["configured"].items():
@@ -405,19 +422,46 @@ class ConfigurationStore:
         with self.path.open(encoding="utf-8") as handle:
             return validate_configuration(json.load(handle))
 
+    def _persist_locked(self, normalized: dict[str, Any]) -> None:
+        """Write history and settings while the caller owns settings.lock."""
+        if self.path.exists():
+            snapshot = self.history_dir / f"{now_compact_utc()}-{uuid.uuid4().hex[:8]}-settings.json"
+            self.history_dir.mkdir(parents=True, exist_ok=True)
+            atomic_json_write(snapshot, json.loads(self.path.read_text(encoding="utf-8")))
+        atomic_json_write(self.path, normalized)
+
     def save(self, configuration: dict[str, Any]) -> dict[str, Any]:
+        """Replace an explicitly supplied full configuration under the write lock."""
         normalized = self._resolve_relative_paths(validate_configuration(configuration))
         lock_path = self.path.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            if self.path.exists():
-                snapshot = self.history_dir / f"{now_compact_utc()}-{uuid.uuid4().hex[:8]}-settings.json"
-                self.history_dir.mkdir(parents=True, exist_ok=True)
-                atomic_json_write(snapshot, json.loads(self.path.read_text(encoding="utf-8")))
-            atomic_json_write(self.path, normalized)
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            try:
+                self._persist_locked(normalized)
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         return normalized
+
+    def update(self, transform: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
+        """Apply an edit to the latest settings in one atomic read-modify-write.
+
+        The callback must not call save/update on this store: it already owns
+        the non-reentrant file lock. Unchanged edits do not create history.
+        """
+        lock_path = self.path.with_suffix(".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+", encoding="utf-8") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                current = self.load()
+                edited = transform(copy.deepcopy(current))
+                normalized = self._resolve_relative_paths(validate_configuration(edited))
+                if normalized != current:
+                    self._persist_locked(normalized)
+                return normalized
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def _resolve_relative_paths(self, configuration: dict[str, Any]) -> dict[str, Any]:
         base = self.path.parent.parent

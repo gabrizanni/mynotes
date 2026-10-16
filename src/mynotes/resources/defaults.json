@@ -45,6 +45,7 @@
       "writing_style": "clear_study",
       "list_density": "balanced",
       "image_policy": "essential",
+      "image_limit": null,
       "question_count": 5,
       "recap": true,
       "recap_language": "it"

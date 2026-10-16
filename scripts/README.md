@@ -1,30 +1,15 @@
 # Scripts
 
-- `check_public_tree.py` validates the explicit public release allow-list.
-- `build_base_template.py` extracts only Word design definitions from an operator-
-  supplied local reference into a content-free template; the reference is not
-  included in the application or release archive.
-- `build_release.py` checks the lockfile, builds the wheel/sdist, validates the
-  public files, and creates a versioned macOS release ZIP.
-- `install-mynotes.sh` installs a release wheel into a versioned external
-  application directory and creates a guarded user launcher.
+- `check_public_tree.py` validates the explicit public release allowlist and scans for private references.
+- `build_setup.py` compiles and ad-hoc signs the Apple Silicon SwiftUI onboarding app; the packaging machine needs Swift tools.
+- `build_dmg.py` prepares the release inputs, bundles the setup app with the managed runtime installer and precompiled tools, and creates the Apple Silicon DMG candidate plus SHA-256 checksum. It does not publish to GitHub.
+- `setup_runtime.py` runs inside the packaged app to bootstrap managed Python, locked dependencies, local transcription and Word tools; providers are installed and authenticated separately by the user.
+- `build_release.py` checks the lockfile, builds wheel/sdist, validates public files and creates the versioned manual-install release ZIP.
+- `install-mynotes.sh` installs a standalone release into versioned external directories and creates a guarded launcher; this advanced ZIP path requires Python and uv.
+- `build_capture.py` compiles and signs the native recorder; `--native-only` builds the packaging machine's architecture.
+- `test_capture_native.py` runs standalone native recorder/recovery and synthetic audio regressions.
+- `capture_install_guard.py` protects updates and rollback with the same lease as recording/export.
+- `validate_word_pipeline.py` verifies a synthetic Word pipeline separately from provider quality.
+- `build_base_template.py` extracts only Word design definitions from an operator-supplied reference into a content-free template; the reference is excluded from distribution.
 
-These scripts must remain generic: no user-specific paths, credentials, or
-temporary lesson-processing content belong here.
-
-## Rebuild the neutral Word template
-
-```sh
-uv run python scripts/build_base_template.py reference.docx src/mynotes/resources/base-template.docx
-uv run python scripts/check_public_tree.py
-```
-
-Use a local, single-section Word design reference with native Heading 1/2/3.
-The builder copies only style, numbering, theme and page geometry definitions;
-body text, images, document properties and the source path are omitted.
-It applies the current study design: margins 1.5 cm on all sides, Heading 1/2/3
-at 16/14/12 pt in blue, and the visible orange bold character style
-`Termine tecnico`. The publication renderer applies Aptos 11 body text and uses
-Heading 1 for the lesson, Heading 2 for sections, Heading 3 for subsections,
-and the character style for terms without direct formatting overrides.
-Never add the local reference or generated handouts to the public repository.
+Keep scripts generic: no personal paths, credentials, calendar tokens or course-processing content. Packaging downloads must be versioned and verified, and must not read tools from a personal legacy project. [Evidence and remaining acceptance](../docs/VALIDATION.md).

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import re
 from collections.abc import Sequence
@@ -24,7 +25,8 @@ from .configuration import (
 )
 from .workspace import Workspace
 from .workflow import WorkflowError, generate_candidate, process, status
-from .asr import ASRError
+from .providers import ProviderError
+from .asr import ASRError, ASRBusyError
 from .extraction import ExtractionError
 from .ingestion import IngestionError, discover_recordings, recording_for_lecture
 from .sourcepack import SourcePackError, build_source_pack
@@ -104,14 +106,10 @@ def _prompt_style_profile(current: dict[str, Any], *, changed_only: bool = False
 def _interactive_group(group: str, configuration: dict[str, Any]) -> dict[str, Any]:
     """Ask a small, provider-free batch of questions and return its answers."""
     if group == "personal":
-        return {
-            "interface_language": input("Interface language [en]: ").strip() or "en",
-            "institution": input("Institution (or 'none'): ").strip() or None,
-            "study_program": input("Study program (optional): ").strip() or None,
-            "study_period": input("Study period (optional): ").strip() or None,
-            "primary_goal": input("Primary goal [exam/understanding/exercises/work/personal]: ").strip()
-            or "understanding",
-        }
+        language = input("Lingua / Language [it/en]: ").strip() or configuration["personal"]["interface_language"]
+        question = "Raccontami brevemente cosa studi, qual è il tuo background e come vorresti usare MyNotes (Invio per saltare): " if language == "it" else "Tell me briefly what you study, your background and how you would like to use MyNotes (Enter to skip): "
+        background = input(question).strip()
+        return {"interface_language": language, "background": background, "background_confirmed": True}
     if group == "paths":
         raw = input("Recording folders, comma-separated (optional): ").strip()
         return {"recording_dirs": [clean_path(item) for item in raw.split(",") if item.strip()]}
@@ -154,7 +152,7 @@ def _interactive_group(group: str, configuration: dict[str, Any]) -> dict[str, A
             "course_profiles": course_profiles,
         }
     if group == "providers":
-        provider = input("Default provider [codex/agy/none]: ").strip().lower() or "none"
+        provider = input("Default provider [codex/agy/claude/none]: ").strip().lower() or "none"
         if provider == "none":
             return {"default": None, "configured": {}}
         model = input("Preferred model (optional): ").strip()
@@ -199,8 +197,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"mynotes {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+    from .capture import add_parser
+    add_parser(subparsers)
     init = subparsers.add_parser("init", help="initialize an empty private workspace")
     init.add_argument("--workspace", help="private workspace path")
+    setup = subparsers.add_parser("setup", help="open resumable MyNotes setup")
+    setup.add_argument("--workspace", help="private workspace path")
+    setup.add_argument("--provider", choices=("codex", "agy", "claude"), help="selected agent")
     configure = subparsers.add_parser("configure", help="run or resume configuration")
     configure.add_argument("--workspace", help="private workspace path")
     configure.add_argument("--answers", help="JSON answers for one onboarding group")
@@ -208,6 +211,24 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--instruction", help="natural-language preference to persist safely")
     configure.add_argument("--course", help="course code for a persistent instruction")
     configure.add_argument("--create-missing-dirs", action="store_true", help="create displayed configured folders")
+    preferences = subparsers.add_parser("preferences", help="save one model for chat and notes, and the conversation language")
+    preferences.add_argument("--workspace", help="private workspace path")
+    preferences.add_argument("--provider", required=True, choices=("codex", "agy", "claude"))
+    preferences.add_argument("--model", required=True, help="model identifier; empty text uses the agent default")
+    preferences.add_argument("--effort", help="supported effort; empty text restores the agent default")
+    preferences.add_argument("--preset", help="preset id from mynotes models; saves model and effort together")
+    preferences.add_argument("--language", choices=("it", "en"))
+    models = subparsers.add_parser("models", help="inspect discovered models and visible presets without generation")
+    models.add_argument("--provider", required=True, choices=("codex", "agy", "claude"))
+    models.add_argument("--saved", default="", help="retain a saved model even if absent from the current catalog")
+    models.add_argument("--saved-effort", default="", help="effort saved with the retained model")
+    models.add_argument("--refresh", action="store_true", help="refresh the supported provider catalog without generation")
+    models.add_argument("--json", action="store_true", help="machine-readable catalog")
+    profile = subparsers.add_parser("profile", help="save the learner's single free-form background answer")
+    profile.add_argument("--workspace", help="private workspace path")
+    background = profile.add_mutually_exclusive_group(required=True)
+    background.add_argument("--background", help="the user's answer, quoted as one argument")
+    background.add_argument("--skip", action="store_true", help="acknowledge this step without requiring an answer")
     style = subparsers.add_parser("style", help="inspect, edit, or preview the coded note style")
     style_subparsers = style.add_subparsers(dest="style_command", required=True)
     for name, help_text in (
@@ -225,13 +246,36 @@ def build_parser() -> argparse.ArgumentParser:
             command.add_argument("--output", help="destination .docx; defaults to private workspace/previews")
     course = subparsers.add_parser("course", help="add or edit a configured course")
     course_subparsers = course.add_subparsers(dest="course_command", required=True)
+    for action in ("pending", "defer-context"):
+        pending = course_subparsers.add_parser(action)
+        pending.add_argument("--workspace")
+        pending.add_argument("--json", action="store_true")
+        if action == "defer-context":
+            pending.add_argument("code")
     for name, help_text in (("add", "add a course from JSON"), ("edit", "replace a course from JSON")):
         command = course_subparsers.add_parser(name, help=help_text)
         command.add_argument("--workspace", help="private workspace path")
         command.add_argument("--file", help="course JSON file; omit for guided questions")
+        if name == "add":
+            command.add_argument("--defer-context", action="store_true")
+            command.add_argument("--json", action="store_true")
+            command.add_argument("--name", help="create a first course with default folders and style")
+            command.add_argument("--notes-language", default="en")
+            command.add_argument("--materials", help="existing materials folder")
+            command.add_argument("--recordings", help="existing recordings folder")
+            command.add_argument("--context-answer", help="original free-form answer to the two course questions")
+            command.add_argument("--settings-json", help="interpreted course context and style as one JSON object")
         if name == "edit":
             command.add_argument("code", help="course code to replace")
         command.add_argument("--create-missing-dirs", action="store_true")
+    link = course_subparsers.add_parser("link", help="connect a supplied course folder or Finder alias in one step")
+    link.add_argument("code", help="configured course code")
+    link.add_argument("path", help="course folder or Finder alias; quote paths with spaces")
+    link.add_argument("--workspace", help="private workspace path")
+    link.add_argument("--notes", help="explicit personal-notes folder if selection is ambiguous")
+    link.add_argument("--recordings", help="explicit recordings folder if selection is ambiguous")
+    link.add_argument("--dry-run", action="store_true", help="inspect without changing configuration")
+    link.add_argument("--json", action="store_true", help="return resolved paths and bounded inventory as JSON")
     config = subparsers.add_parser("config", help="inspect or restore private configuration")
     config_subparsers = config.add_subparsers(dest="config_command", required=True)
     show = config_subparsers.add_parser("show", help="show current configuration")
@@ -252,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--web-source", help="optional local UTF-8 snapshot of an online source")
         command.add_argument(
             "--provider",
-            choices=("codex", "agy"),
+            choices=("codex", "agy", "claude"),
             help="override the configured provider; no simulated provider is available in normal runs",
         )
         command.add_argument("--quality", default="standard", help="base, standard, approfondito, or revisione")
@@ -274,12 +318,62 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--material", action="append", default=[], help="PDF, PPT/PPTX, XLSX, DOCX, text, or notebook; repeatable")
     prepare.add_argument("--personal-notes", help="DOCX, Markdown, or text containing the lesson block")
     prepare.add_argument("--web-snapshot", action="append", default=[], help="local snapshot of a linked online source; repeatable")
+    transcribe = subparsers.add_parser("transcribe", help="transcribe only the selected lecture with validated timestamped results")
+    from .transcription_queue import add_parser as add_queue_parser
+    add_queue_parser(subparsers)
+    transcribe.add_argument("lecture_id", help="COURSE-LNN")
+    transcribe.add_argument("--workspace", help="private workspace path")
+    transcribe.add_argument("--audio", help="specific recording; otherwise resolve only this lecture")
+    transcribe.add_argument("--json", action="store_true", help="structured result; progress goes to stderr")
+    transcription_status = subparsers.add_parser("transcription-status", help="read one transcription's progress without starting work")
+    transcription_status.add_argument("lecture_id", help="COURSE-LNN")
+    transcription_status.add_argument("--workspace", help="private workspace path")
+    transcription_status.add_argument("--json", action="store_true")
+    study = subparsers.add_parser("study", help="create a standalone source-bound quiz guide with the shared Word renderer")
+    study.add_argument("course", help="configured course code")
+    study.add_argument("--lessons", required=True, help="ordered lesson range, for example 6-10")
+    study.add_argument("--purpose", choices=("quiz",), default="quiz")
+    study.add_argument("--output", help="new candidate DOCX path; existing files are preserved")
+    study.add_argument("--workspace", help="private workspace path")
+    study.add_argument("--manifest", help="reviewed complete source/topic manifest")
+    study.add_argument("--candidate", help="reviewed structured content JSON; internal working format")
+    study.add_argument("--provider", choices=("codex", "agy", "claude"))
+    study.add_argument("--quality", default="standard")
+    study.add_argument("--plan-only", action="store_true", help="local inventory only, no generation")
+    study_schema = subparsers.add_parser("study-schema", help="read the structured study contract without exploring implementation files")
+    study_schema.add_argument("--json", action="store_true")
+    study_verify = subparsers.add_parser("study-verify", help="render and record checks actually performed on a study Word candidate")
+    study_verify.add_argument("candidate", help="existing study candidate DOCX")
+    study_verify.add_argument("--no-render", action="store_true", help="reuse a previously verified render")
+    study_verify.add_argument("--editorial-reviewed", action="store_true", help="record a complete editorial review actually performed")
+    study_verify.add_argument("--visual-reviewed", action="store_true", help="record actual inspection of every rendered page")
+    study_verify.add_argument("--word-verified", action="store_true", help="record actual opening and verification in Microsoft Word")
     generate = subparsers.add_parser("generate", help="generate a reviewable candidate from a prepared source pack")
     generate.add_argument("lecture_id", help="COURSE-LNN")
     generate.add_argument("--workspace", help="private workspace path")
     generate.add_argument("--source-pack", help="prepared source-pack JSON; defaults to the lecture run")
-    generate.add_argument("--provider", choices=("codex", "agy"), help="provider override")
+    generate.add_argument("--provider", choices=("codex", "agy", "claude"), help="provider override")
     generate.add_argument("--quality", default="standard", help="base, standard, approfondito, or revisione")
+    generate.add_argument("--instructions", default="", help="temporary lesson instructions; does not save course preferences")
+    generate.add_argument("--image-limit", type=int, help="maximum inserted images for this request; zero inserts none")
+    batch = subparsers.add_parser("generate-batch", help="coordinate ordered lessons with shared slide ownership; candidates only")
+    batch.add_argument("course", help="configured course code")
+    batch.add_argument("--workspace", help="private workspace path")
+    batch.add_argument("--lessons", help="lesson numbers/ranges, for example 1-6 or 1,3-5")
+    batch.add_argument("--provider", choices=("codex", "agy", "claude"))
+    batch.add_argument("--quality", help="base, standard, approfondito, or revisione; defaults to standard")
+    batch.add_argument("--selection", help="JSON mapping canonical slide IDs to reviewed owners and inline anchors")
+    batch.add_argument("--budgets", help="JSON with verified selected-model context/output limits")
+    batch.add_argument("--instructions", help="temporary instructions for this batch")
+    batch.add_argument("--image-limit", type=int, help="maximum inserted images per lesson for this request")
+    batch.add_argument("--plan-only", action="store_true", help="inspect existing packs without writes or provider calls")
+    batch.add_argument("--resume", metavar="BATCH_ID", help="resume a saved batch without repeating its lesson selection")
+    batch.add_argument("--build-word", action="store_true", help="build each validated lesson as a Word candidate before advancing")
+    batch.add_argument("--stop-after", type=int, help="pause for review after this lesson without changing the selected batch")
+    batch_status = subparsers.add_parser("batch-status", help="read saved batch progress without generation or state changes")
+    batch_status.add_argument("batch_id")
+    batch_status.add_argument("--workspace")
+    batch_status.add_argument("--json", action="store_true")
     build = subparsers.add_parser("build", help="build and render-validate a Word candidate without publishing it")
     build.add_argument("lecture_id", help="COURSE-LNN")
     build.add_argument("--workspace", help="private workspace path")
@@ -296,13 +390,15 @@ def build_parser() -> argparse.ArgumentParser:
     restore_word.add_argument("--workspace", help="private workspace path")
     recover = subparsers.add_parser("recover", help="classify interrupted Word publication transactions safely")
     recover.add_argument("--workspace", help="private workspace path")
-    for provider in ("codex", "agy"):
+    for provider in ("codex", "agy", "claude"):
         natural = subparsers.add_parser(provider, help=f"run a simple natural-language request with {provider}")
         natural.add_argument("message", nargs="*", help='omit to open a chat, or say e.g. "genera ABC-L01"')
         natural.add_argument("--workspace", help="private workspace path")
         natural.add_argument("--source-pack", help="prepared source-pack JSON; defaults to the lecture run")
     doctor = subparsers.add_parser("doctor", help="inspect a private workspace without changing it")
     doctor.add_argument("--workspace", help="private workspace path")
+    doctor.add_argument("--json", action="store_true", help="component readiness and repair actions")
+    doctor.add_argument("--provider", choices=("codex", "agy", "claude"), help="inspect another agent without changing the selected default")
     migrate = subparsers.add_parser("migrate", help="inventory or copy a legacy installation")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     legacy = migrate_subparsers.add_parser("legacy", help="migrate a legacy local installation")
@@ -312,11 +408,16 @@ def build_parser() -> argparse.ArgumentParser:
     choice.add_argument("--dry-run", action="store_true")
     choice.add_argument("--apply-manifest", help="exact reviewed manifest produced by --dry-run")
     integrate = subparsers.add_parser("integrate", help="export a platform integration without private data")
-    integrate.add_argument("platform", choices=("codex", "agy"))
+    integrate.add_argument("platform", choices=("codex", "agy", "claude"))
     integrate.add_argument("--destination", default=".", help="directory receiving only the integration instructions")
     integrate.add_argument("--action", choices=("install", "update", "remove"), default="install")
     status_command = subparsers.add_parser("status", help="show workflow state from a second terminal")
     status_command.add_argument("--workspace", help="private workspace path")
+    usage = subparsers.add_parser("usage", help="inspect all local provider attempts and reuse for one lecture")
+    usage.add_argument("lecture_id", nargs="?", help="COURSE-LNN")
+    usage.add_argument("--batch", metavar="BATCH_ID", help="count shared attempts once across the batch")
+    usage.add_argument("--workspace", help="private workspace path")
+    usage.add_argument("--json", action="store_true", help="machine-readable provider reported counters")
     chat = subparsers.add_parser("chat", help="open a real provider conversation grounded in MyNotes")
     chat.add_argument("--workspace", help="private workspace path")
     chat.add_argument("--provider", help="configured provider")
@@ -351,7 +452,41 @@ def _configure(arguments: argparse.Namespace) -> int:
 
 
 def _course(arguments: argparse.Namespace) -> int:
+    if arguments.course_command in {"pending", "defer-context"}:
+        from .capture_courses import pending_courses, defer_context
+        ws = Workspace.from_value(arguments.workspace)
+        value = {"courses": pending_courses(ws)} if arguments.course_command == "pending" else defer_context(ws, arguments.code)
+        print(json.dumps(value, ensure_ascii=False))
+        return 0
+    if arguments.course_command == "link":
+        from .course_links import link_course_folder
+        result = link_course_folder(Workspace.from_value(arguments.workspace), arguments.code, Path(arguments.path),
+            dry_run=arguments.dry_run, notes=Path(arguments.notes) if arguments.notes else None,
+            recordings=Path(arguments.recordings) if arguments.recordings else None)
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0 if result["status"] != "NEEDS_SELECTION" else 1
     workspace = _workspace(arguments)
+    if arguments.course_command == "add" and arguments.name:
+        if arguments.defer_context:
+            if arguments.file or arguments.settings_json or arguments.context_answer or arguments.materials or arguments.recordings:
+                raise ConfigurationError("Name-only course creation cannot replace course settings or folders")
+            from .capture_courses import add_course
+            print(json.dumps(add_course(workspace, arguments.name), ensure_ascii=False))
+            return 0
+        if arguments.file:
+            raise ConfigurationError("Choose --name or --file, not both")
+        from .onboarding import add_first_course
+        course_settings = json.loads(arguments.settings_json) if arguments.settings_json is not None else None
+        if arguments.settings_json is not None and not isinstance(course_settings, dict):
+            raise ConfigurationError("Course settings must be a JSON object")
+        result = add_first_course(workspace, arguments.name, notes_language=arguments.notes_language,
+                                 materials=arguments.materials, recordings=arguments.recordings,
+                                 context_answer=arguments.context_answer,
+                                 course_settings=course_settings)
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return 0
+    if arguments.course_command == "add" and (arguments.context_answer is not None or arguments.settings_json is not None):
+        raise ConfigurationError("Use --name with --context-answer or --settings-json")
     store = workspace.configuration_store()
     configuration = store.load()
     course = _load_json(arguments.file) if arguments.file else _interactive_course_entry(configuration)
@@ -509,7 +644,7 @@ def _prepare(arguments: argparse.Namespace) -> int:
     configuration = workspace.configuration_store().load()
     audio = Path(arguments.audio).expanduser() if arguments.audio else None
     if audio is None and not arguments.transcript:
-        inventory = discover_recordings(workspace, configuration)
+        inventory = discover_recordings(workspace, configuration, lecture_id=arguments.lecture_id.upper(), persist=False)
         audio = recording_for_lecture(inventory, arguments.lecture_id.upper())
     pack = build_source_pack(
         workspace, arguments.lecture_id.upper(), audio=audio,
@@ -527,20 +662,187 @@ def _generate(arguments: argparse.Namespace, *, provider: str | None = None, qua
     result = generate_candidate(
         workspace, arguments.lecture_id, source_pack_path=Path(arguments.source_pack).expanduser() if arguments.source_pack else None,
         provider=provider or arguments.provider, quality=quality or arguments.quality,
+        instructions=getattr(arguments, "instructions", ""), image_limit=getattr(arguments, "image_limit", None),
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
 
 
+def _transcription(arguments: argparse.Namespace) -> int:
+    from .transcription import run_transcription, transcription_status
+    from .asr import ASRBusyError, ASRReviewError
+    workspace = Workspace.from_value(arguments.workspace)
+    try:
+        if arguments.command == "transcription-status":
+            result = transcription_status(workspace, arguments.lecture_id.upper())
+        else:
+            result = run_transcription(workspace, arguments.lecture_id.upper(),
+                                       audio=Path(arguments.audio).expanduser() if arguments.audio else None,
+                                       progress=True)
+    except ASRBusyError as error:
+        result = {"status": "BUSY", "lecture_id": arguments.lecture_id.upper(), "message": str(error),
+                  "current": getattr(error, "state", {})}
+        print(json.dumps(result, ensure_ascii=False))
+        return 3
+    except ASRReviewError as error:
+        result = {"status": "NEEDS_REVIEW", "lecture_id": arguments.lecture_id.upper(),
+                  "message": str(error), "issues": getattr(error, "issues", []),
+                  "raw_path": str(getattr(error, "path", ""))}
+        print(json.dumps(result, ensure_ascii=False))
+        return 4
+    except (ASRError, ConfigurationError, SourcePackError, IngestionError, WorkflowError, OSError, ValueError) as error:
+        result = {"status": "FAILED", "lecture_id": arguments.lecture_id.upper(), "message": str(error)}
+        print(json.dumps(result, ensure_ascii=False))
+        return 2
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _study(arguments: argparse.Namespace) -> int:
+    from .study import StudyError, parse_lessons, plan_study, build_study_candidate, generate_study_candidate
+    workspace = Workspace.from_value(arguments.workspace)
+    if arguments.plan_only:
+        result = plan_study(workspace, arguments.course.upper(), arguments.lessons, purpose=arguments.purpose)
+    elif not arguments.output:
+        raise StudyError("Supply a new .docx output path")
+    elif not arguments.manifest:
+        raise StudyError("A complete reviewed source manifest is required; first use study --plan-only")
+    else:
+        manifest = _load_json(arguments.manifest)
+        if parse_lessons(manifest.get("lessons", [])) != parse_lessons(arguments.lessons):
+            raise StudyError("Requested lessons differ from the reviewed study manifest")
+        if manifest.get("purpose", "quiz") != arguments.purpose:
+            raise StudyError("Requested purpose differs from the reviewed study manifest")
+    if not arguments.plan_only and arguments.candidate:
+        result = build_study_candidate(workspace, arguments.course.upper(),
+                                       Path(arguments.candidate).expanduser(), Path(arguments.manifest).expanduser(),
+                                       Path(arguments.output).expanduser())
+    elif not arguments.plan_only:
+        result = generate_study_candidate(workspace, arguments.course.upper(),
+                                         Path(arguments.manifest).expanduser(), Path(arguments.output).expanduser(),
+                                         provider=arguments.provider, quality=arguments.quality)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+def _lesson_numbers(value: str) -> list[int]:
+    """Parse explicit numeric selections before opening any source or provider."""
+    numbers: set[int] = set()
+    for part in value.split(","):
+        match = re.fullmatch(r"\s*(\d{1,2})(?:\s*-\s*(\d{1,2}))?\s*", part)
+        if not match:
+            raise WorkflowError("Use lesson numbers such as 1-6 or 1,3-5")
+        start, end = int(match[1]), int(match[2] or match[1])
+        if not 1 <= start <= end <= 99:
+            raise WorkflowError("Lesson ranges must be increasing and within 1-99")
+        numbers.update(range(start, end + 1))
+    return sorted(numbers)
+
+
+def _batch_preparation(workspace: Workspace, lectures: list[str], *, plan_only: bool) -> list[dict[str, Any]]:
+    """Preserve explicitly selected sources when refreshing changed packs."""
+    from .utils import file_sha256
+    configuration = workspace.configuration_store().load()
+    pending: list[dict[str, Any]] = []
+    inventory = None
+    for lecture in lectures:
+        path = workspace.runs_dir / lecture / "source_pack.json"
+        prior = _load_json(str(path)) if path.exists() else None
+        changed = not prior or any(
+            not Path(source["path"]).is_file() or file_sha256(Path(source["path"])) != source["sha256"]
+            for source in prior.get("sources", [])
+        )
+        missing_slide_evidence = bool(prior and any(
+            visual.get("page") and not visual.get("evidence_id") for visual in prior.get("visuals", [])
+        ))
+        if not changed and not missing_slide_evidence:
+            continue
+        reason = "missing" if not prior else "changed sources" if changed else "slide inventory requires preparation"
+        pending.append({"lecture_id": lecture, "reason": reason})
+        if plan_only:
+            continue
+        sources = prior.get("sources", []) if prior else []
+        by_role: dict[str, list[Path]] = {}
+        for source in sources:
+            by_role.setdefault(source.get("role", "lecture_material"), []).append(Path(source["path"]))
+        audio = next(iter(by_role.get("recording", [])), None)
+        transcript = next(iter(by_role.get("imported_transcript", [])), None)
+        if audio is None and transcript is None:
+            if inventory is None:
+                inventory = discover_recordings(workspace, configuration)
+            audio = recording_for_lecture(inventory, lecture)
+        build_source_pack(workspace, lecture, audio=audio, transcript_path=transcript,
+                          materials=by_role.get("lecture_material", []) + by_role.get("syllabus", []),
+                          personal_notes=next(iter(by_role.get("personal_notes", [])), None),
+                          web_snapshots=by_role.get("web_snapshot", []))
+    return pending
+
+
+def _generate_batch(arguments: argparse.Namespace) -> int:
+    from .batch import generate_batch, load_batch_manifest
+    if arguments.image_limit is not None and arguments.image_limit < 0:
+        raise WorkflowError("image_limit must be a non-negative integer")
+    workspace = Workspace.from_value(arguments.workspace)
+    saved: dict[str, Any] = {}
+    if arguments.resume:
+        if not re.fullmatch(r"[A-Z0-9]+-[0-9a-f]{12}", arguments.resume):
+            raise WorkflowError("Use a batch ID returned by generate-batch")
+        saved = load_batch_manifest(workspace, arguments.resume)
+        if saved.get("course_code") != arguments.course.upper():
+            raise WorkflowError("Resume batch belongs to a different course")
+    if arguments.lessons:
+        numbers = _lesson_numbers(arguments.lessons)
+    elif saved:
+        numbers = [int(lecture.rsplit("-L", 1)[1]) for lecture in saved["lectures"]]
+    else:
+        raise WorkflowError("Supply --lessons or --resume BATCH_ID")
+    lectures = [f"{arguments.course.upper()}-L{number:02d}" for number in numbers]
+    if arguments.stop_after is not None and arguments.stop_after not in numbers:
+        raise WorkflowError('--stop-after must be one of the selected lessons')
+    pending = _batch_preparation(workspace, lectures, plan_only=arguments.plan_only)
+    if arguments.plan_only and pending:
+        print(json.dumps({"status": "NEEDS_PREPARATION", "lectures": lectures, "sources": pending,
+                          "provider_invoked": False, "published_to_word": False}, ensure_ascii=False, indent=2))
+        return 0
+    options = saved.get("request_options", {})
+    budget_values = _load_json(arguments.budgets) if arguments.budgets else saved.get("budgets")
+    if budget_values is not None:
+        from .batch import BatchBudget
+        from dataclasses import fields
+        if set(budget_values) - {field.name for field in fields(BatchBudget)}:
+            raise WorkflowError("Unknown batch budget field; use documented selected-model limits")
+    result = generate_batch(
+        workspace, arguments.course.upper(), numbers,
+        provider=arguments.provider or saved.get("requested_model", {}).get("provider"),
+        quality=arguments.quality or saved.get("requested_model", {}).get("quality", "standard"),
+        selection=_load_json(arguments.selection) if arguments.selection else saved.get("selection"),
+        budgets=budget_values,
+        instructions=arguments.instructions if arguments.instructions is not None else options.get("instructions", ""),
+        image_limit=arguments.image_limit if arguments.image_limit is not None else options.get("image_limit"),
+        plan_only=arguments.plan_only, batch_id=arguments.resume, build_word=arguments.build_word,
+        repair_missing=bool(arguments.resume or arguments.build_word),
+        pause_after=f'{arguments.course.upper()}-L{arguments.stop_after:02d}' if arguments.stop_after is not None else None,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def _natural_request(arguments: argparse.Namespace) -> int:
+    workspace = _workspace(arguments)
+    from .onboarding import prepare_conversation
+    configuration = workspace.configuration_store().load()
+    if arguments.command not in configuration["providers"]["configured"] or not configuration["providers"].get("default"):
+        configuration = prepare_conversation(workspace, arguments.command)
     if not arguments.message:
-        workspace = _workspace(arguments)
-        return launch_chat(workspace, workspace.configuration_store().load(), arguments.command)
+        return launch_chat(workspace, configuration, arguments.command)
     message = " ".join(arguments.message).strip()
     lecture = next(iter(re.findall(r"\b([A-Za-z0-9]+-L\d{1,3})\b", message)), "")
-    if not lecture:
-        raise WorkflowError('Include one lecture id, e.g. mynotes agy "genera ABC-L01"')
     lower = message.casefold()
+    # Keep the existing generation shortcut. Other requests enter the conversation
+    # rather than accidentally generating a lecture mentioned in a question.
+    generation = re.search(r"\b(genera|generate|crea|create|prepare|prepara)\b", lower)
+    if not lecture or not generation:
+        return launch_chat(workspace, configuration, arguments.command, message)
     if any(token in lower for token in ("revisione", "full review", "full-review")):
         quality = "revisione"
     elif any(token in lower for token in ("approfondito", "deep", "scoped review", "scoped-review")):
@@ -554,9 +856,18 @@ def _natural_request(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if os.environ.get("MYNOTES_GENERATION_WORKER") == "1":
+        print("Note-writing workers cannot invoke MyNotes. Return the structured notes from the supplied evidence; do not coordinate another workflow.")
+        return 3
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.command == "capture":
+            from .capture import run_cli
+            return run_cli(arguments)
+        if arguments.command == "setup":
+            from .onboarding import setup_cli
+            return setup_cli(Workspace.from_value(arguments.workspace), provider=arguments.provider)
         if arguments.command == "init":
             workspace = _workspace(arguments)
             print(f"Initialized private workspace: {workspace.root}")
@@ -564,6 +875,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "configure":
             return _configure(arguments)
+        if arguments.command == "preferences":
+            from .preferences import save_preferences
+            print(json.dumps(save_preferences(Workspace.from_value(arguments.workspace), arguments.provider, arguments.model, arguments.language,
+                                              effort=arguments.effort, preset=arguments.preset), ensure_ascii=False))
+            return 0
+        if arguments.command == "models":
+            from .models import catalog
+            print(json.dumps(catalog(arguments.provider, saved=arguments.saved, saved_effort=arguments.saved_effort,
+                                     refresh=arguments.refresh), ensure_ascii=False, indent=2))
+            return 0
+        if arguments.command == "profile":
+            from .preferences import save_background
+            print(json.dumps(save_background(Workspace.from_value(arguments.workspace), arguments.background or "", skip=arguments.skip), ensure_ascii=False))
+            return 0
         if arguments.command == "style":
             return _style(arguments)
         if arguments.command == "course":
@@ -578,8 +903,46 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _discover(arguments, apply_renames=arguments.apply)
         if arguments.command == "prepare":
             return _prepare(arguments)
+        if arguments.command == "transcription-queue":
+            from .transcription_queue import run_cli as run_queue
+            return run_queue(arguments)
+        if arguments.command in {"transcribe", "transcription-status"}:
+            return _transcription(arguments)
+        if arguments.command == "study":
+            from .study import StudyError
+            try:
+                return _study(arguments)
+            except StudyError as error:
+                print(f"mynotes: {error}")
+                return 2
+        if arguments.command == "study-schema":
+            from .study import study_schema
+            print(json.dumps(study_schema(), ensure_ascii=False, indent=2))
+            return 0
+        if arguments.command == "study-verify":
+            from .study import StudyError, finalize_study_candidate
+            try:
+                result = finalize_study_candidate(Path(arguments.candidate).expanduser(), render=not arguments.no_render,
+                                                 editorial_reviewed=arguments.editorial_reviewed,
+                                                 visual_reviewed=arguments.visual_reviewed, word_verified=arguments.word_verified)
+                print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+                return 0
+            except StudyError as error:
+                print(f"mynotes: {error}")
+                return 2
         if arguments.command == "generate":
             return _generate(arguments)
+        if arguments.command == "generate-batch":
+            return _generate_batch(arguments)
+        if arguments.command == "batch-status":
+            from .batch_recovery import batch_status
+            result=batch_status(Workspace.from_value(arguments.workspace),arguments.batch_id)
+            if arguments.json:print(json.dumps(result,ensure_ascii=False,indent=2))
+            else:
+                print(f"Batch {result['batch_id']}: {result['status']}")
+                for lesson in result['lessons']:print(f"{lesson['lecture_id']}: {lesson['status']}")
+                if result.get('problem'):print(json.dumps(result['problem'],ensure_ascii=False))
+            return 0
         if arguments.command == "build":
             print(json.dumps(build_word_candidate(_workspace(arguments), arguments.lecture_id), ensure_ascii=False, sort_keys=True))
             return 0
@@ -596,13 +959,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "recover":
             print(json.dumps(recover_publications(_workspace(arguments)), ensure_ascii=False, indent=2))
             return 0
-        if arguments.command in {"codex", "agy"}:
+        if arguments.command in {"codex", "agy", "claude"}:
             return _natural_request(arguments)
         if arguments.command == "migrate":
             return _migrate(arguments)
         if arguments.command == "integrate":
             output = install_integration(arguments.platform, Path(arguments.destination), action=arguments.action)
             print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+            return 0
+        if arguments.command == "usage":
+            from .usage import batch_usage, lecture_usage
+            if bool(arguments.batch) == bool(arguments.lecture_id):
+                raise WorkflowError("Supply one lecture ID or --batch BATCH_ID")
+            workspace = Workspace.from_value(arguments.workspace)
+            report = batch_usage(workspace, arguments.batch) if arguments.batch else lecture_usage(workspace, arguments.lecture_id)
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
         if arguments.command == "status":
             workspace = _workspace(arguments)
@@ -613,22 +984,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             configuration = workspace.configuration_store().load()
             return launch_chat(workspace, configuration, arguments.provider, arguments.message)
         if arguments.command == "doctor":
+            from .onboarding import doctor
             workspace = Workspace.from_value(arguments.workspace)
+            report = doctor(workspace, provider=arguments.provider)
+            if arguments.json:
+                print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+                return 0 if report["ready"] else 1
             for line in workspace.diagnostics():
                 print(line)
+            for name, check in report["checks"].items():
+                print(f"{name}: {check['status']} — {check.get('action', '')}")
+            # Optional recording/rendering components should not block read-only
+            # course/style tasks. The agent checks the components needed by a task.
             return 0 if workspace.is_initialized() else 1
         if arguments.command is None:
             workspace = Workspace.from_value()
+            from .onboarding import prepare_conversation, setup_cli
             workspace.initialize()
             configuration = workspace.configuration_store().load()
-            if configuration["onboarding"]["status"] != "complete":
-                return _configure(argparse.Namespace(workspace=None, answers=None, group=None, instruction=None, course=None, create_missing_dirs=False))
-            print("Configuration is complete. Use mynotes chat to inspect the selected workspace and provider.")
-            return 0
+            if not configuration["providers"].get("default"):
+                return setup_cli(workspace)
+            configuration = prepare_conversation(workspace)
+            return launch_chat(workspace, configuration, None)
     except EOFError:
         print("Onboarding paused. Saved groups can be resumed with mynotes configure.")
         return 1
-    except (ConfigurationError, WorkflowError, PublicationError, ChatError, MigrationError, IntegrationError, IngestionError, ASRError, ExtractionError, SourcePackError, OSError, ValueError) as error:
+    except ASRBusyError as error:
+        print(json.dumps({"status": "BUSY", "message": str(error), "current": error.state}, ensure_ascii=False))
+        return 3
+    except (ConfigurationError, WorkflowError, ProviderError, PublicationError, ChatError, MigrationError, IntegrationError, IngestionError, ASRError, ExtractionError, SourcePackError, OSError, ValueError) as error:
         print(f"mynotes: {error}")
         return 2
     parser.error(f"unsupported command: {arguments.command}")

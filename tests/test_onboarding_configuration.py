@@ -283,7 +283,7 @@ def test_first_run_questions_offer_course_style_after_global_style(monkeypatch, 
     for answers in stages:
         iterator = iter(answers)
         monkeypatch.setattr("builtins.input", lambda _prompt: next(iterator))
-        assert main([]) == 0
+        assert main(["configure"]) == 0
     saved = workspace.configuration_store().load()
     assert saved["onboarding"]["status"] == "complete"
     assert effective_style(saved, "QNT9")["writing_style"] == "detailed"

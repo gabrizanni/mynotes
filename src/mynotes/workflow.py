@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 import json
 import os
 import re
@@ -17,11 +18,7 @@ from typing import Any, Iterator
 import fcntl
 
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, RGBColor
 
 from .configuration import ConfigurationError, effective_style
 from .providers import (
@@ -57,7 +54,7 @@ QUALITY_PHASES: dict[str, tuple[tuple[str, str], ...]] = {
     "approfondito": (("writing", "thorough"), ("scoped_review", "thorough")),
     "revisione": (("writing", "thorough"), ("evidence_audit", "thorough"), ("editorial_review", "thorough")),
 }
-GENERATION_CONTRACT_VERSION = 6
+GENERATION_CONTRACT_VERSION = 8
 
 
 class WorkflowError(RuntimeError):
@@ -81,14 +78,12 @@ def normalize_quality(value: str) -> str:
 def resolve_model(configuration: dict[str, Any], provider: str | None, quality: str) -> RequestedModel:
     selected = provider or configuration["providers"]["default"]
     if not selected:
-        raise WorkflowError("No provider is selected; configure codex or agy before processing")
+        raise WorkflowError("No provider is selected; configure codex, agy or claude before processing")
     options = configuration["providers"]["configured"].get(selected)
     if not isinstance(options, dict):
         raise WorkflowError(f"Provider is not configured: {selected}")
-    model = str(options.get("model", "")).strip()
-    effort = str(options.get("effort", "")).strip()
-    if not model or not effort:
-        raise WorkflowError(f"Provider {selected} requires an explicit model and effort")
+    from .models import resolve_provider_options
+    model, effort = resolve_provider_options(configuration, selected)
     return RequestedModel(
         selected,
         model,
@@ -146,9 +141,13 @@ class WorkflowState:
 
     def candidate_completed(self, lecture_id: str, input_hash: str) -> bool:
         row = self.connection.execute(
-            "SELECT status, input_hash, candidate_path FROM candidate_runs WHERE lecture_id=?", (lecture_id,)
+            "SELECT status, input_hash, candidate_path, candidate_hash FROM candidate_runs WHERE lecture_id=?", (lecture_id,)
         ).fetchone()
-        return bool(row and row[0] in {"CANDIDATE_READY", "WORD_CANDIDATE_VALIDATED", "PUBLISHED"} and row[1] == input_hash and Path(row[2]).is_file())
+        if not (row and row[0] in {"CANDIDATE_READY", "WORD_CANDIDATE_VALIDATED", "PUBLISHED"} and row[1] == input_hash and Path(row[2]).is_file()):
+            return False
+        if file_sha256(Path(row[2])) != row[3]:
+            raise WorkflowError("Saved candidate was changed locally; inspect it before generating again. No provider call was made.")
+        return True
 
     def record_candidate(self, lecture_id: str, input_hash: str, actual: ProviderResponse, quality: str, candidate: Path) -> None:
         self.connection.execute(
@@ -342,97 +341,19 @@ def _validate_notes(notes: dict[str, Any], lecture_id: str) -> dict[str, Any]:
     return result
 
 
-def _hidden_marker(document: Document, text: str) -> None:
-    paragraph = document.add_paragraph()
-    run = paragraph.add_run(text)
-    run.font.hidden = True
-    run.font.size = Pt(1)
-
-
-def _native_formula(document: Document, formula: str) -> None:
-    paragraph = document.add_paragraph()
-    math = OxmlElement("m:oMath")
-    run = OxmlElement("m:r")
-    text = OxmlElement("m:t")
-    text.text = formula
-    run.append(text)
-    math.append(run)
-    paragraph._p.append(math)
-
-
-def _table(document: Document, rows: list[tuple[str, str]]) -> None:
-    if not rows:
-        return
-    table = document.add_table(rows=len(rows), cols=2)
-    table.style = "Table Grid"
-    table_properties = table._tbl.tblPr
-    old_borders = table_properties.find(qn("w:tblBorders"))
-    if old_borders is not None:
-        table_properties.remove(old_borders)
-    borders = OxmlElement("w:tblBorders")
-    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
-        border = OxmlElement(f"w:{edge}")
-        border.set(qn("w:val"), "single")
-        border.set(qn("w:sz"), "4")
-        border.set(qn("w:color"), "D9D9D9")
-        borders.append(border)
-    table_properties.append(borders)
-    for row_index, values in enumerate(rows):
-        for column_index, value in enumerate(values):
-            cell = table.cell(row_index, column_index)
-            cell.text = value
-            cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-            properties = cell._tc.get_or_add_tcPr()
-            margins = OxmlElement("w:tcMar")
-            for side in ("top", "left", "bottom", "right"):
-                margin = OxmlElement(f"w:{side}")
-                margin.set(qn("w:w"), "100")
-                margin.set(qn("w:type"), "dxa")
-                margins.append(margin)
-            properties.append(margins)
-            if row_index == 0:
-                shading = OxmlElement("w:shd")
-                shading.set(qn("w:fill"), "D9EAF7")
-                properties.append(shading)
-                for run in cell.paragraphs[0].runs:
-                    run.bold = True
-
-
-def _style(document: Document) -> None:
-    document.styles["Normal"].font.name = "Aptos"
-    document.styles["Normal"].font.size = Pt(11)
-    for name in ("Title", "Heading 2", "Heading 3", "Heading 4"):
-        style = document.styles[name]
-        style.font.name = "Aptos"
-        style.font.color.rgb = RGBColor(0, 0, 0)
-        style.font.italic = False
-        style.font.bold = name != "Title"
-    title_properties = document.styles["Title"]._element.get_or_add_pPr()
-    title_border = title_properties.find(qn("w:pBdr"))
-    if title_border is not None:
-        title_properties.remove(title_border)
+def _style(document: Document, profile: dict | None = None) -> None:
+    # Compatibility commands use the same saved Word style as candidates.
+    from .publication import _configure_document
+    _configure_document(document, profile)
 
 
 def _append_lesson(document: Document, notes: dict[str, Any], sources: dict[str, bool]) -> None:
-    _hidden_marker(document, f"MYNOTES START {notes['lecture_id']}")
-    document.add_heading(f"Lecture {notes['lecture_id']}", level=2)
-    document.add_heading(notes["title"], level=3)
-    document.add_paragraph(notes["summary"])
-    if notes["table"]:
-        document.add_heading("Illustrative values", level=4)
-        _table(document, notes["table"])
-    document.add_heading("Key points", level=4)
-    for item in notes["bullets"]:
-        document.add_paragraph(item, style="List Bullet")
-    if notes["formula"]:
-        document.add_heading("Formula", level=4)
-        _native_formula(document, notes["formula"])
-    document.add_heading("Available sources", level=4)
-    document.add_paragraph(", ".join(name.replace("_", " ") for name, present in sources.items() if present) or "No optional source available.")
-    _hidden_marker(document, f"MYNOTES END {notes['lecture_id']}")
+    from .publication import _append_block
+    _append_block(document, notes, {"visuals": []}, language=notes.get("language", "en"),
+                  recap_language=notes.get("recap_language", "it"))
 
 
-def _replace_block(document: Document, lecture_id: str, notes: dict[str, Any], sources: dict[str, bool]) -> None:
+def _replace_block(document: Document, lecture_id: str, notes: dict[str, Any], sources: dict[str, bool], *, profile: dict | None = None) -> None:
     children = list(document._body._element)
     starts = [index for index, item in enumerate(children) if f"MYNOTES START {lecture_id}" in "".join(item.itertext())]
     ends = [index for index, item in enumerate(children) if f"MYNOTES END {lecture_id}" in "".join(item.itertext())]
@@ -442,7 +363,7 @@ def _replace_block(document: Document, lecture_id: str, notes: dict[str, Any], s
     if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
         raise WorkflowError("Existing lecture boundaries are ambiguous; cumulative document was not changed")
     temporary = Document()
-    _style(temporary)
+    _style(temporary, profile)
     _append_lesson(temporary, notes, sources)
     replacement = [deepcopy(item) for item in list(temporary._body._element) if item.tag != qn("w:sectPr")]
     body = document._body._element
@@ -507,6 +428,7 @@ def process(
     configuration = workspace.configuration_store().load()
     course = _course(configuration, course_code)
     requested = resolve_model(configuration, provider, quality)
+    profile = effective_style(configuration, course_code)
     sources, texts = _sources(transcript, materials, personal_notes, web_source, course)
     input_hash = hashlib.sha256(
         json.dumps(
@@ -523,7 +445,7 @@ def process(
                 return {"lecture_id": lecture_id, "status": "SKIPPED", "reason": "identical completed input"}
             run_dir = workspace.runs_dir / lecture_id
             run_dir.mkdir(parents=True, exist_ok=True)
-            request = ProviderRequest(lecture_id, course, texts, requested)
+            request = ProviderRequest(lecture_id, course, texts, requested, run_dir=run_dir, style=profile)
             try:
                 response = invoke_provider(request, provider_adapter)
             except ProviderQuotaError as error:
@@ -543,6 +465,8 @@ def process(
                 raise WorkflowError(f"Provider failed: {error}") from error
             try:
                 notes = _validate_notes(response.notes, lecture_id)
+                notes["language"] = course.get("languages", {}).get("notes", "en")
+                notes["recap_language"] = profile.get("recap_language", "it")
             except WorkflowError as error:
                 state.record_attempt(lecture_id, requested, status="REJECTED", response=response, error=str(error))
                 state.record_nonpublished(lecture_id, input_hash, requested, target, sources, "FAILED")
@@ -563,13 +487,11 @@ def process(
                     "sources": sources,
                 },
             )
-            document = Document(target) if target.exists() else Document()
-            _style(document)
-            if not target.exists():
-                title = document.add_paragraph(f"{course['name']} Notes", style="Title")
-                title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                document.add_paragraph("Cumulative notes generated from the sources available for each lecture.")
-            _replace_block(document, lecture_id, notes, sources)
+            from .publication import _new_document
+            profile = effective_style(configuration, course_code)
+            document = Document(target) if target.exists() else _new_document(course, profile)
+            _style(document, profile)
+            _replace_block(document, lecture_id, notes, sources, profile=profile)
             descriptor, temporary_name = tempfile.mkstemp(suffix=".docx", dir=target.parent)
             os.close(descriptor)
             temporary = Path(temporary_name)
@@ -619,7 +541,29 @@ def _validate_integer_table_totals(rows: list[list[str]]) -> None:
 _NUMBER_IN_TEXT_RE = re.compile(r"(?<![\w])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w])")
 
 
-def _validate_numeric_table_support(block: dict[str, Any], evidence: dict[str, dict[str, Any]]) -> None:
+def _validate_explicit_ratio_percentages(text: str) -> None:
+    """Check only explicit count/out-of/count (percentage) assertions.
+
+    No semantic guessing, no source rewriting, and no AI review call. A failed
+    calculation needs a targeted correction rather than a regenerated lesson.
+    """
+    number = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+    pattern = rf"(?P<n>{number})\s+out of\s+(?P<d>{number})\s*(?P<scale>thousand|million|billion)?\s*(?:records|transactions|observations|samples|cases)?\s*\((?P<p>{number})\s*%\)"
+    scales = {None: 1, "thousand": 1000, "million": 1000000, "billion": 1000000000}
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        values = {key: Decimal(match[key].replace(",", "")) for key in ("n", "d", "p")}
+        denominator = values["d"] * scales[match["scale"].lower() if match["scale"] else None]
+        if denominator <= 0:
+            continue
+        expected = values["n"] / denominator * 100
+        precision = len(match["p"].split(".")[1]) if "." in match["p"] else 0
+        if abs(expected - values["p"]) > Decimal(5).scaleb(-precision - 1):
+            raise WorkflowError(f"Candidate count/percentage disagreement: {match[0]}; calculated {expected}% needs targeted review")
+
+
+def _validate_numeric_table_support(block: dict[str, Any], evidence: dict[str, dict[str, Any]], *,
+                                    source_pack: dict | None = None, decisions: list[dict] | None = None,
+                                    source_root: Path | None = None) -> None:
     """Require a numeric table to cite sources with actual numeric content.
 
     A qualitative personal note about an allocation rule cannot support a
@@ -635,8 +579,34 @@ def _validate_numeric_table_support(block: dict[str, Any], evidence: dict[str, d
     for identifier in block["evidence_ids"]:
         item = evidence[identifier]
         cited_numbers.update(_NUMBER_IN_TEXT_RE.findall(str(item.get("content", item.get("text", "")))))
-    if len(cited_numbers) < 2:
-        raise WorkflowError("Numeric candidate table lacks numeric values in its cited evidence")
+    if len(cited_numbers) >= 2:
+        return
+    # Raster tables have no numeric PDF text layer. A declared pixel inspection
+    # can supply the source basis, even when the picture is excluded from Word
+    # because its data is rendered as an editable table (or image_limit=0).
+    # Keep this separate from qualitative personal notes and absent/uninspected
+    # files. Value-by-value accuracy still requires source/visual review.
+    inspected = {row.get("evidence_id") for row in decisions or [] if row.get("inspected") is True}
+    for visual in (source_pack or {}).get("visuals", []):
+        identifier = visual.get("evidence_id")
+        item = evidence.get(identifier, {})
+        if (identifier not in block["evidence_ids"] or identifier not in inspected
+                or item.get("kind") != "slide" or source_root is None
+                or not item.get("source_file") or visual.get("source_file") != item.get("source_file")
+                or visual.get("page") != item.get("page") or not visual.get("image_path")):
+            continue
+        path = Path(visual["image_path"])
+        if not path.is_absolute(): path = source_root / path
+        if not path.resolve().is_relative_to(source_root.resolve()) or not path.is_file():
+            continue
+        try:
+            from PIL import Image
+            with Image.open(path) as image:
+                image.verify()
+        except (OSError, ValueError):
+            continue
+        return
+    raise WorkflowError("Numeric candidate table lacks numeric values in its cited evidence or an inspected source slide image")
 
 
 _TERM_MARKER_RE = re.compile(r"\[\[term:([^\[\]\n]+)\]\]")
@@ -709,6 +679,29 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
             raise WorkflowError(f"Candidate notes require {key} as {expected.__name__}")
     evidence_ids = {str(item["id"]) for item in source_pack["evidence"]}
     evidence_by_id = {str(item["id"]): item for item in source_pack["evidence"]}
+    # Structural headings sometimes omit citations while the immediately
+    # following topic blocks provide them. Derive only those existing child
+    # references; never invent evidence for an empty/unsupported section.
+    if isinstance(result.get("blocks"), list):
+        blocks = [dict(block) if isinstance(block, dict) else block for block in result["blocks"]]
+        for index, block in enumerate(blocks):
+            if not isinstance(block, dict) or block.get("kind") != "heading" or block.get("evidence_ids") != []:
+                continue
+            supporting: list[str] = []
+            for child in blocks[index + 1:]:
+                if not isinstance(child, dict):
+                    break
+                if child.get("kind") == "heading" and child.get("level", 0) <= block.get("level", 0):
+                    break
+                if child.get("kind") not in {"paragraph", "bullets", "formula", "table", "visual"}:
+                    continue
+                identifiers = child.get("evidence_ids")
+                if not isinstance(identifiers, list) or any(identifier not in evidence_ids for identifier in identifiers):
+                    continue
+                supporting.extend(identifier for identifier in identifiers if identifier not in supporting)
+            if supporting:
+                block["evidence_ids"] = supporting
+        result["blocks"] = blocks
     coverage: dict[str, dict[str, Any]] = {}
     for item in result["evidence_coverage"]:
         if not isinstance(item, dict) or item.get("evidence_id") not in evidence_ids:
@@ -746,9 +739,18 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
             raise WorkflowError("Candidate visual decision references an unknown or excluded visual")
         if item.get("decision") not in {"include", "exclude", "review"} or not str(item.get("reason", "")).strip():
             raise WorkflowError("Candidate visual decision requires a valid decision and reason")
+        if str(item["evidence_id"]) in decisions:
+            raise WorkflowError("Candidate visual decisions contain a duplicate evidence id")
         decisions.add(str(item["evidence_id"]))
     if visual_ids - decisions:
         raise WorkflowError("Candidate does not decide every available visual")
+    included = sum(item["decision"] == "include" for item in result["visual_decisions"])
+    if style is not None:
+        image_limit = style.get("image_limit")
+        if image_limit is not None and (type(image_limit) is not int or image_limit < 0):
+            raise WorkflowError("image_limit must be a non-negative integer or null")
+        if (style.get("image_policy") == "none" and included) or (image_limit is not None and included > image_limit):
+            raise WorkflowError("Candidate includes more images than the effective image policy permits")
     if not all(isinstance(item, str) for item in result["model_knowledge"]):
         raise WorkflowError("Candidate model knowledge must be a list of strings")
     result.setdefault("review_questions", [])
@@ -800,16 +802,24 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
         if kind == "table" and (not isinstance(block.get("rows"), list) or not block["rows"] or any(not isinstance(row, list) or not row or any(not isinstance(cell, str) for cell in row) for row in block["rows"])):
             raise WorkflowError("Candidate table block needs rows of text")
         if kind == "table":
+            if any(len(row) != len(block["rows"][0]) for row in block["rows"]):
+                raise WorkflowError("Candidate table rows must have the same number of cells")
             technical_structure = True
             for row in block["rows"]:
                 for cell in row:
                     _validate_inline_term_markers(cell)
             _validate_integer_table_totals(block["rows"])
-            _validate_numeric_table_support(block, evidence_by_id)
+            _validate_numeric_table_support(block, evidence_by_id, source_pack=source_pack,
+                                            decisions=result["visual_decisions"], source_root=source_root)
+        for field in ("text", "question", "answer"):
+            if isinstance(block.get(field), str):
+                _validate_explicit_ratio_percentages(block[field])
         if kind == "formula":
             technical_structure = True
         if kind == "visual" and visual_decisions.get(str(block.get("visual_id"))) != "include":
             raise WorkflowError("Candidate visual block needs an included visual decision")
+        if kind == "visual" and block.get("visual_id") not in identifiers:
+            raise WorkflowError("A visual block must include its visual_id among evidence_ids")
     # The requirement applies only to fresh editorial generations. Saved v1
     # candidates remain readable/buildable, and short or nontechnical lessons
     # are not forced to add decorative orange text.
@@ -863,7 +873,67 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     return result
 
 
-def generate_candidate(
+def _phase_fingerprint(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def _load_generation_phase(path: Path, *, previous: dict[str, Any] | None) -> ProviderResponse | None:
+    if not path.exists():
+        return None
+    try:
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        payload = envelope["payload"]
+        if envelope["sha256"] != _phase_fingerprint(payload) or payload["previous_hash"] != _phase_fingerprint(previous):
+            raise ValueError("checkpoint integrity mismatch")
+        return ProviderResponse(**payload["response"])
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise WorkflowError("Saved generation phase is damaged or changed; inspect it before retrying. No automatic paid regeneration.") from error
+
+
+def _save_generation_phase(path: Path, previous: dict[str, Any] | None, response: ProviderResponse) -> None:
+    payload = {"previous_hash": _phase_fingerprint(previous), "response": response.__dict__}
+    atomic_json_write(path, {"schema_version": 1, "payload": payload, "sha256": _phase_fingerprint(payload)})
+
+
+def _successful_phase_usage(phases: list[dict[str, Any]]) -> dict[str, Any]:
+    # Keep each provider's metric names; do not infer billed cost or combine
+    # incompatible cache semantics. Raw details remain in usage_by_phase.
+    result: dict[str, Any] = {}
+    for phase in phases:
+        for name, value in phase["usage"].items():
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                result[name] = result.get(name, 0) + value
+    return result
+
+
+@contextmanager
+def _generation_lock(workspace: Workspace, lecture_id: str) -> Iterator[None]:
+    directory = workspace.runs_dir / lecture_id
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / ".generation.lock").open("a+") as lease:
+        try:
+            fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise WorkflowError(f"Generation is already running for {lecture_id}; wait for it. No second provider call was made.") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(lease.fileno(), fcntl.LOCK_UN)
+
+
+def generate_candidate(workspace: Workspace, lecture_id: str, *, source_pack_path: Path | None = None,
+                       provider: str | None = None, quality: str = "standard",
+                       provider_adapter: ProviderAdapter | None = None,
+                       instructions: str = "", image_limit: int | None = None) -> dict[str, Any]:
+    lecture_id = lecture_id.upper()
+    parse_lecture_id(lecture_id)
+    with _generation_lock(workspace, lecture_id):
+        return _generate_candidate_locked(workspace, lecture_id, source_pack_path=source_pack_path,
+                                          provider=provider, quality=quality, provider_adapter=provider_adapter,
+                                          instructions=instructions, image_limit=image_limit)
+
+
+def _generate_candidate_locked(
     workspace: Workspace,
     lecture_id: str,
     *,
@@ -871,6 +941,8 @@ def generate_candidate(
     provider: str | None = None,
     quality: str = "standard",
     provider_adapter: ProviderAdapter | None = None,
+    instructions: str = "",
+    image_limit: int | None = None,
 ) -> dict[str, Any]:
     """Generate a non-published candidate from a validated source pack.
 
@@ -885,8 +957,10 @@ def generate_candidate(
     requested = resolve_model(configuration, provider, quality)
     path = source_pack_path or workspace.runs_dir / lecture_id / "source_pack.json"
     try:
-        pack = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        pack_bytes = path.read_bytes()
+        pack = json.loads(pack_bytes)
+        pack_hash = hashlib.sha256(pack_bytes).hexdigest()
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise WorkflowError(f"Cannot load source pack: {path}: {error}") from error
     # Imported lazily to keep source-pack construction independent from this
     # workflow module (it records its own PREPARED state).
@@ -897,31 +971,68 @@ def generate_candidate(
         raise WorkflowError(f"Invalid source pack: {error}") from error
     if pack.get("lecture_id") != lecture_id:
         raise WorkflowError("Source pack lecture id does not match the requested lecture")
+    stale_path = workspace.runs_dir / lecture_id / "source_pack-stale.json"
+    if stale_path.exists():
+        try:
+            stale = json.loads(stale_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise WorkflowError("Cannot verify source-pack freshness; run prepare again") from error
+        if stale.get("transcription_cache_key") != (pack.get("transcription") or {}).get("cache_key"):
+            raise WorkflowError("Transcription changed after preparation; run prepare again before generation")
     editorial_style = effective_style(configuration, course_code)
+    if image_limit is not None:
+        if isinstance(image_limit, bool) or not isinstance(image_limit, int) or image_limit < 0:
+            raise WorkflowError("image_limit must be a non-negative integer")
+        editorial_style["image_limit"] = image_limit
+    if not isinstance(instructions, str):
+        raise WorkflowError("Lesson instructions must be text")
+    if instructions.strip():
+        editorial_style["lesson_instructions"] = instructions.strip()
     editorial_style["question_language"] = str(configuration.get("personal", {}).get("interface_language") or course.get("languages", {}).get("notes", "en"))
     # Existing free-form instructions remain part of the editorial request
     # until the user chooses to replace them in the guided style editor.
     editorial_style["freeform_preferences"] = configuration["style"].get("freeform_preferences", "")
-    input_hash = hashlib.sha256(json.dumps({"source_pack": file_sha256(path), "requested": requested.__dict__, "quality": requested.quality, "style": editorial_style, "course": course, "generation_contract": GENERATION_CONTRACT_VERSION}, sort_keys=True).encode()).hexdigest()
+    if configuration.get("personal", {}).get("background"):
+        editorial_style["learner_background"] = configuration["personal"]["background"]
+    input_hash = hashlib.sha256(json.dumps({"source_pack": pack_hash, "requested": requested.__dict__, "quality": requested.quality, "style": editorial_style, "course": course, "generation_contract": GENERATION_CONTRACT_VERSION}, sort_keys=True).encode()).hexdigest()
     run_dir = workspace.runs_dir / lecture_id
     candidate_path = run_dir / "lecture_notes.candidate.json"
     sources = {key: bool(value) for key, value in pack.get("availability", {}).items()}
     state = WorkflowState(workspace.database_path)
     try:
         if state.candidate_completed(lecture_id, input_hash):
+            from .usage import record_reuse
+            record_reuse(workspace, lecture_id, kind="candidate")
             return {"lecture_id": lecture_id, "status": "SKIPPED", "reason": "identical candidate already exists", "candidate": str(candidate_path)}
         base = ProviderRequest(lecture_id, course, {}, requested, source_pack=pack, run_dir=run_dir, style=editorial_style)
         previous: dict[str, Any] | None = None
         response: ProviderResponse | None = None
         editorial_diagnostics: list[dict[str, Any]] = []
+        phase_usage: list[dict[str, Any]] = []
         for phase, context_mode in QUALITY_PHASES[requested.quality]:
             request = with_phase(base, phase, context_mode, previous)
             try:
-                response = invoke_provider(request, provider_adapter)
-                previous = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
+                checkpoint = run_dir / "generation-checkpoints" / input_hash / f"{phase}.json"
+                response = _load_generation_phase(checkpoint, previous=previous)
+                returned = checkpoint.with_name("returned-" + checkpoint.name)
+                if response is None:
+                    response = _load_generation_phase(returned, previous=previous)
+                reused = response is not None
+                if response is None:
+                    response = invoke_provider(request, provider_adapter)
+                    _save_generation_phase(returned, previous, response)
+                validated = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
                                                      final_phase=phase == QUALITY_PHASES[requested.quality][-1][0])
+                if not checkpoint.exists():
+                    _save_generation_phase(checkpoint, previous, response)
+                    state.record_attempt(lecture_id, requested, status=f"SUCCESS_{phase.upper()}", response=response)
+                else:
+                    from .usage import record_reuse
+                    record_reuse(workspace, lecture_id, kind="phase", phase=phase,
+                                 checkpoint=checkpoint, attempt_path=response.attempt_path)
+                previous = validated
+                phase_usage.append({"phase": phase, "usage": response.usage, "reused": reused})
                 editorial_diagnostics.append({"phase": phase, **ordinary_emphasis_diagnostics(previous, pack)})
-                state.record_attempt(lecture_id, requested, status=f"SUCCESS_{phase.upper()}", response=response)
             except ProviderQuotaError as error:
                 state.record_attempt(lecture_id, requested, status="QUOTA_EXHAUSTED", error=str(error))
                 state.record_nonpublished(lecture_id, input_hash, requested, candidate_path, sources, "PAUSED_QUOTA")
@@ -933,12 +1044,18 @@ def generate_candidate(
                 _write_status_markdown(workspace, state.rows())
                 raise WorkflowError(f"Candidate was rejected; no Word was changed: {error}") from error
         assert previous is not None and response is not None
+        if file_sha256(path) != pack_hash:
+            state.record_nonpublished(lecture_id, input_hash, requested, candidate_path, sources, "FAILED")
+            _write_status_markdown(workspace, state.rows())
+            raise WorkflowError("Sources changed during generation; the prior candidate was preserved. Prepare/review the sources before retrying.")
         atomic_json_write(candidate_path, {
-            "notes": previous, "source_pack": str(path), "source_pack_hash": file_sha256(path),
+            "notes": previous, "source_pack": str(path), "source_pack_hash": pack_hash,
+            "request_options": {"instructions": instructions, "image_limit": image_limit}, "effective_style": editorial_style,
             "requested_model": requested.__dict__,
             "actual_model": {"provider": response.provider, "model": response.model, "effort": response.effort},
             "quality": requested.quality, "phases": [phase for phase, _ in QUALITY_PHASES[requested.quality]],
-            "usage": response.usage, "published_to_word": False,
+            "usage": _successful_phase_usage(phase_usage), "usage_by_phase": phase_usage,
+            "usage_scope": "saved successful phase snapshots, including reused phases; use mynotes usage for all immutable attempts", "published_to_word": False,
             "editorial_diagnostics": editorial_diagnostics,
         })
         state.record_candidate(lecture_id, input_hash, response, requested.quality, candidate_path)
