@@ -8,9 +8,8 @@ English | [Italiano](README.it.md)
 
 **Mac with Apple Silicon (M1 or newer), macOS 14+, internet for setup, and a usable Codex, Agy or Claude Code CLI account.**
 
-**The new DMG is a development candidate and is not published yet.** [GitHub Releases](https://github.com/gabrizanni/mynotes/releases) contains earlier releases; do not confuse an older ZIP with this setup. A direct DMG download will be added here after release approval.
-
-Once the DMG is available:
+**MyNotes 0.2.10 is available as a prerelease for continued testing.**
+[Download the Apple Silicon DMG](https://github.com/gabrizanni/mynotes/releases/download/v0.2.10/MyNotes-0.2.10-macOS-arm64.dmg) · [Release notes, checksums and known limitations](https://github.com/gabrizanni/mynotes/releases/tag/v0.2.10).
 
 1. Open the downloaded `.dmg`.
 2. Drag **MyNotes** into **Applications**.

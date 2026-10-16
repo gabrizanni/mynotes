@@ -1,8 +1,23 @@
 # Release validation status
 
 This document separates implemented safeguards from checks actually completed.
-The current artifact is a local development release candidate, not a published
-GitHub release.
+Version 0.2.10 is a prerelease for continued acceptance testing. Its release
+notes identify local results, hosted CI and remaining end-to-end limitations.
+
+## Integrated 0.2.10 preview (2026-10-16)
+
+- The integrated generation, Word rendering, Capture UI, transcription queue and
+  complete-calendar source passed 686 local tests before the public-version
+  metadata change. No functional Python or Swift changes accompany that rename.
+- Local native regressions, isolated installation and UI/calendar checks passed.
+  A real public feed imported 92 timed events; delayed association reused an
+  existing transcript without a second ASR call in a deterministic test.
+- Hosted CI independently passed the preceding development candidate, including
+  tests, native Capture checks, public-content audit and a fresh DMG build.
+  The release page links the matching CI run for the 0.2.10 artifacts.
+- A reference generation batch remains incomplete because of source-identifier
+  consistency and speaker attribution. Full-lecture/overnight acceptance and
+  Apple notarization remain open. Passing tests do not certify those outcomes.
 
 ## Dynamic model catalog and MyNotes UI (2026-10-14)
 
