@@ -55,8 +55,9 @@ def test_concrete_chat_request_retains_checks_and_recursion_guard(tmp_path, monk
     assert launch_chat(workspace, configuration, "agy", "Prepara OPS-L03") == 0
     prompt = calls[0][calls[0].index("--prompt-interactive") + 1]
     assert "Prepara OPS-L03" in prompt
-    assert "Before taking action, run `mynotes doctor` and `mynotes status`" in prompt
-    assert "validate and visually inspect the Word candidate" in prompt
+    assert "For note generation run `mynotes doctor` and `mynotes status`" in prompt
+    assert "the task's direct command for transcription" in prompt
+    assert "validate and visually inspect the word candidate" in prompt.lower()
 
     monkeypatch.setenv("MYNOTES_CHAT_ACTIVE", "1")
     with pytest.raises(ChatError, match="recursive launch"):

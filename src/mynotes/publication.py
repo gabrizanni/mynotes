@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from io import BytesIO
 from importlib.resources import files
 import os
 import re
 import shutil
+import time
 import sqlite3
-import subprocess
 import tempfile
 import uuid
 import zipfile
@@ -23,18 +24,25 @@ import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
 from docx import Document
 from docx.enum.style import WD_STYLE_TYPE
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 
 from .configuration import effective_style
+from .office import OfficeError, convert_to_pdf
 from .utils import atomic_json_write, file_sha256, now_compact_utc
 from .workspace import Workspace
 
 
 class PublicationError(RuntimeError):
     """Publication stopped before damaging a cumulative handout."""
+
+
+def word_renderer_hash() -> str:
+    template = Path(str(files('mynotes').joinpath('resources/base-template.docx')))
+    return hashlib.sha256((file_sha256(Path(__file__)) + file_sha256(template)).encode()).hexdigest()
 
 
 _GREEK = {
@@ -179,17 +187,53 @@ class _FormulaParser:
             return [_math_run(_GREEK[name])]
         symbols = {
             "cdot": "·", "times": "×", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥",
-            "neq": "≠", "infty": "∞", "pm": "±", "to": "→", "approx": "≈", "sim": "∼",
+            "neq": "≠", "ne": "≠", "infty": "∞", "pm": "±", "to": "→", "approx": "≈", "sim": "∼", "propto": "∝",
             "implies": "⇒", "quad": "  ", "dots": "…", "int": "∫",
             "max": "max", "min": "min",
+            "ln": "ln", "log": "log", "exp": "exp",
+            "ell": "ℓ",
+            "in": "∈",
         }
         if name in symbols:
             return [_math_run(symbols[name])]
-        if name == "frac":
+        if name in {"left", "right"}:
+            # Delimiter size is layout only; retain the following delimiter as
+            # editable math, except TeX's explicit invisible delimiter.
+            if self.source[self.position:self.position + 1] == ".":
+                self.position += 1
+            return []
+        if name == "hat":
+            accent = _m("acc"); properties = _m("accPr")
+            character = _m("chr"); character.set(qn("m:val"), "̂")
+            properties.append(character); accent.append(properties)
+            expression = _m("e")
+            for item in self._argument(): expression.append(item)
+            accent.append(expression)
+            return [accent]
+        if name == "mathcal":
+            items = self._argument()
+            for item in items:
+                for run in item.iter(qn("m:r")):
+                    properties = run.find(qn("m:rPr"))
+                    if properties is None:
+                        properties = _m("rPr"); run.insert(0, properties)
+                    script = _m("scr"); script.set(qn("m:val"), "script")
+                    properties.append(script)
+            return items
+        if name in {"frac", "binom"}:
             numerator, denominator = self._argument(), self._argument()
             fraction = _m("f"); num, den = _m("num"), _m("den")
+            if name == "binom":
+                properties = _m("fPr"); kind = _m("type"); kind.set(qn("m:val"), "noBar")
+                properties.append(kind); fraction.append(properties)
             [num.append(item) for item in numerator]; [den.append(item) for item in denominator]
             fraction.append(num); fraction.append(den)
+            if name == "binom":
+                delimiter = _m("d"); properties = _m("dPr")
+                for tag, value in (("begChr", "("), ("endChr", ")")):
+                    character = _m(tag); character.set(qn("m:val"), value); properties.append(character)
+                delimiter.append(properties); expression = _m("e"); expression.append(fraction); delimiter.append(expression)
+                return [delimiter]
             return [fraction]
         if name == "sqrt":
             rad = _m("rad"); props = _m("radPr"); hide = _m("degHide"); hide.set(qn("m:val"), "1")
@@ -234,8 +278,20 @@ class _FormulaParser:
 def append_equation(document: Document, formula: str) -> None:
     paragraph = document.add_paragraph(style="MyNotes Body" if "MyNotes Body" in document.styles else None)
     math_para = _m("oMathPara"); math = _m("oMath")
-    for item in _FormulaParser(formula).parse():
-        math.append(item)
+    aligned = re.fullmatch(r"\\begin\{(aligned|gathered)\}(.*?)\\end\{\1\}", formula.strip(), flags=re.DOTALL)
+    if aligned:
+        # Preserve multiline provider equations as editable Word equations.
+        # TeX alignment markers control placement, not mathematical content.
+        array = _m("eqArr")
+        for row in aligned.group(2).split("\\\\"):
+            expression = _m("e")
+            for item in _FormulaParser(row.replace("&", "")).parse():
+                expression.append(item)
+            array.append(expression)
+        math.append(array)
+    else:
+        for item in _FormulaParser(formula).parse():
+            math.append(item)
     math_para.append(math); paragraph._p.append(math_para)
 
 
@@ -264,6 +320,7 @@ def _append_visual(document: Document, visual: dict[str, Any], decision: dict[st
     if not image.is_file():
         raise PublicationError(f"Selected visual is missing: {image}")
     paragraph = document.add_paragraph(style="MyNotes Body"); paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    paragraph.paragraph_format.space_before = Pt(6)
     paragraph.paragraph_format.keep_with_next = True
     paragraph.add_run().add_picture(str(image), width=Inches(5.4))
     caption = document.add_paragraph(style="MyNotes Caption")
@@ -276,16 +333,37 @@ def _append_visual(document: Document, visual: dict[str, Any], decision: dict[st
 def _append_rows(document: Document, rows: list[list[str]]) -> None:
     if not rows:
         return
-    width = max(len(row) for row in rows)
+    if (not isinstance(rows, list) or any(not isinstance(row, (list, tuple)) or not row
+                                        or any(not isinstance(cell, str) for cell in row) for row in rows)):
+        raise PublicationError("Word table needs non-empty rows of text")
+    width = len(rows[0])
+    if any(len(row) != width for row in rows):
+        raise PublicationError("Word table rows must have the same number of cells; no missing cells were inferred")
+    if any(_formatting_residue(cell, inline_supported=True) for row in rows for cell in row):
+        raise PublicationError("Word table cell contains unresolved Markdown or escaped newlines")
     table = document.add_table(rows=len(rows), cols=width)
     table.style = "Table Grid"
-    table.autofit = True
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # A cumulative candidate can have several sections. Fit the table within
+    # every section before its lesson block is moved into its final position.
+    available = min(int(section.page_width - section.left_margin - section.right_margin)
+                    for section in document.sections)
+    if available <= 0:
+        raise PublicationError("Word section has no usable width for a table")
+    table.autofit = False
+    column_width = available // width
+    for column in table.columns:
+        column.width = column_width
+    table_width = table._tbl.tblPr.find(qn("w:tblW"))
+    table_width.set(qn("w:type"), "dxa")
+    table_width.set(qn("w:w"), str(round(available / 635)))
     repeat_header = OxmlElement("w:tblHeader")
     table.rows[0]._tr.get_or_add_trPr().append(repeat_header)
     for row_index, row in enumerate(rows):
         table.rows[row_index]._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
         for column_index, value in enumerate(row):
             cell = table.cell(row_index, column_index)
+            cell.width = column_width
             _append_inline(cell.paragraphs[0], str(value))
             for paragraph in cell.paragraphs:
                 paragraph.style = document.styles["MyNotes Body"]
@@ -309,13 +387,66 @@ def _key_terms(blocks: list[dict[str, Any]]) -> tuple[str, ...]:
     return tuple(sorted(declared, key=len, reverse=True))
 
 
+def _inline_math_tokens(line: str) -> list[str]:
+    """Find TeX delimiters without consuming currency signs or escaped dollars.
+
+    Numeric currency can precede a real inline equation. Rejected openings are
+    skipped one at a time so the following equation's opening stays available.
+    """
+    tokens: list[str] = []
+    cursor = 0
+    while cursor < len(line):
+        opening = line.find("$", cursor)
+        if opening < 0:
+            break
+        if opening and line[opening - 1] == "\\":
+            cursor = opening + 1
+            continue
+        delimiter = "$$" if line.startswith("$$", opening) else "$"
+        content = opening + len(delimiter)
+        closing = content
+        while True:
+            closing = line.find(delimiter, closing)
+            if closing < 0 or closing == 0 or line[closing - 1] != "\\":
+                break
+            closing += len(delimiter)
+        if closing < 0:
+            break
+        body = line[content:closing].strip()
+        numeric = bool(re.match(r"\d", body))
+        next_character = line[closing + len(delimiter):closing + len(delimiter) + 1]
+        mathematics = bool(re.search(r"\\(?:[A-Za-z]+|%)|[+*/=<>^_-]", body))
+        simple = bool(re.fullmatch(r"[\w.,]+", body))
+        incomplete = bool(re.search(r"[+*/=<>_-]\s*$", body))
+        currency = numeric and (next_character.isalnum() or not (mathematics or simple))
+        if delimiter == "$" and (not body or currency or incomplete or "\n" in body):
+            cursor = opening + 1
+            continue
+        tokens.append(line[opening:closing + len(delimiter)])
+        cursor = closing + len(delimiter)
+    return tokens
+
+
 def _append_inline(paragraph: Any, line: str, key_terms: tuple[str, ...] = ()) -> None:
     """Accent declared technical terms on recurring narrative uses."""
     term_pattern = (re.compile(r"(?<!\w)(?:" + "|".join(re.escape(term) for term in key_terms) + r")(?!\w)", re.IGNORECASE)
                     if key_terms else None)
 
     def append_plain(value: str) -> None:
+        value = value.replace(r"\\$", "$" ).replace(r"\$", "$").replace(r'\"', '"')
         if not value:
+            return
+        # Recover only an unambiguous parenthesized bounded sum/product.
+        # Code spans bypass append_plain; ordinary prose and variable names
+        # must never acquire math semantics merely because they contain '_'.
+        bare = re.search(r"\((?P<operator>sum|prod)(?P<body>_\{[^{}\n]+\}\^\{[^{}\n]+\}\s*[A-Za-z]\^\{[^{}\n]+\})\)", value)
+        if bare:
+            append_plain(value[:bare.start()] + "(")
+            math = _m("oMath")
+            for item in _FormulaParser("\\" + bare.group("operator") + bare.group("body")).parse():
+                math.append(item)
+            paragraph._p.append(math)
+            append_plain(")" + value[bare.end():])
             return
         if term_pattern is None:
             paragraph.add_run(value)
@@ -329,8 +460,10 @@ def _append_inline(paragraph: Any, line: str, key_terms: tuple[str, ...] = ()) -
         if cursor < len(value):
             paragraph.add_run(value[cursor:])
 
+    math_tokens = _inline_math_tokens(line)
+    math_pattern = "|".join(re.escape(value) for value in math_tokens) or "(?!)"
     token = re.compile(
-        r"(?P<math>\$\$.+?\$\$|(?<!\$)\$(?!\$).+?(?<!\$)\$(?!\$))"
+        "(?P<math>" + math_pattern + ")"
         r"|\[\[term:(?P<term>.+?)\]\]"
         r"|\*\*(?P<bold>.+?)\*\*"
         r"|(?<![\w*])\*(?!\*)(?P<italic>.+?)(?<!\*)\*(?![\w*$])"
@@ -347,7 +480,7 @@ def _append_inline(paragraph: Any, line: str, key_terms: tuple[str, ...] = ()) -
             paragraph._p.append(math)
             cursor = match.end()
             continue
-        if match.group("bold") is not None and "$" in match.group("bold"):
+        if match.group("bold") is not None and any(marker in match.group("bold") for marker in ("$", "[[term:", "`")):
             first = len(paragraph.runs)
             _append_inline(paragraph, match.group("bold"), key_terms)
             for nested in paragraph.runs[first:]:
@@ -355,7 +488,7 @@ def _append_inline(paragraph: Any, line: str, key_terms: tuple[str, ...] = ()) -
                     nested.bold = True
             cursor = match.end()
             continue
-        if match.group("italic") is not None and "$" in match.group("italic"):
+        if match.group("italic") is not None and any(marker in match.group("italic") for marker in ("$", "[[term:", "`")):
             first = len(paragraph.runs)
             _append_inline(paragraph, match.group("italic"), key_terms)
             for nested in paragraph.runs[first:]:
@@ -376,9 +509,55 @@ def _append_inline(paragraph: Any, line: str, key_terms: tuple[str, ...] = ()) -
         append_plain(line[cursor:])
 
 
+def _formatting_residue(value: str, *, inline_supported: bool = False) -> bool:
+    """Recognize formatting errors without mistaking TeX or paths for escapes."""
+    text = value
+    for token in _inline_math_tokens(text):
+        text = text.replace(token, "")
+    text = re.sub(r"(?<!`)`(?!`)[^`]+`(?!`)", "", text)
+    # Windows/UNC paths are literal data, not serialized paragraph breaks.
+    text = re.sub(r"(?:(?<!\w)[A-Za-z]:\\|\\\\|(?<!\w)\.\.?\\)[^\s]+", "", text)
+    text = re.sub(r"\\n(?:u|eq|ot|abla)\b", "", text)
+    if inline_supported:
+        text = re.sub(r"\[\[term:([^\]]+)\]\]", r"\1", text)
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    return bool("\\n" in text or "**" in text or "[[term:" in text
+                or re.search(r"\|\s*:?-{3,}:?\s*\|", text)
+                or re.search(r"(?m)^\s*\|[^|]+\|", text)
+                or "```" in text)
+
+
+def _legacy_table_text(value: str) -> str:
+    r"""Decode only serialized line boundaries adjacent to a pipe-table row.
+
+    Do not globally decode backslashes: \\nu, \\neq and filesystem paths can
+    be valid course content. Ambiguous malformed tables are rejected later.
+    """
+    protected = _inline_math_tokens(value)
+    protected.extend(match.group() for match in re.finditer(
+        r"(?<!`)`(?!`)[^`]+`(?!`)|(?:(?<!\w)[A-Za-z]:\\|\\\\|(?<!\w)\.\.?\\)[^\s]+", value))
+    text = value
+    for index, token in enumerate(protected):
+        text = text.replace(token, f"\x00MYNOTES_LITERAL_{index}\x00")
+    text = re.sub(r"(?:\\n)+(?=\s*\|)", lambda match: "\n" * (len(match.group()) // 2), text)
+    text = re.sub(r"(?<=\|)(?:\\n)+", lambda match: "\n" * (len(match.group()) // 2), text)
+    # Retain the common legacy sentence-break case without interpreting a TeX
+    # command starting with n as a newline. Other ambiguous escapes fail QA.
+    text = re.sub(r"(?<=[.!?;:])(?:\\n)+(?!u\b|eq\b|ot\b|abla\b)",
+                  lambda match: "\n" * (len(match.group()) // 2), text)
+    for index, token in enumerate(protected):
+        text = text.replace(f"\x00MYNOTES_LITERAL_{index}\x00", token)
+    return text
+
+
+def _markdown_cells(line: str) -> list[str]:
+    cells = re.split(r"(?<!\\)\|", line.strip()[1:-1])
+    return [cell.strip().replace(r"\|", "|") for cell in cells]
+
+
 def _append_text(document: Document, value: str, key_terms: tuple[str, ...] = ()) -> None:
-    """Turn common provider Markdown residue into native Word elements."""
-    text = str(value).replace("\\n", "\n")
+    """Convert unambiguous legacy Markdown tables to native Word elements."""
+    text = _legacy_table_text(str(value))
     lines = text.splitlines()
     index = 0
     while index < len(lines):
@@ -393,13 +572,15 @@ def _append_text(document: Document, value: str, key_terms: tuple[str, ...] = ()
         if line.startswith("|") and line.endswith("|"):
             rows: list[list[str]] = []
             while index < len(lines) and lines[index].strip().startswith("|") and lines[index].strip().endswith("|"):
-                cells = [cell.strip() for cell in lines[index].strip().strip("|").split("|")]
-                if not all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
-                    rows.append(cells)
+                rows.append(_markdown_cells(lines[index]))
                 index += 1
-            if rows:
-                _append_rows(document, rows)
+            if (len(rows) < 2 or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in rows[1])
+                    or any(len(row) != len(rows[0]) for row in rows)):
+                raise PublicationError("Malformed Markdown table: expected a rectangular header, separator and rows")
+            _append_rows(document, [rows[0], *rows[2:]])
             continue
+        if _formatting_residue(line, inline_supported=True):
+            raise PublicationError("Paragraph contains unresolved Markdown table or escaped newlines")
         if line.startswith(("- ", "* ")):
             paragraph = document.add_paragraph(style="MyNotes List Bullet")
             paragraph._p.get_or_add_pPr().append(deepcopy(document.styles["List Bullet"]._element.pPr.numPr))
@@ -432,7 +613,18 @@ def _new_numbered_list(document: Document) -> int:
     source = next((item for item in existing if int(item.get(qn("w:numId"))) == style_num), None)
     if source is None:
         raise PublicationError("Word numbering definition is missing")
-    abstract_id = source.find(qn("w:abstractNumId")).get(qn("w:val"))
+    source_abstract_id = source.find(qn("w:abstractNumId")).get(qn("w:val"))
+    abstract_definition = deepcopy(next(item for item in numbering if item.tag == qn('w:abstractNum')
+                                       and item.get(qn('w:abstractNumId')) == source_abstract_id))
+    abstract_id = str(max((int(item.get(qn('w:abstractNumId'))) for item in numbering if item.tag == qn('w:abstractNum')),default=-1)+1)
+    abstract_definition.set(qn('w:abstractNumId'),abstract_id)
+    for tag in ('nsid','tmpl'):
+        element=abstract_definition.find(qn('w:'+tag))
+        if element is not None:element.set(qn('w:val'),uuid.uuid4().hex[:8].upper())
+    for linked_style in list(abstract_definition.iter(qn('w:pStyle'))):
+        linked_style.getparent().remove(linked_style)
+    # Word requires every abstract definition before all concrete instances.
+    numbering.insert(next((i for i,item in enumerate(numbering) if item.tag==qn('w:num')),len(numbering)),abstract_definition)
     number_id = max((int(item.get(qn("w:numId"))) for item in existing), default=0) + 1
     number = OxmlElement("w:num"); number.set(qn("w:numId"), str(number_id))
     abstract = OxmlElement("w:abstractNumId"); abstract.set(qn("w:val"), abstract_id)
@@ -459,10 +651,8 @@ def _lesson_heading(lecture_id: str, title: str) -> str:
     return f"Lecture {lesson_number}: {clean_title}" if clean_title else f"Lecture {lesson_number}"
 
 
-def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, page_break_before: bool = False, language: str = "en", recap_language: str = "it") -> None:
-    lecture_id = notes["lecture_id"]
-    _marker(document, f"MYNOTES START {lecture_id}", page_break_before=page_break_before)
-    _heading(document, _lesson_heading(lecture_id, str(notes["title"])), 2)
+def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, language: str = "en", recap_language: str = "it") -> None:
+    """Shared native Word narrative renderer for lectures and standalone study guides."""
     italian = language.lower().startswith("it")
     visuals = {str(item.get("evidence_id")): item for item in pack.get("visuals", [])}
     decisions = {str(item.get("evidence_id")): item for item in notes.get("visual_decisions", [])}
@@ -522,6 +712,17 @@ def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any
                 if identifier not in visuals or decisions.get(identifier, {}).get("decision") != "include":
                     raise PublicationError("Ordered visual is unavailable or not approved")
                 _append_visual(document, visuals[identifier], decisions[identifier])
+
+
+def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, page_break_before: bool = False, language: str = "en", recap_language: str = "it") -> None:
+    lecture_id = notes["lecture_id"]
+    _marker(document, f"MYNOTES START {lecture_id}", page_break_before=page_break_before)
+    _heading(document, _lesson_heading(lecture_id, str(notes["title"])), 2)
+    italian = language.lower().startswith("it")
+    visuals = {str(item.get("evidence_id")): item for item in pack.get("visuals", [])}
+    decisions = {str(item.get("evidence_id")): item for item in notes.get("visual_decisions", [])}
+    if notes.get("blocks"):
+        append_note_blocks(document, notes, pack, language=language, recap_language=recap_language)
     else:
         if notes.get("summary"):
             _append_text(document, notes["summary"])
@@ -561,8 +762,61 @@ def _profile_color(value: str, fallback: str) -> RGBColor:
         return RGBColor.from_string(fallback)
 
 
+def _ensure_template_styles(document: Document) -> None:
+    """Import absent base styles/numbering into a candidate, never its original.
+
+    Existing cumulative documents may come from older/localized Word exports
+    without List Number/List Bullet. Remap imported numbering IDs so existing
+    paragraphs retain their own definitions.
+    """
+    template = Document(str(files("mynotes").joinpath("resources/base-template.docx")))
+    style_ids = {s.style_id for s in document.styles}
+    mapping = {}; missing = []
+    for style in template.styles:
+        if style.name in document.styles:
+            mapping[style.style_id] = document.styles[style.name].style_id
+        else:
+            identifier = style.style_id
+            while identifier in style_ids: identifier = "MyNotesBase" + identifier
+            style_ids.add(identifier);mapping[style.style_id] = identifier
+            missing.append(style)
+    numbering = document.part.numbering_part.element
+    source_numbering = template.part.numbering_part.element
+    num_map = {}; abstract_map = {}
+    def number(old_id):
+        if old_id in num_map:return num_map[old_id]
+        source = next(n for n in source_numbering if n.tag==qn('w:num') and n.get(qn('w:numId'))==old_id)
+        abstract_id = source.find(qn('w:abstractNumId')).get(qn('w:val'))
+        if abstract_id not in abstract_map:
+            abstract = deepcopy(next(a for a in source_numbering if a.tag==qn('w:abstractNum') and a.get(qn('w:abstractNumId'))==abstract_id))
+            new_abstract = str(max((int(a.get(qn('w:abstractNumId'))) for a in numbering if a.tag==qn('w:abstractNum')),default=-1)+1)
+            abstract_map[abstract_id]=new_abstract;abstract.set(qn('w:abstractNumId'),new_abstract)
+            for ref in abstract.iter(qn('w:pStyle')):
+                ref.set(qn('w:val'),mapping.get(ref.get(qn('w:val')),ref.get(qn('w:val'))))
+            numbering.insert(next((i for i,item in enumerate(numbering) if item.tag==qn('w:num')),len(numbering)),abstract)
+        num = deepcopy(source);new_num=str(max((int(n.get(qn('w:numId'))) for n in numbering if n.tag==qn('w:num')),default=0)+1)
+        num.set(qn('w:numId'),new_num);num.find(qn('w:abstractNumId')).set(qn('w:val'),abstract_map[abstract_id]);numbering.append(num);num_map[old_id]=new_num
+        return new_num
+    for style in missing:
+        element=deepcopy(style.element);element.set(qn('w:styleId'),mapping[style.style_id]);element.attrib.pop(qn('w:default'),None)
+        for tag in ('basedOn','next','link'):
+            ref=element.find(qn('w:'+tag))
+            if ref is not None:ref.set(qn('w:val'),mapping.get(ref.get(qn('w:val')),ref.get(qn('w:val'))))
+        for ref in element.iter(qn('w:numId')):ref.set(qn('w:val'),number(ref.get(qn('w:val'))))
+        document.styles.element.append(element)
+    for name in ('List Number','List Bullet'):
+        style=document.styles[name];ppr=style.element.get_or_add_pPr();numpr=ppr.find(qn('w:numPr'))
+        identifier=numpr.find(qn('w:numId')) if numpr is not None else None
+        if identifier is None or not any(n.tag==qn('w:num') and n.get(qn('w:numId'))==identifier.get(qn('w:val')) for n in numbering):
+            source=deepcopy(template.styles[name].element.pPr.numPr)
+            source.numId.val=int(number(str(source.numId.val)))
+            if numpr is not None:ppr.remove(numpr)
+            ppr.append(source)
+
+
 def _configure_document(document: Document, profile: dict[str, Any], *, set_page_layout: bool = False) -> None:
     """Apply the selected study design and native Word heading hierarchy."""
+    _ensure_template_styles(document)
     def named_style(name: str, base: str) -> Any:
         if name in document.styles:
             return document.styles[name]
@@ -655,12 +909,13 @@ def _configure_document(document: Document, profile: dict[str, Any], *, set_page
     question.paragraph_format.space_after = Pt(14)
     question.paragraph_format.keep_with_next = True
     for section in document.sections:
+        # New outputs use the product's fixed margins even when their baseline
+        # comes from an older cumulative Word. This never edits that baseline.
+        section.top_margin = section.bottom_margin = Cm(1.5)
+        section.left_margin = section.right_margin = Cm(1.5)
         if set_page_layout:
             section.page_width = Cm(21)
             section.page_height = Cm(29.7)
-            margin = float(profile.get("margin_cm", 1.5))
-            section.top_margin = section.bottom_margin = Cm(margin)
-            section.left_margin = section.right_margin = Cm(margin)
         if profile.get("page_numbers", True):
             _ensure_page_number(section)
     if profile.get("page_numbers", True):
@@ -820,28 +1075,50 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
         pass
     if candidate.get("source_pack_hash") != file_sha256(Path(candidate["source_pack"])):
         raise PublicationError("Source pack changed after candidate generation")
+    if candidate.get("repair_lineage"):
+        try:
+            from .batch_recovery import verify_repair_lineage
+            verify_repair_lineage(candidate,workspace.root)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            raise PublicationError("Targeted correction provenance cannot be verified: " + str(error)) from error
+    # Earlier interactive repairs accepted ERROR envelopes as candidates.
+    # Reject those historical transports before rendering or publication.
+    for name in candidate.get("shared_attempt_paths", []):
+        attempt = Path(name)
+        if not attempt.is_absolute():
+            continue  # Legacy/injected adapters have no persisted transport.
+        if not attempt.resolve().is_relative_to(workspace.root.resolve()):
+            raise PublicationError("Candidate transport is outside its private workspace")
+        try:
+            record = json.loads(attempt.read_text())
+            if record.get("envelope", {}).get("transport") == "agy_parts_v1":
+                from .agy_parts import verify_receipt
+                verify_receipt(record, workspace.root)
+                envelope = record["envelope"]
+            else:
+                envelope = json.loads(record.get("stdout", "{}")) if record.get("requested", {}).get("provider") == "agy" else {}
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as error:
+            raise PublicationError("Candidate transport cannot be verified") from error
+        if record.get("error") or record.get("returncode") != 0 or (isinstance(envelope, dict) and str(envelope.get("status", "SUCCESS")).upper() != "SUCCESS"):
+            raise PublicationError("Candidate came from a failed provider transport; retained for review, not Word publication")
     return candidate, pack
 
 
 def _soffice() -> str | None:
     bundled = sorted((Path.home() / ".cache" / "codex-runtimes").glob("*/dependencies/bin/override/soffice"))
-    candidates = [os.environ.get("MYNOTES_SOFFICE"), shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice", *(str(item) for item in bundled)]
+    from .onboarding import managed_tool
+    candidates = [os.environ.get("MYNOTES_SOFFICE"), managed_tool("soffice"), shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice", *(str(item) for item in bundled)]
     return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
 
 
-def _render_and_validate(docx: Path, output_dir: Path) -> dict[str, Any]:
+def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float = 180) -> dict[str, Any]:
     soffice = _soffice()
     if not soffice:
         raise PublicationError("LibreOffice/soffice is required to validate Word rendering before publication")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    profile = tempfile.mkdtemp(prefix="mynotes-lo-")
     try:
-        completed = subprocess.run([soffice, f"-env:UserInstallation=file://{profile}", "--headless", "--convert-to", "pdf", "--outdir", str(output_dir), str(docx)], text=True, capture_output=True, timeout=180, check=False)
-    finally:
-        shutil.rmtree(profile, ignore_errors=True)
-    pdf = output_dir / f"{docx.stem}.pdf"
-    if completed.returncode != 0 or not pdf.is_file():
-        raise PublicationError(f"Word render failed: {completed.stderr or completed.stdout}")
+        pdf = convert_to_pdf(soffice, docx, output_dir, timeout=timeout_seconds)
+    except OfficeError as error:
+        raise PublicationError(str(error)) from error
     rendered = pdfium.PdfDocument(pdf)
     pages = []
     try:
@@ -858,7 +1135,8 @@ def _render_and_validate(docx: Path, output_dir: Path) -> dict[str, Any]:
     return {"pdf": str(pdf), "pages": pages, "renderer": soffice}
 
 
-def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected_formula: bool) -> dict[str, Any]:
+def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected_formula: bool,
+                    expected_tables: list[list[list[str]]] | None = None) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         document_xml = archive.read("word/document.xml")
         media = [name for name in archive.namelist() if name.startswith("word/media/")]
@@ -873,23 +1151,58 @@ def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected
         raise PublicationError("One or more selected visuals were not embedded in Word")
     document = Document(path)
     in_lesson = False
-    for paragraph in document.paragraphs:
-        value = paragraph.text
+    tables: list[list[list[str]]] = []
+    for element in document._body._element:
+        value = "".join(node.text or "" for node in element.iter(qn("w:t")))
         if f"MYNOTES START {lecture_id}" in value:
             in_lesson = True
             continue
         if f"MYNOTES END {lecture_id}" in value:
             break
-        if in_lesson and ("\\n" in value or "**" in value or "[[term:" in value or re.search(r"(?m)^\s*\|[^|]+\|", value)):
-            raise PublicationError("Candidate Word contains literal Markdown or escaped newlines")
-    return {"markers": {"start": start, "end": end}, "equations": equations, "embedded_media": len(media)}
+        if not in_lesson:
+            continue
+        # Include cell paragraphs, unlike Document.paragraphs, which excludes
+        # them. Scope the guard to this generated lesson, not historical notes.
+        for paragraph in element.iter(qn("w:p")):
+            text = "".join(node.text or "" for node in paragraph.iter(qn("w:t")))
+            if _formatting_residue(text):
+                raise PublicationError("Candidate Word contains literal Markdown or escaped newlines")
+        if element.tag == qn("w:tbl"):
+            tables.append([["".join(node.text or "" for node in cell.iter(qn("w:t")))
+                            for cell in row.findall(qn("w:tc"))] for row in element.findall(qn("w:tr"))])
+    # Inline emphasis and native equations can change plain-text extraction;
+    # compare the native table shapes here and cell content in renderer tests.
+    unmatched = list(tables)
+    for expected in expected_tables or []:
+        shape = [len(row) for row in expected]
+        match = next((index for index, actual in enumerate(unmatched) if [len(row) for row in actual] == shape), None)
+        if match is None:
+            raise PublicationError("Candidate Word is missing an expected native table")
+        unmatched.pop(match)
+    for section in document.sections:
+        if any(abs(margin.cm - 1.5) >= 0.01 for margin in
+               (section.top_margin, section.bottom_margin, section.left_margin, section.right_margin)):
+            raise PublicationError("Candidate Word must use 1.5 cm margins in every section")
+    return {"markers": {"start": start, "end": end}, "equations": equations, "embedded_media": len(media),
+            "lesson_tables": len(tables), "margin_cm": 1.5, "sections": len(document.sections)}
 
 
-def build_word_candidate(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
+def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+    build_started = time.monotonic()
     lecture_id = lecture_id.upper(); code = lecture_id.split("-L", 1)[0]
     configuration = workspace.configuration_store().load(); course = _course(configuration, code)
     profile = effective_style(configuration, code)
+    source_candidate = workspace.runs_dir / lecture_id / "lecture_notes.candidate.json"
+    source_candidate_hash = file_sha256(source_candidate)
     candidate, pack = _load_candidate(workspace, lecture_id); notes = candidate["notes"]
+    image_limit = candidate.get("request_options", {}).get("image_limit")
+    if image_limit is None:
+        image_limit = profile.get("image_limit")
+    if image_limit is not None:
+        if type(image_limit) is not int or image_limit < 0:
+            raise PublicationError("Candidate image_limit must be a non-negative integer")
+        if sum(item.get("decision") == "include" for item in notes.get("visual_decisions", [])) > image_limit:
+            raise PublicationError("Candidate exceeds the effective image_limit; review the content before building")
     if profile.get("image_policy") == "none" and any(item.get("decision") == "include" for item in notes.get("visual_decisions", [])):
         raise PublicationError("Image policy is none, but this candidate includes visuals; regenerate the notes with the current course style")
     target = _target(course, workspace); run_dir = workspace.runs_dir / lecture_id / "word"
@@ -905,9 +1218,16 @@ def build_word_candidate(workspace: Workspace, lecture_id: str) -> dict[str, Any
     document.save(output)
     expected_visuals = sum(1 for item in notes.get("visual_decisions", []) if item.get("decision") == "include")
     expected_formula = bool(notes.get("formula") or notes.get("formulas") or any(block.get("kind") == "formula" for block in notes.get("blocks", [])))
-    structure = _docx_structure(output, lecture_id, expected_visuals, expected_formula)
-    render = _render_and_validate(output, run_dir / f"{output.stem}-render")
-    validation = {"lecture_id": lecture_id, "candidate": str(output), "candidate_hash": file_sha256(output), "target": str(target), "baseline_hash": baseline_hash, "structure": structure, "render": render, "validated_at": now_compact_utc()}
+    expected_tables = ([block["rows"] for block in notes["blocks"] if block.get("kind") == "table"]
+                       if notes.get("blocks") else ([notes["table"]] if notes.get("table") else []))
+    structure = _docx_structure(output, lecture_id, expected_visuals, expected_formula, expected_tables)
+    remaining = timeout_seconds - (time.monotonic()-build_started) if timeout_seconds is not None else None
+    if remaining is not None and remaining <= 0:raise PublicationError('Word build exhausted its active budget; candidate retained')
+    render = (_render_and_validate(output, run_dir / f"{output.stem}-render", timeout_seconds=remaining)
+              if timeout_seconds is not None else _render_and_validate(output, run_dir / f"{output.stem}-render"))
+    if file_sha256(source_candidate) != source_candidate_hash:
+        raise PublicationError("Notes candidate changed during Word build; rebuild from the current notes")
+    validation = {"lecture_id": lecture_id, "source_candidate_hash": source_candidate_hash, "renderer_hash": word_renderer_hash(), "candidate": str(output), "candidate_hash": file_sha256(output), "target": str(target), "baseline_hash": baseline_hash, "structure": structure, "render": render, "validated_at": now_compact_utc()}
     atomic_json_write(output.with_suffix(".validation.json"), validation)
     from .workflow import WorkflowState
     state = WorkflowState(workspace.database_path)
@@ -963,12 +1283,29 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         validation = json.loads(validation_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise PublicationError("Candidate has no valid render/structure report") from error
-    if validation.get("candidate_hash") != file_sha256(candidate_path):
+    if validation.get("lecture_id") != lecture_id:
+        raise PublicationError("Validated Word candidate belongs to a different lecture")
+    if not isinstance(validation.get("target"), str) or Path(validation["target"]).resolve() != target.resolve():
+        raise PublicationError("Validated Word candidate belongs to a different course target; rebuild for this course")
+    candidate_hash = file_sha256(candidate_path)
+    if validation.get("candidate_hash") != candidate_hash:
         raise PublicationError("Candidate changed after validation")
-    transaction = {"transaction_id": uuid.uuid4().hex, "lecture_id": lecture_id, "target": str(target), "candidate": str(candidate_path), "candidate_hash": file_sha256(candidate_path), "baseline_hash": validation.get("baseline_hash"), "status": "PREPARED", "created_at": now_compact_utc()}
-    journal = _journal(workspace, transaction)
     with _lock(target):
         current = file_sha256(target) if target.is_file() else None
+        with sqlite3.connect(workspace.database_path) as connection:
+            published = connection.execute("SELECT status,output_path,output_hash FROM lesson_runs WHERE lecture_id=?", (lecture_id,)).fetchone()
+        if current == candidate_hash and published and published[0] == "PUBLISHED" and Path(published[1]).resolve() == target.resolve() and published[2] == current:
+            return {"status": "SKIPPED", "lecture_id": lecture_id, "output": str(target), "reason": "validated_candidate_already_published"}
+        source_candidate = workspace.runs_dir / lecture_id / "lecture_notes.candidate.json"
+        source_candidate_hash = validation.get("source_candidate_hash")
+        if not source_candidate_hash:
+            raise PublicationError("Word candidate has no notes fingerprint; rebuild before publishing")
+        if file_sha256(source_candidate) != source_candidate_hash:
+            raise PublicationError("Notes candidate changed after Word build; rebuild before publishing")
+        payload, source_pack = _load_candidate(workspace, lecture_id)
+        sources = source_pack.get("availability", {})
+        transaction = {"transaction_id": uuid.uuid4().hex, "lecture_id": lecture_id, "target": str(target), "candidate": str(candidate_path), "candidate_hash": candidate_hash, "baseline_hash": validation.get("baseline_hash"), "status": "PREPARED", "created_at": now_compact_utc()}
+        journal = _journal(workspace, transaction)
         if current != transaction["baseline_hash"] and not accept_current_word:
             transaction["status"] = "NEEDS_REVIEW"; transaction["reason"] = "target_changed"; _journal(workspace, transaction)
             raise PublicationError("Cumulative Word changed after candidate creation; rebuild on the current file or explicitly accept it")
@@ -978,6 +1315,10 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         temporary = Path(temporary_name)
         try:
             shutil.copy2(candidate_path, temporary)
+            if file_sha256(temporary) != candidate_hash:
+                raise PublicationError("Word candidate changed during publication")
+            if file_sha256(source_candidate) != source_candidate_hash:
+                raise PublicationError("Notes candidate changed during publication; rebuild before publishing")
             if (file_sha256(target) if target.is_file() else None) != current:
                 raise PublicationError("Cumulative Word changed during publication")
             os.replace(temporary, target)
@@ -986,12 +1327,13 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         transaction["status"] = "PUBLISHED"; transaction["target_hash"] = file_sha256(target); _journal(workspace, transaction)
         if transaction["target_hash"] != transaction["candidate_hash"]:
             raise PublicationError("Published Word hash does not match validated candidate")
-        source_candidate = workspace.runs_dir / lecture_id / "lecture_notes.candidate.json"
-        payload = json.loads(source_candidate.read_text(encoding="utf-8")); payload["published_to_word"] = True
+        if file_sha256(source_candidate) != source_candidate_hash:
+            raise PublicationError("Notes candidate changed during publication; inspect the published Word before recovery")
+        payload["published_to_word"] = True
         payload["published_path"] = str(target); payload["published_hash"] = transaction["target_hash"]
         atomic_json_write(source_candidate, payload)
         requested = payload.get("requested_model", {}); actual = payload.get("actual_model", {})
-        sources = _load_candidate(workspace, lecture_id)[1].get("availability", {})
+        published_source_hash = file_sha256(source_candidate)
         with sqlite3.connect(workspace.database_path) as connection:
             row = connection.execute("SELECT input_hash FROM candidate_runs WHERE lecture_id=?", (lecture_id,)).fetchone()
             input_hash = row[0] if row else payload.get("source_pack_hash", "")
@@ -1003,7 +1345,7 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
                    updated_at=excluded.updated_at""",
                 (lecture_id, input_hash, "PUBLISHED", actual.get("provider", requested.get("provider", "unknown")), actual.get("model", requested.get("model", "unknown")), actual.get("effort", requested.get("effort", "unknown")), payload.get("quality", requested.get("quality", "standard")), str(target), transaction["target_hash"], json.dumps(sources, sort_keys=True), now_compact_utc()),
             )
-            connection.execute("UPDATE candidate_runs SET status='PUBLISHED', updated_at=? WHERE lecture_id=?", (now_compact_utc(), lecture_id))
+            connection.execute("UPDATE candidate_runs SET status='PUBLISHED', candidate_hash=?, updated_at=? WHERE lecture_id=?", (published_source_hash, now_compact_utc(), lecture_id))
         from .workflow import WorkflowState, _write_status_markdown
         state = WorkflowState(workspace.database_path)
         try:

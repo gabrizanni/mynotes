@@ -1,0 +1,46 @@
+{
+  "presets": [
+    {
+      "id": "gemini-flash-3.8-high",
+      "provider": "agy",
+      "label": "Gemini Flash 3.8 High",
+      "model": "gemini-3.8-flash-high",
+      "default_effort": "high",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gemini-flash-3.8-medium",
+      "provider": "agy",
+      "label": "Gemini Flash 3.8 Medium",
+      "model": "gemini-3.8-flash-medium",
+      "default_effort": "medium",
+      "supported_efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "id": "gpt-terra-high",
+      "provider": "codex",
+      "label": "GPT Terra High",
+      "model": "gpt-5.6-terra",
+      "default_effort": "high",
+      "supported_efforts": [
+        "high"
+      ]
+    }
+  ],
+  "defaults": {
+    "codex": "gpt-terra-high",
+    "agy": "gemini-flash-3.8-high"
+  }
+}

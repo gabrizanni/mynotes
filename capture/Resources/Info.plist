@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleDisplayName</key><string>MyNotes Capture</string>
+  <key>CFBundleExecutable</key><string>MyNotesCapture</string>
+  <key>CFBundleIdentifier</key><string>com.gabrizanni.mynotes-capture</string>
+  <key>CFBundleName</key><string>MyNotes Capture</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>MyNotesCapture.icns</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>2</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>MyNotes Capture records your selected lectures using the Mac microphone.</string>
+</dict></plist>

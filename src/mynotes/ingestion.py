@@ -7,6 +7,8 @@ renamed automatically.
 
 from __future__ import annotations
 
+import json
+
 import re
 import time
 from dataclasses import dataclass, asdict
@@ -31,6 +33,7 @@ class Recording:
     canonical_name: str | None = None
     sha256: str | None = None
     reason: str | None = None
+    partial: bool | None = None
 
     def payload(self) -> dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -95,8 +98,11 @@ def discover_recordings(
     *,
     apply_renames: bool = False,
     now: float | None = None,
+    lecture_id: str | None = None,
+    persist: bool = True,
 ) -> list[dict[str, Any]]:
     """Inventory configured recording folders and optionally apply safe renames."""
+    selected_lecture = lecture_id
     extensions = set(configuration["ingestion"]["audio_extensions"])
     stable_seconds = int(configuration["ingestion"]["stable_seconds"])
     results: list[Recording] = []
@@ -104,21 +110,41 @@ def discover_recordings(
     duplicates: set[str] = set()
     candidates: list[tuple[Path, str, int, Path]] = []
 
-    for raw_directory in configuration["paths"]["recording_dirs"]:
+    from .capture_associations import registry, apply
+    from .capture import CaptureStore
+    capture_store = CaptureStore(workspace)
+    links = registry(capture_store)["recordings"]
+    directories = list(dict.fromkeys([*configuration["paths"]["recording_dirs"], capture_store.config()["outputDirectory"]]))
+    for raw_directory in directories:
         directory = Path(raw_directory)
         if not directory.is_dir():
-            results.append(Recording(str(directory), "MISSING_DIRECTORY", reason="Configured recording folder does not exist"))
+            if raw_directory in configuration["paths"]["recording_dirs"]:
+                results.append(Recording(str(directory), "MISSING_DIRECTORY", reason="Configured recording folder does not exist"))
             continue
         for path in sorted(directory.iterdir()):
             if not path.is_file() or path.name.startswith(".") or path.suffix.casefold() not in extensions:
                 continue
             resolved = parse_recording_name(path, configuration)
+            sidecar_path = Path(str(path) + ".capture.json")
+            managed_recording = False
+            if sidecar_path.is_file():
+                try:
+                    metadata = json.loads(sidecar_path.read_text())
+                    event = apply(metadata.get("event", {}), links)
+                    managed_recording = bool(event.get("recordingID"))
+                    if managed_recording:
+                        code, number = event.get("courseCode"), event.get("lessonNumber")
+                        resolved = (code, number) if code and type(number) is int else None
+                except (OSError, ValueError, KeyError, TypeError):
+                    resolved = None
+            if selected_lecture is not None and (resolved is None or f"{resolved[0]}-L{resolved[1]:02d}" != selected_lecture):
+                continue
             if resolved is None:
                 results.append(Recording(str(path), "NEEDS_REVIEW", reason="Filename does not identify exactly one configured course and lesson"))
                 continue
             course_code, lesson_number = resolved
             lecture_id = f"{course_code}-L{lesson_number:02d}"
-            target = path.with_name(f"{course_code}_L{lesson_number:02d}{path.suffix.casefold()}")
+            target = path if managed_recording else path.with_name(f"{course_code}_L{lesson_number:02d}{path.suffix.casefold()}")
             if lecture_id in claimed:
                 duplicates.add(lecture_id)
                 results.append(Recording(str(path), "NEEDS_REVIEW", lecture_id, course_code, lesson_number, target.name, reason=f"Duplicate recording also found at {claimed[lecture_id]}"))
@@ -146,10 +172,20 @@ def discover_recordings(
                 accepted = target
                 status = "RENAMED"
         hydrate(accepted)
-        results.append(Recording(str(accepted), status, lecture_id, course_code, lesson_number, target.name, file_sha256(accepted)))
+        metadata_path = accepted.with_suffix(accepted.suffix + ".capture.json")
+        metadata = {}
+        if metadata_path.is_file():
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                metadata = {"partial": True, "reason": "Capture metadata is unreadable; verify audio coverage"}
+        partial = metadata.get("partial") if metadata else None
+        reason = ("Partial Capture audio: " + str(metadata.get("reason", "verify coverage"))) if partial else None
+        results.append(Recording(str(accepted), status, lecture_id, course_code, lesson_number, target.name, file_sha256(accepted), reason=reason, partial=partial))
 
     payload = [item.payload() for item in sorted(results, key=lambda item: (item.lecture_id or "", item.path))]
-    atomic_json_write(workspace.state_dir / "recordings.json", {"recordings": payload})
+    if persist:
+        atomic_json_write(workspace.state_dir / "recordings.json", {"recordings": payload})
     return payload
 
 

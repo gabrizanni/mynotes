@@ -1,0 +1,141 @@
+import Foundation
+
+enum CaptureDates {
+    static func read(_ value: String?) -> Date? {
+        guard let value else { return nil }
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter.date(from: value)
+    }
+    static func write(_ value: Date) -> String { ISO8601DateFormatter().string(from: value) }
+    static func calendarPeriod(_ from: Date, _ through: Date, zone: String) -> (Date, Date)? {
+        guard let timeZone = TimeZone(identifier: zone) else { return nil }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
+        let first = calendar.startOfDay(for: from)
+        guard let last = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: through)) else { return nil }
+        return (first, last)
+    }
+    static func label(_ value: String?, zone: String? = nil) -> String {
+        guard let date = read(value) else { return "Non disponibile" }
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "it_IT")
+        formatter.timeZone = zone.flatMap(TimeZone.init(identifier:)) ?? .current
+        formatter.dateFormat = "dd MMM, HH:mm z"
+        return formatter.string(from: date)
+    }
+}
+
+struct CaptureCourse: Codable, Identifiable { var code: String; var name: String; var contextPending: Bool?; var id: String { code } }
+struct CaptureMapping: Codable { var match: String; var courseCode: String; var firstLesson: Int }
+struct CaptureImportIssue: Codable { var title: String; var reason: String }
+struct CaptureImportSummary: Codable { var imported: Int; var recognizedCourses: Int; var pending: Int; var excluded: Int; var issues: [CaptureImportIssue]? }
+struct CaptureSource: Codable, Identifiable {
+    var sourceID: String; var label: String; var host: String; var timezone: String
+    var lastSuccess: String?; var nextAttempt: String?; var error: String?; var mappings: [CaptureMapping]
+    var importMode: String?; var summary: CaptureImportSummary?
+    var id: String { sourceID }
+}
+struct CaptureEvent: Codable, Identifiable {
+    var id: String; var sourceID: String; var courseCode: String?; var lessonNumber: Int?
+    var title: String; var startsAt: String; var endsAt: String; var stopAt: String; var timezone: String
+    var eligibility: String; var reason: String; var localChanges: Bool; var recordingEnabled: Bool
+    var sourceEligibility: String; var special: Bool
+    var courseLabel: String { if let code = courseCode { if let number = lessonNumber { return "\(code) · Lezione \(number)" }; return code }; return "Corso da associare" }
+    var start: Date { CaptureDates.read(startsAt) ?? .distantFuture }
+    var end: Date { CaptureDates.read(endsAt) ?? .distantFuture }
+    var statusLabel: String {
+        switch eligibility {
+        case "SCHEDULED": return "Programmata"
+        case "CONFLICT": return "Conflitto"
+        case "NEEDS_REVIEW": return "Da verificare"
+        case "CANCELLED": return recordingEnabled ? "Annullata" : "Esclusa localmente"
+        default: return "Stato non riconosciuto"
+        }
+    }
+}
+struct CaptureSession: Codable {
+    var id: String; var event: CaptureSessionEvent; var status: String; var outputPath: String?
+}
+struct CaptureSessionEvent: Codable {
+    var id: String; var courseCode: String?; var lessonNumber: Int?; var title: String?
+    var courseLabel: String { if let code = courseCode, let number = lessonNumber { return "\(code) · L\(number)" }; return title ?? "Senza corso" }
+}
+struct CaptureRuntime: Codable {
+    var recording: Bool?; var exporting: Bool?; var microphonePermission: String?
+    var title: String?; var detail: String?; var currentSession: CaptureSession?; var sessions: [CaptureSession]?
+}
+struct CaptureResponse: Codable { var requestID: String; var status: String; var message: String? }
+struct CaptureSnapshot: Codable {
+    var schemaVersion: Int; var configured: Bool; var enabled: Bool; var paused: Bool
+    var running: Bool?; var processCheck: String; var runtime: CaptureRuntime
+    var sources: [CaptureSource]; var events: [CaptureEvent]; var courses: [CaptureCourse]; var refreshHours: Double
+    var responses: [CaptureResponse]?
+    var standaloneSupported: Bool?
+    var calendarRecordingsSupported: Bool?
+    var recordings: [CaptureRecording]?
+    var queue: CaptureQueue?
+    var isRecording: Bool { running == true && runtime.recording == true }
+    var isExporting: Bool { running == true && runtime.exporting == true }
+    static func decode(_ data: Data) throws -> Self {
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.schemaVersion == 1, value.events.allSatisfy({ CaptureDates.read($0.startsAt) != nil && CaptureDates.read($0.endsAt) != nil && CaptureDates.read($0.stopAt) != nil }) else {
+            throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Calendario Capture non valido o versione non supportata."])
+        }
+        return value
+    }
+    func nextNumber(_ course: String) -> Int {
+        let numbers = events.filter { $0.courseCode == course }.compactMap(\.lessonNumber)
+            + (runtime.sessions ?? []).filter { $0.event.courseCode == course }.compactMap { $0.event.lessonNumber }
+        let recorded = (recordings ?? []).filter { $0.courseCode == course }.compactMap { Int($0.lectureID?.components(separatedBy: "-L").last ?? "") }
+        return min(999, ((numbers + recorded).max() ?? 0) + 1)
+    }
+    func editable(_ event: CaptureEvent) -> Bool {
+        guard running != false else { return true }
+        return !(runtime.recording == true && runtime.currentSession?.event.id == event.id)
+            && !(runtime.sessions ?? []).contains { $0.event.id == event.id && $0.status == "EXPORTING" }
+    }
+    var stateLabel: String {
+        if running == nil { return "Stato del processo non verificabile" }
+        if running == true && runtime.recording == true { return "Registrazione in corso" }
+        if running == true && runtime.exporting == true { return "Salvataggio audio" }
+        if !enabled { return "Capture disattivato" }
+        if paused { return "Programmazione in pausa" }
+        return running == true ? "Capture pronto" : "Capture non in esecuzione"
+    }
+}
+
+struct CaptureContext {
+    let workspace: String; let launcher: URL
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let runtime = URL(fileURLWithPath: environment["MYNOTES_HOME"] ?? home.appendingPathComponent("Library/Application Support/MyNotes").path)
+        let settings = (try? Data(contentsOf: runtime.appendingPathComponent("setup.json"))).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        workspace = environment["MYNOTES_WORKSPACE"] ?? settings?["workspace"] as? String ?? runtime.appendingPathComponent("workspace").path
+        launcher = URL(fileURLWithPath: environment["MYNOTES_PREFIX"] ?? home.appendingPathComponent(".local").path).appendingPathComponent("bin/mynotes")
+    }
+}
+
+struct CaptureRecording: Codable, Identifiable {
+    var id: String; var path: String; var title: String; var status: String
+    var courseCode: String?; var lectureID: String?; var duration: Double?; var createdAt: String
+    var transcriptText: String?
+    enum CodingKeys: String, CodingKey {
+        case id, path, title, status, duration
+        case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
+    }
+}
+struct CaptureLibrary: Decodable { var recordings: [CaptureRecording] }
+struct CaptureQueueJob: Codable, Identifiable {
+    var id: String; var createdAt: String?; var recordingID: String; var title: String; var courseCode: String?
+    var status: String; var error: String?; var phase: String?; var elapsedSeconds: Double?
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, error, phase
+        case recordingID = "recording_id", courseCode = "course_code", elapsedSeconds = "elapsed_seconds", createdAt = "created_at"
+    }
+}
+struct CaptureQueue: Codable {
+    var parallel: Int; var paused: Bool; var uiOpen: Bool; var jobs: [CaptureQueueJob]
+    var waitReason: String?
+    enum CodingKeys: String, CodingKey { case parallel, paused, jobs; case uiOpen = "ui_open", waitReason = "wait_reason" }
+}
+

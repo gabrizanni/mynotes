@@ -18,7 +18,8 @@ from .extraction import (
     source_descriptor,
     split_directives,
 )
-from .utils import atomic_json_write
+from .extraction_cache import extract_cached
+from .utils import atomic_json_write, file_sha256
 from .workflow import WorkflowState, parse_lecture_id
 from .workspace import Workspace
 
@@ -172,7 +173,7 @@ def validate_source_pack(pack: dict[str, Any]) -> None:
             raise SourcePackError("Transcript timestamps must be ordered and non-negative")
 
 
-def _import_transcript(path: Path, lecture_id: str) -> dict[str, Any]:
+def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str | None = None) -> dict[str, Any]:
     """Import a normalized transcript without running ASR or changing its source."""
     if not path.is_file():
         raise SourcePackError(f"Transcript does not exist: {path}")
@@ -182,7 +183,7 @@ def _import_transcript(path: Path, lecture_id: str) -> dict[str, Any]:
         raise SourcePackError(f"Transcript is not readable JSON: {path}") from error
     if not isinstance(payload, dict) or not isinstance(payload.get("segments"), list) or not payload["segments"]:
         raise SourcePackError("Imported transcript must have a nonempty segments array")
-    if payload.get("lecture_id") and payload["lecture_id"] != lecture_id:
+    if payload.get("lecture_id") and payload["lecture_id"] != lecture_id and payload["lecture_id"] != ("_recordings/" + bound_recording_id if bound_recording_id else None):
         raise SourcePackError("Imported transcript belongs to a different lecture")
     segments: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -234,7 +235,16 @@ def _prior_hashes(path: Path) -> dict[str, str]:
         return {}
 
 
-def build_source_pack(
+def _extract_prepared_source(workspace: Workspace, path: Path, **options):
+    """Bind extracted content to the descriptor observed before extraction."""
+    descriptor = source_descriptor(path)
+    chunks, visuals = extract_cached(path, workspace.state_dir / "extraction-cache", **options)
+    if file_sha256(path) != descriptor["sha256"]:
+        raise SourcePackError(f"Source changed during preparation; retry: {path}")
+    return chunks, visuals, descriptor
+
+
+def _build_source_pack_locked(
     workspace: Workspace,
     lecture_id: str,
     *,
@@ -263,36 +273,57 @@ def build_source_pack(
     sources: list[dict[str, Any]] = []
     for material_number, path in enumerate(material_paths, start=1):
         role = "syllabus" if course["folders"].get("syllabus") and Path(course["folders"]["syllabus"]) == path else "lecture_material"
-        chunks, extracted_visuals = extract_material(path, visual_dir=run_dir / "visuals" / f"{material_number:03d}-{path.stem}")
+        chunks, extracted_visuals, source_before = _extract_prepared_source(workspace, path, visual_dir=run_dir / "visuals" / f"{material_number:03d}-{path.stem}")
         for chunk in chunks:
             material_chunks.append({**chunk, "source_file": str(path), "material_role": role})
         visuals.extend(extracted_visuals)
-        descriptor = {**source_descriptor(path), "role": role}
+        descriptor = {**source_before, "role": role}
         descriptor["modified_since_last_prepare"] = bool(previous.get(str(path)) and previous[str(path)] != descriptor["sha256"])
         sources.append(descriptor)
 
     notes_chunks: list[dict[str, Any]] = []
     directives: list[dict[str, Any]] = []
     if personal_notes is not None:
-        extracted, _ = extract_material(personal_notes, lesson_number=lesson_number)
+        extracted, _, source_before = _extract_prepared_source(workspace, personal_notes, lesson_number=lesson_number)
         notes_chunks, directives = split_directives(extracted)
-        descriptor = {**source_descriptor(personal_notes), "role": "personal_notes"}
+        descriptor = {**source_before, "role": "personal_notes"}
         descriptor["modified_since_last_prepare"] = bool(previous.get(str(personal_notes)) and previous[str(personal_notes)] != descriptor["sha256"])
         sources.append(descriptor)
 
     transcription_course = copy.deepcopy(course)
-    transcription_course["transcription"]["vocabulary"] = _glossary(course, material_chunks)
+    # Extraction already produced the text used by the direct ASR glossary.
+    # Legacy PPT requires Office even for text; exclude it in both paths so
+    # starting transcription never needs Office or changes its cache later.
+    glossary_chunks = [item for item in material_chunks if Path(item["source_file"]).suffix.casefold() != ".ppt"]
+    transcription_course["transcription"]["vocabulary"] = _glossary(course, glossary_chunks)
     transcript_manifest: dict[str, Any] | None = None
+    bound_recording_id = None
+    if transcript_path is None:
+        from .capture_associations import linked_recording, validated_transcript
+        recording = linked_recording(workspace, lecture_id)
+        if recording and recording.get("storage_recording_id") and (audio is None or Path(audio).resolve() == Path(recording["path"]).resolve()):
+            existing = validated_transcript(workspace, recording)
+            if existing:
+                transcript_path = existing[0]
+                audio = Path(recording["path"])
+                bound_recording_id = recording["id"]
     if audio is not None:
         if not audio.is_file():
             raise SourcePackError(f"Audio does not exist: {audio}")
         if transcript_path is None:
-            transcript_manifest = transcribe_audio(workspace, lecture_id, transcription_course, audio, engines=engines)
+            transcript_manifest = transcribe_audio(workspace, lecture_id, transcription_course, audio, engines=engines, _lecture_locked=True)
         descriptor = {**source_descriptor(audio), "role": "recording"}
         descriptor["modified_since_last_prepare"] = bool(previous.get(str(audio)) and previous[str(audio)] != descriptor["sha256"])
         sources.append(descriptor)
     if transcript_path is not None:
-        transcript_manifest = _import_transcript(transcript_path, lecture_id)
+        # Duplicate audio can legitimately share an ASR result produced under
+        # another recording ID. The verified audio hash authorizes this binding.
+        original = json.loads(transcript_path.read_text()) if bound_recording_id else None
+        origin_id = original.get("lecture_id", "").removeprefix("_recordings/") if original else None
+        transcript_manifest = _import_transcript(transcript_path, lecture_id, bound_recording_id=origin_id)
+        if bound_recording_id:
+            transcript_manifest["capture_recording_id"] = bound_recording_id
+            transcript_manifest["original_asr"] = {key: original.get(key) for key in ("lecture_id", "settings_hash", "cache_key", "audio_sha256", "segments_sha256", "language") }
         descriptor = {**source_descriptor(transcript_path), "role": "imported_transcript"}
         descriptor["modified_since_last_prepare"] = bool(
             previous.get(str(transcript_path)) and previous[str(transcript_path)] != descriptor["sha256"]
@@ -306,6 +337,8 @@ def build_source_pack(
         for item in transcript
     )
     slide_evidence: list[dict[str, Any]] = []
+    source_hashes = {item["path"]: item["sha256"] for item in sources}
+    slide_inventory: list[dict[str, Any]] = []
     for index, chunk in enumerate(material_chunks, start=1):
         item = {
             "id": f"S{index:03d}", "kind": "syllabus" if chunk["material_role"] == "syllabus" else "slide",
@@ -313,6 +346,13 @@ def build_source_pack(
             "paragraph": chunk.get("paragraph"), "sheet": chunk.get("sheet"), "row": chunk.get("row"),
             "cell": chunk.get("cell"), "material_role": chunk["material_role"], "untrusted_evidence": True,
         }
+        if item["kind"] == "slide" and isinstance(item.get("page"), int):
+            digest = source_hashes[chunk["source_file"]]
+            item["canonical_slide_id"] = f"sha256:{digest}:page:{item['page']}"
+            item["textless"] = not bool(str(item["content"]).strip())
+            slide_inventory.append({"canonical_slide_id": item["canonical_slide_id"],
+                                    "evidence_id": item["id"], "source_file": item["source_file"],
+                                    "source_sha256": digest, "page": item["page"], "textless": item["textless"]})
         slide_evidence.append(item)
         evidence.append(item)
     for index, chunk in enumerate(notes_chunks, start=1):
@@ -326,8 +366,8 @@ def build_source_pack(
 
     linked = linked_urls([*material_chunks, *notes_chunks]) if course["web_access"] == "linked_resources" else []
     for path in web_snapshots:
-        chunks, _ = extract_material(path)
-        sources.append({**source_descriptor(path), "role": "web_snapshot"})
+        chunks, _, source_before = _extract_prepared_source(workspace, Path(path))
+        sources.append({**source_before, "role": "web_snapshot"})
         for chunk in chunks:
             linked.extend(linked_urls([chunk]))
             evidence.append(
@@ -348,19 +388,59 @@ def build_source_pack(
         },
         "transcription": transcript_manifest,
         "glossary": transcription_course["transcription"]["vocabulary"],
-        "evidence": evidence, "visuals": visuals, "directives": directives,
+        "evidence": evidence, "slide_inventory": slide_inventory, "visuals": visuals, "directives": directives,
         "linked_web_resources": list(dict.fromkeys(linked)),
         "knowledge_policy": {"model_knowledge_allowed_for_background": True, "next_id_prefix": "K", "never_attribute_to_lecture": True},
         "sources": sources,
-        "security": {"source_content_is_untrusted_evidence": True, "only_explicit_personal_note_directives_are_actionable": True},
+        "security": {"source_content_is_untrusted_evidence": True, "only_explicit_personal_note_directives_are_actionable": False, "only_saved_configuration_preferences_are_actionable": True},
     }
     if not evidence:
         raise SourcePackError("A source pack requires at least one transcript, material, note, or web-snapshot evidence item")
     validate_source_pack(pack)
-    atomic_json_write(source_pack_path, pack)
+    # Preserve observations in the returned report, but keep the academic
+    # snapshot stable when only cache/preparation bookkeeping changes.
+    snapshot = copy.deepcopy(pack)
+    if isinstance(snapshot.get("transcription"), dict):
+        snapshot["transcription"].pop("cache_reused", None)
+    for descriptor in snapshot["sources"]:
+        descriptor.pop("modified_since_last_prepare", None)
+    atomic_json_write(source_pack_path, snapshot)
+    (run_dir / "source_pack-stale.json").unlink(missing_ok=True)
     state = WorkflowState(workspace.database_path)
     try:
         state.record_source_pack(lecture_id, source_pack_path, pack["availability"])
     finally:
         state.close()
     return pack
+
+
+
+def transcription_course_context(workspace: Workspace, lecture_id: str, *, course=None, materials=None) -> dict:
+    """Shared text-only glossary; never render images merely to launch ASR."""
+    code, number = parse_lecture_id(lecture_id)
+    if course is None:
+        course = course_for(workspace.configuration_store().load(), code)
+    if materials is None:
+        materials, _ = discover_materials(course, number)
+    chunks = []
+    for path in dict.fromkeys(materials):
+        if Path(path).suffix.casefold() == ".ppt":
+            continue
+        before = file_sha256(Path(path))
+        extracted, _ = extract_cached(Path(path), workspace.state_dir / "extraction-cache")
+        if file_sha256(Path(path)) != before:
+            raise SourcePackError(f"Source changed while preparing transcription context: {path}")
+        chunks.extend(extracted)
+    prepared = copy.deepcopy(course)
+    prepared["transcription"]["vocabulary"] = _glossary(course, chunks)
+    return prepared
+
+
+def build_source_pack(workspace: Workspace, lecture_id: str, *, audio=None, transcript_path=None,
+                      materials=(), personal_notes=None, web_snapshots=(), engines=None) -> dict:
+    from .workflow import _generation_lock
+    lecture_id = lecture_id.upper()
+    parse_lecture_id(lecture_id)
+    with _generation_lock(workspace, lecture_id):
+        return _build_source_pack_locked(workspace, lecture_id, audio=audio, transcript_path=transcript_path,
+            materials=materials, personal_notes=personal_notes, web_snapshots=web_snapshots, engines=engines)

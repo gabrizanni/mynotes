@@ -24,3 +24,13 @@ workspace/
 /docs/0[1-7]-*.md
 /docs/remediation/
 /private-reports/
+/capture-verification-*/
+
+# Native Capture build products
+/capture/.build/
+/capture/output/
+
+# Native setup and dependency packaging outputs
+/setup/.build/
+/setup/output/
+/.packaging/
