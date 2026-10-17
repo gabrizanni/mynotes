@@ -265,3 +265,13 @@ The technical glossary and selected language/model remain in use. A transcript
 with invalid intervals is retained for review; sorting or inventing times does
 not certify it. Confidence may be an explicitly labelled log-probability proxy
 or unavailable, and should not be read as a percentage of correct words.
+
+## Recording filenames
+
+Course recordings use the familiar short calendar label and lesson number, such
+as `QNT_L14.m4a`, `STAT_L12.m4a` and `DEMO_L11.m4a`. The persistent recording ID
+remains private metadata and does not replace these filenames. A short calendar
+label can name the file before course association; this does not assign a course.
+Free recordings without a lesson retain their title-based unique filenames.
+The recording collection is chosen by the user; an existing `registration agent`
+folder can be selected. Existing originals are never overwritten.

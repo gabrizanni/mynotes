@@ -38,6 +38,21 @@ struct Lecture: Codable, Identifiable, Equatable {
         return String(format: "%@-L%02d", courseCode ?? "", lessonNumber ?? 0)
     }
     var filename: String {
+        // Calendar titles retain the user's short course label,
+        // while courseCode may be a longer internal identifier. File naming must
+        // not depend on whether this recording already has a catalogue UUID.
+        let pattern = "^([A-Z][A-Z0-9]{1,15})[ _-]+(?:L[ _-]*)?([0-9]{1,3})$"
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = try? NSRegularExpression(pattern: pattern).firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+           let codeRange = Range(match.range(at: 1), in: trimmed),
+           let numberRange = Range(match.range(at: 2), in: trimmed),
+           let number = Int(trimmed[numberRange]), (1...999).contains(number),
+           lessonNumber == nil || lessonNumber == number {
+            return String(format: "%@_L%02d.m4a", String(trimmed[codeRange]), number)
+        }
+        if let code = courseCode, let number = lessonNumber {
+            return String(format: "%@_L%02d.m4a", code, number)
+        }
         if let recordingID {
             let slug = String(title.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? String($0) : "-" }.joined().prefix(64))
             return "\(Int(startsAt.timeIntervalSince1970))-\(slug)-\(recordingID).m4a"

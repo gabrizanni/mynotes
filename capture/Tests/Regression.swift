@@ -22,6 +22,16 @@ struct Regression {
         classified.title = String(repeating: "Long calendar title ", count: 40)
         precondition(classified.validTarget(["DEMO"]), "Full calendar titles are preserved")
         precondition(!standalone.filename.contains("/") && standalone.filename.contains(standalone.recordingID!), "Filename must be safe and unique")
+        precondition(classified.filename == "DEMO_L17.m4a", "A catalogue UUID must not replace course/lesson filenames")
+        var scheduled = standalone
+        scheduled.title = "QNT 14"; scheduled.courseCode = "QUANTITATIVE"; scheduled.lessonNumber = 14
+        precondition(scheduled.filename == "QNT_L14.m4a", "Keep the user's short calendar course label")
+        scheduled.title = "STAT 12"; scheduled.courseCode = nil; scheduled.lessonNumber = nil
+        precondition(scheduled.filename == "STAT_L12.m4a" && scheduled.courseCode == nil, "Naming must not invent a course association")
+        scheduled.title = "MATH_L03"; scheduled.courseCode = "MATHEMATICS"; scheduled.lessonNumber = 3
+        precondition(scheduled.filename == "MATH_L03.m4a", "Canonical titles remain canonical")
+        scheduled.lessonNumber = 4
+        precondition(scheduled.filename == "MATHEMATICS_L04.m4a", "An explicit lesson number wins over an old title")
         let encodedStandalone = try CaptureJSON.encoder.encode(standalone)
         let decodedStandalone = try CaptureJSON.decoder.decode(Lecture.self, from: encodedStandalone)
         precondition(decodedStandalone.courseCode == nil && decodedStandalone.lessonNumber == nil && decodedStandalone.recordingID == standalone.recordingID)
