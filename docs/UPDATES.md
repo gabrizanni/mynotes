@@ -115,3 +115,15 @@ direct adapter calls; explicit multipart recovery remains available. Evidence
 stays complete in bounded input files. Performance and real-provider validation
 are reported separately from synthetic regression tests. No public release is
 implied by this local candidate.
+
+
+## 0.2.16 — segment timing for local Argmax transcription
+
+New Argmax attempts keep model-derived segment timestamps and the saved glossary,
+without requesting word alignment. This avoids the WhisperKit 1.1.0 prompted
+word-timing defect tracked upstream as issue 542. Timing mode is recorded in
+results and pass caches; existing valid complete transcripts remain reusable.
+Missing confidence is no longer treated as certainty. Average log probability,
+when available, supplies a labelled proxy rather than a calibrated accuracy.
+Timestamp failures include the segment, interval and specific violation.
+Original audio and failed attempt diagnostics remain preserved.

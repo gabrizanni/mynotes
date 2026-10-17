@@ -45,6 +45,11 @@ def _number(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _confidence(value: Any) -> float:
+    number = _number(value, 0.0)
+    return max(0.0, min(1.0, number)) if math.isfinite(number) else 0.0
+
+
 def timestamp(seconds: float) -> str:
     whole = max(0, int(seconds))
     return f"{whole // 3600:02d}:{(whole % 3600) // 60:02d}:{whole % 60:02d}"
@@ -97,7 +102,7 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
                     "word": token,
                     "start": word_start,
                     "end": word_end,
-                    "confidence": max(0.0, min(1.0, _number(word.get("probability", word.get("confidence", 1.0)), 1.0))),
+                    "confidence": _confidence(word.get("probability", word.get("confidence"))),
                 }
             )
         text = str(item.get("text") or item.get("transcript") or "").strip()
@@ -107,10 +112,21 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
         text = re.sub(r"\s+([,.;:!?])", r"\1", re.sub(r"\s+", " ", text)).strip()
         if not text:
             continue
-        confidence = _number(item.get("confidence", item.get("score", 1.0)), 1.0)
+        confidence = _number(item.get("confidence", item.get("score")), float("nan"))
+        confidence_source = "engine"
         if words:
             confidence = sum(word["confidence"] for word in words) / len(words)
-        normalized = {"start": start_f, "end": end_f, "text": text, "confidence": max(0.0, min(1.0, confidence))}
+            confidence_source = "word_average"
+        elif not math.isfinite(confidence):
+            logprob = _number(item.get("avgLogprob", item.get("avg_logprob")), float("nan"))
+            if math.isfinite(logprob) and logprob <= 0:
+                confidence = math.exp(logprob)
+                confidence_source = "avg_logprob_proxy"
+            else:
+                confidence = 0.0
+                confidence_source = "unavailable"
+        normalized = {"start": start_f, "end": end_f, "text": text, "confidence": _confidence(confidence)}
+        normalized["confidence_source"] = confidence_source
         if words:
             normalized["words"] = words
         if item.get("speaker") or item.get("speakerId"):
@@ -126,6 +142,7 @@ class EngineResult:
     model: str
     version: str
     segments: list[dict[str, Any]]
+    timestamp_mode: str | None = None
 
 
 class SpeechEngine(Protocol):
@@ -238,7 +255,8 @@ def _latest_segments(directory: Path) -> list[dict[str, Any]]:
 class ArgmaxEngine:
     name = "argmax"
 
-    def __init__(self, executable: str, model_dir: Path, tokenizer_dir: Path) -> None:
+    def __init__(self, executable: str, model_dir: Path, tokenizer_dir: Path, *, word_timestamps: bool = False) -> None:
+        self.timestamp_mode = "word" if word_timestamps else "segment"
         self.executable = executable
         self.model_dir = model_dir
         self.tokenizer_dir = tokenizer_dir
@@ -268,7 +286,7 @@ class ArgmaxEngine:
                             for word in segment["words"]
                         ]
                     combined.append(shifted)
-            return EngineResult(self.name, model, version, combined)
+            return EngineResult(self.name, model, version, combined, self.timestamp_mode)
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.tokenizer_dir.mkdir(parents=True, exist_ok=True)
         local_models = [
@@ -278,10 +296,14 @@ class ArgmaxEngine:
         model_arguments = ["--model-path", str(local_models[0])] if len(local_models) == 1 else ["--model", model]
         command = [
             self.executable, "transcribe", *model_arguments, "--audio-path", str(audio),
-            "--word-timestamps", "--report",
+            "--report",
             "--report-path", str(output_dir), "--download-model-path", str(self.model_dir),
             "--download-tokenizer-path", str(self.tokenizer_dir), "--concurrent-worker-count", "1",
         ]
+        # WhisperKit 1.1.0 promptTokens + word alignment corrupts timings (#542).
+        # Segment timestamps remain enabled; retain the technical prompt.
+        if self.timestamp_mode == "word":
+            command.append("--word-timestamps")
         command.append("--incremental-loading")
         if language != "auto":
             command.extend(["--language", language])
@@ -304,7 +326,7 @@ class ArgmaxEngine:
                 pass
         if not segments:
             raise ASRError("Argmax finished without a readable timestamped transcript")
-        return EngineResult(self.name, model, _tool_version(self.executable), segments)
+        return EngineResult(self.name, model, _tool_version(self.executable), segments, self.timestamp_mode)
 
 
 class FluidAudioEngine:
@@ -435,6 +457,7 @@ def merge_passes(primary: list[dict[str, Any]], secondary: list[dict[str, Any]],
                 "text": str(segment["text"]),
                 "alternative": alternative or None, "agreement": round(agreement, 4),
                 "confidence": round(_number(segment.get("confidence"), 0.0), 4), "needs_review": needs_review,
+                **({"confidence_source": segment["confidence_source"]} if segment.get("confidence_source") else {}),
                 **({"words": segment["words"]} if segment.get("words") else {}),
             }
         )
@@ -572,7 +595,7 @@ def recording_profile(course, audio):
     return course
 
 
-def cache_identity(workspace, course, audio, *, engines=None):
+def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=False):
     course = recording_profile(course, audio)
     settings = course["transcription"]
     audio_hash = file_sha256(audio)
@@ -601,6 +624,10 @@ def cache_identity(workspace, course, audio, *, engines=None):
                 (str(path.relative_to(root)), path.stat().st_size, path.stat().st_mtime_ns)
                 for path in sorted(Path(root).rglob("*")) if path.is_file() and ".cache" not in path.parts
             ]
+    if not legacy_timing:
+        for name, engine in registry.items():
+            if getattr(engine, "timestamp_mode", None):
+                identities[name]["timestamp_mode"] = engine.timestamp_mode
     relevant["cache_schema"] = 2
     relevant["engine_identity"] = identities
     relevant["configured_tools"] = settings.get("tools", {})
@@ -639,7 +666,14 @@ def _transcribe_audio_locked(
             normalized = Path(cached.get("normalized_audio_path", ""))
             if not normalized.is_file() or file_sha256(normalized) != cached.get("normalized_audio_sha256") or cached.get("segments_sha256") != segments_digest(cached.get("segments")):
                 issues.append({"reason": "Cache integrity mismatch"})
-            if cached.get("cache_key") == cache_key and not issues and cached.get("status") == "COMPLETED":
+            compatible = cached.get("cache_key") == cache_key
+            # Preserve already validated legacy transcripts. Only fresh passes
+            # change timing policy; a new explicit retry never consumes old passes.
+            if (not compatible and not issues and cached.get("status") == "COMPLETED"
+                    and "timestamp_mode" not in cached and settings["primary_engine"] == "argmax"):
+                legacy_key = cache_identity(workspace, course, audio, engines=engines, legacy_timing=True)[2]
+                compatible = cached.get("cache_key") == legacy_key
+            if compatible and not issues and cached.get("status") == "COMPLETED":
                 cached["cache_reused"] = True
                 update("completed", status="COMPLETED", cache_reused=True, transcript_json=str(manifest_path))
                 return cached
@@ -713,7 +747,8 @@ def _transcribe_audio_locked(
         "normalized_audio_path": str(normalized_audio), "normalized_audio_sha256": file_sha256(normalized_audio),
         "settings_hash": settings_hash, "cache_key": cache_key, "cache_reused": False,
         "language": settings["language"], "accent_hint": settings.get("accent", ""),
-        "passes": [{"engine": item.engine, "model": item.model, "version": item.version} for item in passes],
+        "timestamp_mode": primary.timestamp_mode or ("word" if any(x.get("words") for x in primary.segments) else "segment"),
+        "passes": [{"engine": item.engine, "model": item.model, "version": item.version, **({"timestamp_mode": item.timestamp_mode} if item.timestamp_mode else {})} for item in passes],
         "diarization": diarization, "segments": merged,
     }
     update("validating")
@@ -756,39 +791,60 @@ def validate_transcript(payload: Any, duration: float | None = None) -> list[dic
         return [{"reason": "Invalid audio duration"}]
     previous = -1.0
     for index, segment in enumerate(payload["segments"]):
+        code, detail = "INVALID_SEGMENT", {}
         try:
             start, end = float(segment["start_seconds"]), float(segment["end_seconds"])
-            valid = math.isfinite(start) and math.isfinite(end) and start >= -0.5 and end > start and start >= previous
-            valid = valid and isinstance(segment["text"], str) and bool(segment["text"].strip())
-            if duration is not None:
-                valid = valid and end <= duration + 0.5
-            if not valid:
-                raise ValueError("Invalid segment bounds or text")
+            detail = {"start_seconds": start, "end_seconds": end}
+            if not math.isfinite(start) or not math.isfinite(end):
+                code = "NON_FINITE_TIMESTAMP"
+                raise ValueError("Segment timestamps must be finite")
+            if start < -0.5 or end <= start:
+                code = "INVALID_SEGMENT_INTERVAL"
+                raise ValueError("Segment must have a nonnegative start and positive duration")
+            if start < previous:
+                code = "SEGMENTS_OUT_OF_ORDER"
+                detail["previous_start_seconds"] = previous
+                raise ValueError("Segment starts before the preceding segment")
+            if duration is not None and end > duration + 0.5:
+                code = "TIMESTAMP_BEYOND_AUDIO"
+                detail["audio_duration_seconds"] = duration
+                raise ValueError("Segment ends beyond the audio duration")
+            if not isinstance(segment["text"], str) or not segment["text"].strip():
+                code = "EMPTY_TRANSCRIPT_TEXT"
+                raise ValueError("Segment text must not be empty")
+            clamped_start = max(0.0, min(start, duration)) if duration is not None else max(0.0, start)
+            clamped_end = min(end, duration) if duration is not None else end
+            if clamped_end <= clamped_start:
+                code = "EMPTY_INTERVAL_AFTER_ROUNDING"
+                raise ValueError("Segment has no positive interval inside the audio")
             previous = start
             words = segment.get("words", [])
             if not isinstance(words, list):
                 raise ValueError("Words must be a list")
-            for word in words:
+            for word_index, word in enumerate(words):
                 ws, we = float(word["start"]), float(word["end"])
                 if not math.isfinite(ws) or not math.isfinite(we) or ws < start - 0.5 or we < ws or we > end + 0.5:
-                    raise ValueError("Invalid word bounds")
+                    code = "WORD_OUTSIDE_SEGMENT"
+                    detail.update(word=word_index + 1, word_start=ws, word_end=we)
+                    raise ValueError("Word timestamps fall outside their segment or are reversed")
             segment["start_seconds"] = max(0.0, min(start, duration)) if duration is not None else max(0.0, start)
             segment["end_seconds"] = min(end, duration) if duration is not None else end
             segment["start"], segment["end"] = timestamp(segment["start_seconds"]), timestamp(segment["end_seconds"])
         except (KeyError, TypeError, ValueError, OverflowError) as error:
-            issues.append({"segment": index + 1, "reason": str(error)})
+            issues.append({"segment": index + 1, "code": code, "reason": str(error), **detail})
     return issues
 
 
 def validate_engine_result(result: EngineResult, path: Path, duration: float | None, *, ordered=True) -> None:
-    raw = {"engine": result.engine, "model": result.model, "segments": result.segments}
+    raw = {"engine": result.engine, "model": result.model, "segments": result.segments,
+           **({"timestamp_mode": result.timestamp_mode} if result.timestamp_mode else {})}
     atomic_json_write(path, raw)
     normalized = [{**segment, "start_seconds": segment.get("start"), "end_seconds": segment.get("end")} for segment in result.segments]
     if not ordered:
         normalized.sort(key=lambda segment: segment["start_seconds"])
     issues = validate_transcript({"segments": normalized}, duration)
     if issues:
-        raise ASRReviewError("NEEDS_REVIEW: engine output has invalid timestamps", issues, path)
+        raise ASRReviewError("NEEDS_REVIEW: engine output has invalid timestamps: " + "; ".join(f"segment {x.get('segment', '?')}: {x['reason']}" for x in issues[:3]), issues, path)
     for raw_segment, checked in zip(result.segments, normalized):
         if ordered:
             raw_segment["start"], raw_segment["end"] = checked["start_seconds"], checked["end_seconds"]
@@ -879,9 +935,9 @@ def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, lang
     """Reuse only an explicitly verified pass bound to the complete request key."""
     try:
         saved = json.loads(cache_path.read_text())
-        if saved.get("segments_sha256") != segments_digest(saved.get("segments")) or saved.get("model") != model or saved.get("engine") != engine.name or saved.get("clips") != (list(map(list, clips)) if clips else None):
+        if saved.get("segments_sha256") != segments_digest(saved.get("segments")) or saved.get("model") != model or saved.get("engine") != engine.name or saved.get("timestamp_mode") != getattr(engine, "timestamp_mode", None) or saved.get("clips") != (list(map(list, clips)) if clips else None):
             raise ValueError("Pass cache mismatch")
-        result = EngineResult(saved["engine"], saved["model"], saved["version"], saved["segments"])
+        result = EngineResult(saved["engine"], saved["model"], saved["version"], saved["segments"], saved.get("timestamp_mode"))
         validate_engine_result(result, output_dir.parent / f"{output_dir.name}-reused.json", duration, ordered=not bool(clips))
         return result
     except (OSError, ValueError, TypeError, KeyError, ASRReviewError):
@@ -890,6 +946,7 @@ def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, lang
     validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
     atomic_json_write(cache_path, {"engine": result.engine, "model": result.model, "version": result.version,
         "segments": result.segments, "segments_sha256": segments_digest(result.segments),
+        **({"timestamp_mode": result.timestamp_mode} if result.timestamp_mode else {}),
         "clips": list(map(list, clips)) if clips else None})
     return result
 

@@ -166,7 +166,7 @@ def library(workspace, *, query=None, date=None, course=None):
                 detail = {**detail, "error": "Il risultato della trascrizione completata non è più disponibile. Ripristina i file salvati."}
             if state in {"FAILED", "INTERRUPTED", "NEEDS_REVIEW"}:
                 message = str(detail.get("error") or "La trascrizione è stata interrotta prima del completamento.").strip()[:600]
-                item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
+                item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. " + message.removeprefix("NEEDS_REVIEW: engine output has invalid timestamps: ") + " Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
                 if state == "NEEDS_REVIEW":
                     item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
         if detail.get('review_path') and Path(detail['review_path']).is_file():
@@ -229,7 +229,7 @@ def library(workspace, *, query=None, date=None, course=None):
                     item["status"] = job_state
                 if job["error"] or job_state == "NEEDS_REVIEW":
                     message = "Trascrizione non riuscita: " + str(job["error"] or "Il risultato non supera i controlli di integrità.").strip()[:600]
-                    item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
+                    item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. " + message.removeprefix("NEEDS_REVIEW: engine output has invalid timestamps: ") + " Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
                     if job_state == "NEEDS_REVIEW":
                         item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
     queue_state = status(workspace)
@@ -469,7 +469,13 @@ def run_job(workspace, identifier, *, engines=None):
     try:
         course = payload.get("course_profile") or profile(workspace, item)
         sha, signature, key, registry = cache_identity(workspace, course, Path(item["path"]), engines=engines)
-        if sha != payload["audio_sha256"] or signature != payload["settings_hash"]:
+        timing_upgrade = False
+        if sha == payload["audio_sha256"] and signature != payload["settings_hash"] and getattr(registry.get("argmax"), "timestamp_mode", None) == "segment":
+            # An admitted 0.2.15 job keeps its frozen source/model/glossary.
+            # Accept only the exact prior signature, before timing policy existed.
+            legacy_signature = cache_identity(workspace, course, Path(item["path"]), engines=engines, legacy_timing=True)[1]
+            timing_upgrade = legacy_signature == payload["settings_hash"]
+        if sha != payload["audio_sha256"] or (signature != payload["settings_hash"] and not timing_upgrade):
             raise ValueError("Sorgente o impostazioni cambiate: aggiungi nuovamente la registrazione alla coda")
         if engines is None:
             for name in ("primary_engine", "secondary_engine", "extra_pass_engine"):
@@ -484,6 +490,7 @@ def run_job(workspace, identifier, *, engines=None):
         directory = asr_directory(workspace, item)
         result = {'status': manifest['status'], 'transcript_json': str(directory / 'transcript.json'),
             'transcript_text': str(directory / 'transcript.txt'), 'segments': len(manifest['segments']),
+            **({'timing_policy_upgrade': {'from': 'legacy_word', 'to': 'segment'}} if timing_upgrade else {}),
             **{k: manifest[k] for k in ('archive_status', 'archive_error', 'current_audio_path', 'export_text') if k in manifest}}
         outcome = "COMPLETED"
     except ASRBusyError as e:

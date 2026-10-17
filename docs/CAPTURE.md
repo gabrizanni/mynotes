@@ -255,3 +255,13 @@ provider response bodies or secret URLs. The dashboard includes these optional
 fields while remaining readable with legacy metadata. `capture source --source ID
 --json` returns the private subscription only for explicitly editing that source;
 it must not be included in public diagnostics.
+
+
+### Indicative transcript timestamps
+
+Argmax transcription uses timestamps for passages rather than individual words.
+They are engine-produced navigation cues, not precise word synchronization.
+The technical glossary and selected language/model remain in use. A transcript
+with invalid intervals is retained for review; sorting or inventing times does
+not certify it. Confidence may be an explicitly labelled log-probability proxy
+or unavailable, and should not be read as a percentage of correct words.
