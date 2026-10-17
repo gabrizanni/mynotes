@@ -95,3 +95,11 @@ Update using the normal versioned installer. No workspace migration, academic
 rewriting or automatic retranscription is required. Previous versions remain for
 rollback; an active recording/export defers installation. Package, installed-app,
 UI and real-microphone checks are separate from synthetic regression results.
+
+## 0.2.14 — local Capture reliability candidate
+
+Original-audio catalogue, arbitrary external filenames, private working files,
+course TXT exports and recoverable archival. Queue removal/reinsertion, active
+cancellation and fresh retry share backend action availability with the native UI.
+Independent stable recordings may transcribe while microphone capture continues.
+No automatic transcription or note generation. Public publication is separate.

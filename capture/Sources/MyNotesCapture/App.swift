@@ -301,7 +301,7 @@ final class CaptureEngine: NSObject {
                 session.durationSeconds = try await SegmentAssembler.assemble(session.segments.map { URL(fileURLWithPath: $0) }, to: destination)
                 session.outputPath = destination.path
                 session.status = session.partial ? "PARTIAL" : "COMPLETED"
-                try CaptureJSON.save(session, to: destination.appendingPathExtension("capture.json"))
+                if session.isTest { try CaptureJSON.save(session, to: destination.appendingPathExtension("capture.json")) }
                 try self.saveSession(session)
                 if let requestID { self.respond(requestID, status: session.status, message: "Audio saved", session: session) }
                 self.announce("Saved \(session.event.lectureID)", session.partial ? "Partial recording: \(destination.lastPathComponent)" : destination.lastPathComponent, notice: true)

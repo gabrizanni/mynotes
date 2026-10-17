@@ -14,6 +14,8 @@ import Combine
     @Published var recordings: [CaptureRecording] = []
     @Published var queue: CaptureQueue?
     @Published var queueBusy = false
+    @Published var recordingFolder: String?
+    @Published var folderConfigured = false
     @Published var createdCourse: String?
     let context = CaptureContext()
     let preview = ProcessInfo.processInfo.environment["MYNOTES_CAPTURE_PREVIEW"].map { URL(fileURLWithPath: $0) }
@@ -27,7 +29,7 @@ import Combine
 
     var pollingInterval: TimeInterval {
         if pendingRequest != nil || snapshot?.isRecording == true || snapshot?.isExporting == true
-            || queue?.jobs.contains(where: { ["QUEUED", "RUNNING"].contains($0.status) }) == true { return 5 }
+            || queue?.jobs.contains(where: { ["QUEUED", "RUNNING", "CANCELLING"].contains($0.status) }) == true { return 5 }
         return 15
     }
     // The polling clock is bookkeeping, not view state: advancing it must not
@@ -152,7 +154,7 @@ import Combine
             || snapshot?.isRecording == true && !next.isRecording && !next.isExporting
             || !newFinished.subtracting(priorFinished).isEmpty
         let nextRecordings: [CaptureRecording]?
-        if includeLibrary || justSaved || libraryDirty { nextRecordings = try await fetchLibrary() }
+        if includeLibrary || justSaved || libraryDirty { nextRecordings = try await fetchLibrary(version: version) }
         else { nextRecordings = nil }
         guard version == revision else { return }
         next.recordings = nextRecordings ?? recordings
@@ -258,10 +260,15 @@ import Combine
         } else { notice = "Il registratore ha confermato la richiesta." }
     }
 
-    private func fetchLibrary() async throws -> [CaptureRecording] {
+    private func fetchLibrary(version: UInt64) async throws -> [CaptureRecording] {
         let executable = context.launcher, workspace = context.workspace
-        let library = try await Task.detached { try Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue") }.value
-        return try JSONDecoder().decode(CaptureLibrary.self, from: library).recordings
+        let library = try await Task.detached { try Self.invoke(executable, workspace, "library", ["--sync"], nil, group: "transcription-queue") }.value
+        let value = try JSONDecoder().decode(CaptureLibrary.self, from: library)
+        if version == revision {
+            if recordingFolder != value.folder { recordingFolder = value.folder }
+            if folderConfigured != (value.folderConfigured ?? false) { folderConfigured = value.folderConfigured ?? false }
+        }
+        return value.recordings
     }
 
     func queueAction(_ action: String, arguments: [String] = []) async {
@@ -294,11 +301,12 @@ import Combine
                 let details = reasons.prefix(3).joined(separator: " ")
                 if added == 0 {
                     if !details.isEmpty { error = "Nessuna nuova trascrizione aggiunta. " + details }
+                    else if (result["completed_reused"] as? Int ?? 0) > 0 { notice = "Trascrizione esistente riutilizzata. Copia TXT e archiviazione aggiornate." }
                     else { notice = "Nessuna nuova trascrizione aggiunta alla coda." }
                 } else {
                     notice = (added == 1 ? "1 registrazione aggiunta alla coda." : "\(added) registrazioni aggiunte alla coda.") + (details.isEmpty ? "" : " Registrazioni escluse: " + details)
                 }
-            } else if ["OK", "PAUSED", "RESUMED", "CANCELLED", "STOPPED", "RUNNING", "COMPLETED"].contains(status) {
+            } else if ["OK", "ASSIGNED", "PAUSED", "RESUMED", "CANCELLED", "STOPPED", "RUNNING", "COMPLETED"].contains(status) {
                 notice = Self.queueMessage(result["message"] as? String) ?? "Operazione completata."
             } else {
                 error = "Risposta della coda non riconosciuta. Aggiorna MyNotes e riprova."

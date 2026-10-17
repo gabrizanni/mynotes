@@ -170,14 +170,15 @@ def test_forged_output_path_is_not_discovered(ws,tmp_path):
     path,_=audio(ws);sidecar=Path(str(path)+'.capture.json');session=json.loads(sidecar.read_text())
     other=tmp_path/'private.wav';other.write_bytes(path.read_bytes());session['outputPath']=str(other)
     atomic_json_write(sidecar,session)
-    assert q.library(ws)==[]
+    assert [r['path'] for r in q.library(ws)] == [str(path)]
+    assert all(r['path'] != str(other) for r in q.library(ws))
 
 
 def test_duplicate_alias_gets_shared_result_without_second_asr(ws, monkeypatch):
     engine = fake_registry(monkeypatch)
     audio(ws, 'First'); audio(ws, 'Alias')
     assert q.enqueue(ws)['added'] == 1
-    assert sorted(item['status'] for item in q.library(ws)) == ['NOT_STARTED', 'QUEUED']
+    assert sorted(item['status'] for item in q.library(ws)) == ['QUEUED', 'QUEUED']
     job = q.status(ws)['jobs'][0]; claim(ws, job['id'])
     q.run_job(ws, job['id'])
     items = q.library(ws)

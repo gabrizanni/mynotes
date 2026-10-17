@@ -237,7 +237,9 @@ def test_failed_queue_retry_is_explicit_and_keeps_original_profile(ws, monkeypat
     assert queue.enqueue(ws, recording_id=identifier)['added'] == 1
     with queue.database(ws, readonly=True) as conn:
         retried = conn.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone()
-    assert retried['payload'] == original and retried['status'] == 'QUEUED'
+    assert json.loads(retried['payload'])['course_profile'] == json.loads(original)['course_profile']
+    assert json.loads(retried['payload'])['recording'] == json.loads(original)['recording']
+    assert retried['status'] == 'QUEUED'
 
 
 
@@ -265,8 +267,10 @@ def test_invalid_asr_result_has_actionable_block_without_third_archive_category(
     atomic_json_write(directory / 'status.json', {'status': 'NEEDS_REVIEW',
         'lecture_id': '_recordings/' + identifier, 'error': 'Invalid transcript timestamps'})
     item = queue.library(ws)[0]
-    assert item['transcription_status'] == 'NEEDS_REVIEW' and not item['can_transcribe']
-    assert item['blocking_reasons'][0] == {'code': 'ASR_RESULT_INVALID', 'message': 'Invalid transcript timestamps'}
+    assert item['transcription_status'] == 'NEEDS_REVIEW' and item['can_transcribe']
+    assert 'restart' in item['actions']
+    assert not item['blocking_reasons']
+    assert any(w['code'] == 'TRANSCRIPTION_FAILED' for w in item['warnings'])
     assert 'transcript_json' not in item
 
 

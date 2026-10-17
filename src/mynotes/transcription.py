@@ -113,6 +113,7 @@ def _run_lecture_transcription(workspace: Workspace, lecture_id: str, audio: Pat
 
 def _recording_result(item, manifest, path, *, reused=False):
     return {"recording_id": item["id"], "lecture_id": item.get("lecture_id"),
+            **{k: manifest[k] for k in ('current_audio_path', 'export_text', 'archive_status', 'archive_error') if k in manifest},
             "status": manifest["status"], "cache_reused": reused or manifest.get("cache_reused", False),
             "attempt_id": manifest.get("attempt_id"), "transcript_json": str(path),
             "transcript_text": str(path.with_suffix(".txt")), "segments": len(manifest["segments"]),
@@ -140,6 +141,8 @@ def _run_recording_transcription(workspace, item, *, engines=None, progress=Fals
                 raise ASRError("TRANSCRIPT_INVALID: l’audio normalizzato della trascrizione non supera i controlli di integrità")
         if not path.with_suffix(".txt").exists():
             write_transcript_text(path.with_suffix(".txt"), manifest)
+        from .recording_library import finish
+        manifest.update(finish(workspace, item, path))
         return _recording_result(item, manifest, path, reused=True)
     if item.get("blocking_reasons") and any(row["code"] != "TRANSCRIPTION_ACTIVE" for row in item["blocking_reasons"]):
         raise ASRError("TRANSCRIPTION_BLOCKED: " + "; ".join(row["message"] for row in item["blocking_reasons"]))
@@ -170,8 +173,8 @@ def _run_recording_transcription(workspace, item, *, engines=None, progress=Fals
         return {**result, "recording_id": item["id"], "warnings": item.get("warnings", [])}
     course = queue.profile(workspace, item)
     manifest = transcribe_audio(workspace, item.get("lecture_id") or item["id"], course, Path(item["path"]),
-                                engines=engines, progress=progress, recording_id=item["id"])
-    path = workspace.runs_dir / "_recordings" / item["id"] / "asr" / "transcript.json"
+                                engines=engines, progress=progress, recording_id=item["id"] if item.get('storage_recording_id') else None)
+    path = queue.asr_directory(workspace, item) / 'transcript.json' 
     return _recording_result(item, manifest, path)
 
 
@@ -195,7 +198,12 @@ def run_transcription(workspace: Workspace, lecture_id: str | None = None, audio
         matches = [item for item in records if item.get("storage_recording_id") and item.get("lecture_id") == lecture_id]
         if len(matches) > 1:
             raise ASRError("AMBIGUOUS_RECORDING: più registrazioni indicano questa lezione; seleziona il recording ID")
-    if matches and matches[0].get("storage_recording_id"):
+    if not matches and audio is None and lecture_id is not None:
+        from .recording_library import options
+        if options(workspace).get('folder'):
+            matches = [r for r in records if r.get('lecture_id') == lecture_id]
+            if len(matches) > 1: raise ASRError('AMBIGUOUS_RECORDING: seleziona una registrazione per questa lezione')
+    if matches and (matches[0].get("storage_recording_id") or recording_id is not None or audio is None):
         return _run_recording_transcription(workspace, matches[0], engines=engines, progress=progress)
     if recording_id is not None:
         item = matches[0]
@@ -204,4 +212,8 @@ def run_transcription(workspace: Workspace, lecture_id: str | None = None, audio
         lecture_id, audio = item["lecture_id"], Path(item["path"])
     if lecture_id is None:
         raise ASRError("Supply a lecture or recording ID")
+    if audio is None:
+        archived = [r for r in records if r.get('lecture_id') == lecture_id and r.get('collection') in {'processed', 'legacy'}]
+        if len(archived) == 1:
+            audio = Path(archived[0]['path'])
     return _run_lecture_transcription(workspace, lecture_id, audio, progress, engines=engines)

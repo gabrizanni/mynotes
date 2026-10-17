@@ -301,6 +301,8 @@ def _build_source_pack_locked(
     if transcript_path is None:
         from .capture_associations import linked_recording, validated_transcript
         recording = linked_recording(workspace, lecture_id)
+        if recording and not recording.get('storage_recording_id') and audio is None and recording.get('collection') in {'processed', 'legacy'}:
+            audio = Path(recording['path'])
         if recording and recording.get("storage_recording_id") and (audio is None or Path(audio).resolve() == Path(recording["path"]).resolve()):
             existing = validated_transcript(workspace, recording)
             if not existing:
@@ -309,7 +311,7 @@ def _build_source_pack_locked(
                 # requests, so it must never fall through to lecture ASR.
                 from .transcription import run_transcription
                 result = run_transcription(workspace, recording_id=recording["id"], engines=engines)
-                existing = validated_transcript(workspace, {**recording, "transcript_json": result["transcript_json"]})
+                existing = validated_transcript(workspace, {**recording, "path": result.get('current_audio_path', recording['path']), "transcript_json": result["transcript_json"]})
                 if not existing:
                     raise SourcePackError("Capture transcription completed without a validated transcript")
             if existing:
@@ -317,10 +319,14 @@ def _build_source_pack_locked(
                 audio = Path(recording["path"])
                 bound_recording_id = recording["id"]
     if audio is not None:
+        from .recording_library import resolve_path
+        audio = resolve_path(workspace, audio)
         if not audio.is_file():
             raise SourcePackError(f"Audio does not exist: {audio}")
         if transcript_path is None:
             transcript_manifest = transcribe_audio(workspace, lecture_id, transcription_course, audio, engines=engines, _lecture_locked=True)
+        from .recording_library import resolve_path
+        audio = resolve_path(workspace, audio)
         descriptor = {**source_descriptor(audio), "role": "recording"}
         descriptor["modified_since_last_prepare"] = bool(previous.get(str(audio)) and previous[str(audio)] != descriptor["sha256"])
         sources.append(descriptor)

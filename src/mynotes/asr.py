@@ -620,6 +620,7 @@ def _transcribe_audio_locked(
     engines: dict[str, SpeechEngine] | None = None,
     update=None,
     attempt_dir: Path | None = None,
+    force: bool = False,
 ) -> dict[str, Any]:
     """Transcribe with configured passes and reuse an exact cache match."""
     update = update or (lambda *args, **kwargs: None)
@@ -631,7 +632,7 @@ def _transcribe_audio_locked(
         if settings.get(key) and settings[key] not in registry:
             raise ASRError(f"CONFIGURATION: requested ASR engine is unavailable: {settings[key]}")
     manifest_path = run_dir / "transcript.json"
-    if manifest_path.is_file():
+    if manifest_path.is_file() and not force:
         try:
             cached = json.loads(manifest_path.read_text(encoding="utf-8"))
             issues = validate_transcript(cached, cached.get("audio_duration_seconds"))
@@ -649,6 +650,11 @@ def _transcribe_audio_locked(
             quarantine = run_dir / "cache-review"
             quarantine.mkdir(exist_ok=True, mode=0o700)
             shutil.copy2(manifest_path, quarantine / f"{uuid.uuid4().hex}.json")
+    if force:
+        # A fresh attempt never consumes previous engine pass caches.
+        pass_root = (attempt_dir or run_dir / 'attempts' / uuid.uuid4().hex) / 'fresh-pass-cache'
+    else:
+        pass_root = manifest_path.parent / 'pass-cache' / cache_key
     run_dir = attempt_dir or run_dir / "attempts" / uuid.uuid4().hex
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     normalized_audio = run_dir / "input.wav"
@@ -665,7 +671,7 @@ def _transcribe_audio_locked(
     prompt = f"Spoken with {settings['accent']} accent" if settings.get("accent") else ""
     passes: list[EngineResult] = []
     update("primary_pass")
-    primary = _engine_pass(registry[primary_name], manifest_path.parent / "pass-cache" / cache_key / "primary.json", duration,
+    primary = _engine_pass(registry[primary_name], pass_root / "primary.json", duration,
         normalized_audio, run_dir / "primary", model=settings["primary_model"], language=settings["language"],
         vocabulary=settings["vocabulary"], prompt=prompt,
     )
@@ -677,7 +683,7 @@ def _transcribe_audio_locked(
         if name not in registry:
             raise ASRError(f"Requested secondary ASR engine is unavailable: {name}")
         update("secondary_pass")
-        secondary = _engine_pass(registry[name], manifest_path.parent / "pass-cache" / cache_key / "secondary.json", duration,
+        secondary = _engine_pass(registry[name], pass_root / "secondary.json", duration,
             normalized_audio, run_dir / "secondary", model=settings["secondary_model"], language=settings["language"],
             vocabulary=settings["vocabulary"], prompt=prompt,
         )
@@ -690,7 +696,7 @@ def _transcribe_audio_locked(
         if name not in registry:
             raise ASRError(f"Requested extra-pass ASR engine is unavailable: {name}")
         update("extra_pass")
-        extra = _engine_pass(registry[name], manifest_path.parent / "pass-cache" / cache_key / "extra.json", duration,
+        extra = _engine_pass(registry[name], pass_root / "extra.json", duration,
             normalized_audio, run_dir / "extra", model=settings["extra_pass_model"], language=settings["language"],
             vocabulary=settings["vocabulary"], prompt=prompt, clips=review_windows,
         )
@@ -804,7 +810,7 @@ def asr_workspace_lock(workspace: Workspace):
         yield
 
 
-def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None):
+def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None, force=False):
     from contextlib import nullcontext
     from .workflow import _generation_lock, WorkflowError, parse_lecture_id
     course = recording_profile(course, audio)
@@ -842,12 +848,14 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
                     raise SystemExit("Transcription interrupted by SIGTERM")
                 signal.signal(signal.SIGTERM, interrupted)
             try:
-                result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir)
+                result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir, force=force)
                 if result.get("cache_reused"):
                     text_path = directory / "transcript.txt"
                     write_transcript_text(text_path, result)
                     if state.get("phase") != "completed":
                         update("completed", status="COMPLETED", transcript_text=str(text_path))
+                from .recording_library import finish_audio
+                result.update(finish_audio(workspace, audio, directory / 'transcript.json'))
                 return result
             except BaseException as error:
                 status = "NEEDS_REVIEW" if isinstance(error, ASRReviewError) else "INTERRUPTED" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "FAILED"

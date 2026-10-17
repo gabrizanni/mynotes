@@ -34,6 +34,7 @@ def database(workspace, *, readonly=False):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, recording_id TEXT NOT NULL, cache_key TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, pid INTEGER, error TEXT, result TEXT, UNIQUE(recording_id, cache_key))")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS jobs_input_settings ON jobs(cache_key)")
+        conn.execute("CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, metadata TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS recording_aliases (recording_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL)")
     conn.row_factory = sqlite3.Row
     try:
@@ -92,51 +93,11 @@ def library(workspace, *, query=None, date=None, course=None):
             if current.get("status") in {"RECORDING", "STARTED_LATE", "EXPORTING"}:
                 event = current.get("event") or {}
                 active_ids.update(filter(None, (event.get("recordingID"), event.get("id"))))
-    for directory in dirs:
-        if not directory.is_dir():
-            continue
-        for sidecar in sorted(directory.glob("*.capture.json")):
-            try:
-                session = read_json(sidecar)
-                if session.get("isTest"):
-                    continue
-                event = apply(session["event"], links)
-                audio = Path(session.get("outputPath") or str(sidecar)[:-13])
-                if audio.resolve().parent != directory.resolve():
-                    continue
-                code, number = event.get("courseCode"), event.get("lessonNumber")
-                if code is not None and (not isinstance(code, str) or not re.fullmatch(r"[A-Z0-9]+", code) or (number is not None and (type(number) is not int or not 1 <= number <= 999))):
-                    continue
-                lecture = f"{code}-L{number:02d}" if code and type(number) is int else None
-                identifier = event.get("recordingID") or hashlib.sha256(str(audio.resolve()).encode()).hexdigest()[:32]
-                if not isinstance(identifier, str) or not re.fullmatch(r"[a-f0-9]{32}", identifier):
-                    continue
-                items[str(audio.resolve())] = {"id": identifier, "path": str(audio), "title": event.get("title") or audio.stem,
-                    "course_code": code, "lecture_id": lecture, "storage_recording_id": event.get("recordingID"), "event_id": event.get("id"), "source_id": event.get("sourceID"), "duration": session.get("durationSeconds"),
-                    "language": event.get("transcriptionLanguage"),
-                    "created_at": event.get("startsAt", ""), "timezone": event.get("timezone", "UTC"), "partial": session.get("partial") is True,
-                    "capture_status": session.get("status"), "capture_reason": session.get("reason", ""),
-                    "audio_available": audio.is_file(),
-                    "stable": audio.is_file() and session.get("status") in {"COMPLETED", "PARTIAL"}
-                        and identifier not in active_ids and event.get("id") not in active_ids
-                        and is_stable(audio, settings["ingestion"]["stable_seconds"]),
-                    "unknown_course": code is not None and code not in course_codes}
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-    for directory in dirs:
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.iterdir()):
-            if not path.is_file() or path.name.startswith('.') or path.suffix.casefold() not in settings['ingestion']['audio_extensions'] or str(path.resolve()) in items:
-                continue
-            resolved = parse_recording_name(path, settings)
-            if resolved is None:
-                continue
-            code, number = resolved
-            items[str(path.resolve())] = {'id': hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:32],
-                'path': str(path), 'title': path.stem, 'course_code': code, 'lecture_id': f'{code}-L{number:02d}',
-                'duration': None, 'created_at': '', 'partial': False,
-                'audio_available': True, 'stable': is_stable(path, settings['ingestion']['stable_seconds'])}
+    from .recording_library import discover
+    for item in discover(workspace):
+        if item['id'] in active_ids or item.get('event_id') in active_ids:
+            item['stable'] = False
+        items[item['path']] = item
     counts = {}
     for item in items.values():
         if item["lecture_id"]:
@@ -166,10 +127,10 @@ def library(workspace, *, query=None, date=None, course=None):
             item["blocking_reasons"].append({"code": "AMBIGUOUS_LEGACY_LECTURE", "message": "Più file usano la stessa destinazione storica: scegli la sorgente prima di trascrivere."})
         state = "NOT_STARTED" if item["stable"] else "WAITING"
         if not item["audio_available"]:
-            item["blocking_reasons"].append({"code": "AUDIO_UNAVAILABLE", "message": "File audio non disponibile. Ripristina il file prima di trascrivere."})
+            item["blocking_reasons"].append({"code": "AUDIO_UNAVAILABLE", "message": "Audio presente nel cloud: scaricalo sul Mac prima di trascrivere." if Path(item['path']).is_file() else "File audio non disponibile. Ricollega il file prima di trascrivere."})
         elif not item["stable"]:
             item["blocking_reasons"].append({"code": "AUDIO_NOT_FINAL", "message": "Audio ancora in registrazione, salvataggio o aggiornamento. Attendi che il salvataggio termini."})
-        path = asr_directory(workspace, item) / "transcript.json"
+        path = Path(item.get("transcript_json") or asr_directory(workspace, item) / "transcript.json")
         if path.is_file():
             try:
                 from .asr import validate_transcript, segments_digest
@@ -177,7 +138,9 @@ def library(workspace, *, query=None, date=None, course=None):
                 if (saved.get("status") == "COMPLETED" and not validate_transcript(saved, saved.get("audio_duration_seconds"))
                         and saved.get("segments_sha256") == segments_digest(saved.get("segments"))):
                     if item["stable"]:
-                        state = "COMPLETED" if Path(item["path"]).stat().st_mtime <= path.stat().st_mtime else "OUTDATED"
+                        audio_stat = Path(item['path']).stat()
+                        verified = item.get('verified_audio') == [audio_stat.st_mtime_ns, audio_stat.st_size] and item.get('audio_sha256') == saved.get('audio_sha256')
+                        state = "COMPLETED" if verified or audio_stat.st_mtime <= path.stat().st_mtime else "OUTDATED"
                         if state == "COMPLETED":
                             if path.with_suffix(".txt").is_file():
                                 item["transcript_text"] = str(path.with_suffix(".txt"))
@@ -203,9 +166,11 @@ def library(workspace, *, query=None, date=None, course=None):
                 detail = {**detail, "error": "Il risultato della trascrizione completata non è più disponibile. Ripristina i file salvati."}
             if state in {"FAILED", "INTERRUPTED", "NEEDS_REVIEW"}:
                 message = str(detail.get("error") or "La trascrizione è stata interrotta prima del completamento.").strip()[:600]
-                item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": message})
+                item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
                 if state == "NEEDS_REVIEW":
                     item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
+        if detail.get('review_path') and Path(detail['review_path']).is_file():
+            item['diagnostic_path'] = detail['review_path']
         item["transcription_status"] = state
         # Existing clients retain the old aggregate status; new clients use the
         # independent transcription state and explicit availability information.
@@ -216,7 +181,7 @@ def library(workspace, *, query=None, date=None, course=None):
             jobs = {row["recording_id"]: row for row in conn.execute("SELECT * FROM jobs ORDER BY created")}
             aliases = {}
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='recording_aliases'").fetchone():
-                aliases = {row["recording_id"]: row for row in conn.execute("SELECT a.*,j.status,j.result,j.pid,j.error FROM recording_aliases a JOIN jobs j ON j.id=a.job_id")}
+                aliases = {row["recording_id"]: row for row in conn.execute("SELECT a.*,j.id AS id,j.status,j.result,j.pid,j.error FROM recording_aliases a JOIN jobs j ON j.id=a.job_id")}
             for item in items.values():
                 if item["transcription_status"] not in {"NOT_STARTED", "RUNNING", "FAILED", "INTERRUPTED", "NEEDS_REVIEW"}:
                     continue
@@ -226,9 +191,17 @@ def library(workspace, *, query=None, date=None, course=None):
                     job = alias
                 else:
                     job = jobs.get(item["id"])
-                if not job or job["status"] == "CANCELLED":
+                if not job:
                     continue
-                job_state = "INTERRUPTED" if job["status"] == "RUNNING" and not _alive(job["pid"]) else job["status"]
+                item['job_id'] = job['id']
+                if job["status"] == "CANCELLED":
+                    if item["transcription_status"] != "COMPLETED":
+                        item["transcription_status"] = item["status"] = "NOT_STARTED" if item["stable"] else "WAITING"
+                        item["warnings"] = [w for w in item["warnings"] if w["code"] != "TRANSCRIPTION_FAILED"]
+                        item["blocking_reasons"] = [r for r in item["blocking_reasons"] if r["code"] not in {"ASR_RESULT_INVALID", "TRANSCRIPT_INVALID", "TRANSCRIPT_UNREADABLE"}]
+                    continue
+                job_state = ("INTERRUPTED" if job["status"] == "RUNNING" else "CANCELLED") if job["status"] in {"RUNNING", "CANCELLING"} and not _alive(job["pid"]) else job["status"]
+                if job_state == 'CANCELLED': job_state = 'NOT_STARTED' 
                 if job_state == "COMPLETED" and job["result"]:
                     result = json.loads(job["result"])
                     # A completed alias is only a pointer. Validate its small
@@ -256,13 +229,36 @@ def library(workspace, *, query=None, date=None, course=None):
                     item["status"] = job_state
                 if job["error"] or job_state == "NEEDS_REVIEW":
                     message = "Trascrizione non riuscita: " + str(job["error"] or "Il risultato non supera i controlli di integrità.").strip()[:600]
-                    item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": message})
+                    item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": "Il motore ha prodotto timestamp non validi. Puoi riprovare da zero; l’audio è conservato." if 'timestamp' in message.casefold() else message})
                     if job_state == "NEEDS_REVIEW":
                         item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
+    queue_state = status(workspace)
     for item in items.values():
-        if item["transcription_status"] in {"QUEUED", "RUNNING"}:
-            item["blocking_reasons"].append({"code": "TRANSCRIPTION_ACTIVE", "message": "La registrazione è già in coda o in trascrizione."})
-        item["can_transcribe"] = item["stable"] and not item["blocking_reasons"] and item["transcription_status"] != "COMPLETED"
+        state = item['transcription_status']
+        jobs_for_item = [j for j in queue_state['jobs'] if j['recording_id'] == item['id']]
+        job = jobs_for_item[-1] if jobs_for_item else None
+        item['job_id'] = item.get('job_id') or (job['id'] if job else None)
+        structural = [r for r in item['blocking_reasons'] if r['code'] not in {'ASR_RESULT_INVALID', 'TRANSCRIPT_INVALID', 'TRANSCRIPT_UNREADABLE', 'AUDIO_CHANGED'}]
+        usable = item['stable'] and not structural
+        item['can_transcribe'] = bool(usable and state not in {'COMPLETED', 'QUEUED', 'RUNNING', 'CANCELLING'})
+        actions = []
+        if usable and state == 'NOT_STARTED': actions.append('enqueue')
+        if usable and state in {'FAILED', 'INTERRUPTED'}: actions.append('retry')
+        if usable and state in {'NEEDS_REVIEW', 'OUTDATED'}: actions.append('restart')
+        if item.get('job_id') and state == 'QUEUED': actions.append('remove')
+        if item.get('job_id') and state == 'RUNNING': actions.append('cancel')
+        if state == 'COMPLETED': actions.append('finish')
+        if not item['audio_available']: actions.append('download' if Path(item['path']).is_file() else 'relink')
+        if usable and state not in {'QUEUED', 'RUNNING', 'CANCELLING'} and item.get('storage_recording_id'):
+            actions.append('associate')
+        item['actions'] = actions
+        item['queue_position'] = job.get('queue_position') if job else None
+        item['wait_reason'] = queue_state.get('wait_reason') if state == 'QUEUED' else None
+        item['status'] = state if state != 'NOT_STARTED' else item['status']
+        item['warnings'] = list({(w['code'], w['message']): w for w in item['warnings']}.values())
+        item['blocking_reasons'] = structural
+        if state in {'QUEUED', 'RUNNING'}:
+            item['can_transcribe'] = False
     values = items.values()
     if query:
         from .capture_calendar import contains
@@ -302,6 +298,8 @@ def settings(workspace):
 
 
 def status(workspace):
+    from .recording_library import records
+    catalogue = records(workspace)
     jobs = []
     labels = _read(root(workspace) / "labels.json", {})
     from .capture_associations import registry
@@ -317,31 +315,49 @@ def status(workspace):
                 if raw_result:
                     result = json.loads(raw_result)
                     job["outputs"] = {key: result[key] for key in ("transcript_json", "transcript_text") if key in result}
+                if job['status'] == 'CANCELLING' and not _alive(job['pid']):
+                    job['status'] = 'CANCELLED'
+                try:
+                    detail = _read(asr_directory(workspace, item['recording']) / 'status.json', {})
+                except (OSError, ValueError):
+                    detail = {}
+                if detail.get('review_path') and Path(detail['review_path']).is_file(): job['diagnostic_path'] = detail['review_path']
                 if job["status"] == "RUNNING":
-                    if not _alive(job["pid"]):
-                        job["status"] = "INTERRUPTED"
-                    detail = _read(asr_directory(workspace, item["recording"]) / "status.json", {})
+                    if not _alive(job["pid"]): job["status"] = "INTERRUPTED"
                     job["phase"], job["elapsed_seconds"] = detail.get("phase"), detail.get("elapsed_seconds")
+                job['actions'] = ({'QUEUED': ['remove'], 'RUNNING': ['cancel'], 'FAILED': ['retry', 'restart'], 'INTERRUPTED': ['retry', 'restart'], 'NEEDS_REVIEW': ['restart'], 'COMPLETED': ['finish']}).get(job['status'], [])
+                current_recording = catalogue.get(job['recording_id'], {})
+                for key in ('export_text', 'archive_status', 'archive_error'):
+                    if key in current_recording: job[key] = current_recording[key]
                 jobs.append(job)
     lease = _read(root(workspace) / "ui.json", {})
     closed = (root(workspace) / "closed" / str(lease.get("session", "none"))).is_file()
-    return {"status": "OK", **settings(workspace), "ui_open": lease.get("expires_at", 0) > time.time() and not closed, "jobs": jobs,
-            "wait_reason": _read(root(workspace) / "wait.json", {}).get("reason")}
+    for position, job in enumerate((j for j in jobs if j['status'] == 'QUEUED'), 1):
+        job['queue_position'] = position
+    current_settings = settings(workspace)
+    ui_open = lease.get('expires_at', 0) > time.time() and not closed
+    wait = _read(root(workspace) / 'wait.json', {}).get('reason')
+    reason = ('In pausa' if current_settings['paused'] else 'In attesa dell’apertura di MyNotes' if not ui_open else 'Slot di trascrizione occupati' if any(j['status'] == 'QUEUED' and j.get('error') for j in jobs) else wait if wait in {'In attesa di memoria disponibile', 'Slot di trascrizione occupati'} else None)
+    return {'status': 'OK', **current_settings, 'ui_open': ui_open, 'jobs': jobs, 'wait_reason': reason}
 
 
 def enqueue(workspace, parallel=1, *, recording_id=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
     if type(parallel) is not int or not 1 <= parallel <= 4:
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
+    from .recording_library import sync
     recordings = library(workspace)
     if recording_id is not None:
         recordings = [item for item in recordings if item["id"] == recording_id]
         if not recordings:
             raise ValueError("Registrazione non trovata")
+    sync(workspace)
     configure(workspace, parallel=parallel)
-    added, skipped = 0, []
+    added, skipped, reuse_archives = 0, [], []
     for item in recordings:
         state = item["transcription_status"]
+        if recording_id is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
+            continue
         if state != "COMPLETED" and not item["can_transcribe"]:
             skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]}); continue
         if state == "COMPLETED" and item.get("storage_recording_id"):
@@ -351,18 +367,12 @@ def enqueue(workspace, parallel=1, *, recording_id=None):
                 if not existing[0].with_suffix(".txt").exists():
                     write_transcript_text(existing[0].with_suffix(".txt"), existing[1])
                 continue
-        if state in {"FAILED", "INTERRUPTED"}:
-            with database(workspace) as conn:
-                conn.execute("BEGIN IMMEDIATE")
-                previous = conn.execute("SELECT * FROM jobs WHERE recording_id=? ORDER BY created DESC LIMIT 1", (item["id"],)).fetchone()
-                if previous is None:
-                    previous = conn.execute("SELECT j.* FROM recording_aliases a JOIN jobs j ON j.id=a.job_id WHERE a.recording_id=?", (item["id"],)).fetchone()
-                if previous and (previous["status"] in {"FAILED", "INTERRUPTED"} or previous["status"] == "RUNNING" and not _alive(previous["pid"])):
-                    # Explicit retry retains the exact profile selected when this
-                    # job was first enqueued, even after course assignment.
-                    conn.execute("UPDATE jobs SET status='QUEUED',pid=NULL,error=NULL,updated=? WHERE id=?", (time.time(), previous["id"]))
-                    added += 1
-                    continue
+        if state in {'FAILED', 'INTERRUPTED', 'NEEDS_REVIEW', 'OUTDATED'}:
+            previous = next((j for j in reversed(status(workspace)['jobs']) if j['recording_id'] == item['id']), None)
+            if previous:
+                change_job(workspace, previous['id'], 'restart' if state in {'NEEDS_REVIEW', 'OUTDATED'} else 'retry')
+                added += 1
+                continue
         course = profile(workspace, item)
         sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
         transcript = asr_directory(workspace, item) / "transcript.json"
@@ -376,15 +386,18 @@ def enqueue(workspace, parallel=1, *, recording_id=None):
                 if not transcript.with_suffix(".txt").exists():
                     write_transcript_text(transcript.with_suffix(".txt"), saved)
                 continue
-            skipped.append({"recording_id": item["id"], "reason": "EXISTING_TRANSCRIPT_NEEDS_REVIEW"}); continue
+            # Preserve the invalid candidate; ASR quarantines it before a new attempt.
+            pass
         now = time.time()
         with database(workspace) as conn:
             conn.execute("BEGIN IMMEDIATE")
             # Identical input/settings at another path are aliases, not two ASR runs.
-            duplicate = conn.execute("SELECT id,status FROM jobs WHERE cache_key=?", (key,)).fetchone()
+            duplicate = conn.execute("SELECT id,status,result FROM jobs WHERE cache_key=?", (key,)).fetchone()
             if duplicate:
                 stat = Path(item['path']).stat()
                 conn.execute("INSERT OR REPLACE INTO recording_aliases VALUES (?,?,?,?)", (item['id'], duplicate['id'], stat.st_mtime_ns, stat.st_size))
+                if duplicate['status'] == 'COMPLETED' and duplicate['result']:
+                    reuse_archives.append((item, json.loads(duplicate['result'])['transcript_json']))
                 if duplicate['status'] == 'CANCELLED':
                     conn.execute("UPDATE jobs SET status='QUEUED',recording_id=?,payload=?,updated=?,error=NULL WHERE id=?", (item['id'], json.dumps({'recording':item,'audio_sha256':sha,'settings_hash':signature,'course_profile':course}), now, duplicate['id']))
                     added += 1
@@ -392,7 +405,10 @@ def enqueue(workspace, parallel=1, *, recording_id=None):
             cur = conn.execute("INSERT OR IGNORE INTO jobs VALUES (?,?,?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, item["id"], key,
                 json.dumps({"recording": item, "audio_sha256": sha, "settings_hash": signature, "course_profile": course}), "QUEUED", now, now, None, None, None))
             added += cur.rowcount
-    return {"status": "QUEUED", "added": added, "skipped": skipped, "queue": status(workspace)}
+    from .recording_library import finish
+    for item, path in reuse_archives:
+        finish(workspace, item, path)
+    return {"status": "QUEUED", "added": added, "completed_reused": len(reuse_archives), "skipped": skipped, "queue": status(workspace)}
 
 
 def configure(workspace, *, parallel=None, paused=None):
@@ -448,6 +464,8 @@ def run_job(workspace, identifier, *, engines=None):
             raise ValueError("Queue worker does not own this job")
         payload = json.loads(row["payload"])
     item, outcome, result, error = payload["recording"], "FAILED", None, None
+    from .recording_library import resolve_path
+    item['path'] = str(resolve_path(workspace, item['path']))
     try:
         course = payload.get("course_profile") or profile(workspace, item)
         sha, signature, key, registry = cache_identity(workspace, course, Path(item["path"]), engines=engines)
@@ -460,15 +478,13 @@ def run_job(workspace, identifier, *, engines=None):
                     raise ValueError("Completa il setup della trascrizione locale")
                 if isinstance(engine, ArgmaxEngine) and not any((p / "AudioEncoder.mlmodelc").is_dir() for p in engine.model_dir.rglob("*" + course["transcription"][name.replace("engine", "model")])):
                     raise ValueError("Completa il download del modello nel setup prima di trascrivere")
-        if item.get("lecture_id") and not item.get("storage_recording_id") and not item.get("language"):
-            from .transcription import run_transcription
-            result = run_transcription(workspace, item["lecture_id"], Path(item["path"]), engines=engines)
-        else:
-            manifest = transcribe_audio(workspace, item.get("lecture_id") or item["id"], course, Path(item["path"]),
-                                        recording_id=item["id"] if item.get("storage_recording_id") or not item.get("lecture_id") else None, engines=engines)
-            directory = asr_directory(workspace, item)
-            result = {"status": manifest["status"], "transcript_json": str(directory / "transcript.json"),
-                      "transcript_text": str(directory / "transcript.txt"), "segments": len(manifest["segments"])}
+        manifest = transcribe_audio(workspace, item.get('lecture_id') or item['id'], course, Path(item['path']),
+            recording_id=item['id'] if item.get('storage_recording_id') or not item.get('lecture_id') else None,
+            engines=engines, force=payload.get('force', False))
+        directory = asr_directory(workspace, item)
+        result = {'status': manifest['status'], 'transcript_json': str(directory / 'transcript.json'),
+            'transcript_text': str(directory / 'transcript.txt'), 'segments': len(manifest['segments']),
+            **{k: manifest[k] for k in ('archive_status', 'archive_error', 'current_audio_path', 'export_text') if k in manifest}}
         outcome = "COMPLETED"
     except ASRBusyError as e:
         outcome, error = "QUEUED", str(e)
@@ -480,7 +496,16 @@ def run_job(workspace, identifier, *, engines=None):
         outcome, error = "FAILED", str(e)
     finally:
         with database(workspace) as conn:
-            conn.execute("UPDATE jobs SET status=?, updated=?, error=?, result=?, pid=NULL WHERE id=?", (outcome, time.time(), error, json.dumps(result) if result else None, identifier))
+            conn.execute("UPDATE jobs SET status=CASE WHEN status='CANCELLING' THEN 'CANCELLED' ELSE ? END, updated=?, error=?, result=?, pid=NULL WHERE id=? AND status IN ('RUNNING','CANCELLING') AND pid=? AND payload=?", (outcome, time.time(), error, json.dumps(result) if result else None, identifier, os.getpid(), row['payload']))
+    if outcome == 'COMPLETED' and result:
+        from .recording_library import discover, finish
+        with database(workspace, readonly=True) as conn:
+            committed = conn.execute("SELECT status FROM jobs WHERE id=?", (identifier,)).fetchone()
+            ids = {r['recording_id'] for r in conn.execute('SELECT recording_id FROM recording_aliases WHERE job_id=?', (identifier,))}
+        if committed and committed['status'] == 'COMPLETED':
+            for alias in discover(workspace):
+                if alias['id'] in ids and alias['id'] != item['id']:
+                    finish(workspace, alias, result['transcript_json'])
     return {"status": outcome, "job": identifier, **(result or {}), **({"message": error} if error else {})}
 
 
@@ -501,12 +526,16 @@ def run(workspace, *, tick=1):
                     del children[key]
                     with database(workspace) as conn:
                         conn.execute("UPDATE jobs SET status='INTERRUPTED',error='Worker stopped before completion',pid=NULL,updated=? WHERE id=? AND status='RUNNING'", (time.time(), key))
+            with database(workspace) as conn:
+                for row in conn.execute("SELECT id,status,pid FROM jobs WHERE status IN ('RUNNING','CANCELLING')").fetchall():
+                    if not _alive(row['pid']):
+                        conn.execute('UPDATE jobs SET status=?,pid=NULL,updated=? WHERE id=? AND pid IS ?', ('CANCELLED' if row['status'] == 'CANCELLING' else 'INTERRUPTED', time.time(), row['id'], row['pid']))
             snapshot = status(workspace)
             ready = snapshot["ui_open"] and not snapshot["paused"]
             if not ready and not children:
                 return
             recorder = capture_status(CaptureStore(workspace))
-            blocked = recorder["running"] is not False and (recorder["runtime"].get("recording") or recorder["runtime"].get("exporting"))
+            blocked = False  # Independent stable audio may transcribe while the microphone records.
             if time.monotonic() - pressure_checked >= 15:
                 pressure_checked = time.monotonic()
                 try:
@@ -524,6 +553,9 @@ def run(workspace, *, tick=1):
                 if pending:
                     with database(workspace) as conn:
                         conn.execute("BEGIN IMMEDIATE")
+                        owned = conn.execute("SELECT status FROM jobs WHERE id=?", (pending['id'],)).fetchone()
+                        if not owned or owned['status'] != 'QUEUED':
+                            continue
                         # The child waits for the parent to commit its claim.
                         child = subprocess.Popen(_worker_command(workspace, "worker", pending["id"]), stdin=subprocess.DEVNULL,
                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -534,14 +566,55 @@ def run(workspace, *, tick=1):
             time.sleep(tick)
 
 
+def change_job(workspace, identifier, action):
+    """Serialize user transitions with runner claims; keep attempt files intact."""
+    import signal
+    from .recording_library import resolve_path
+    pid = None
+    with database(workspace) as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT * FROM jobs WHERE id=?', (identifier,)).fetchone()
+        if row is None:
+            raise ValueError('Lavoro non trovato')
+        live = row['pid'] and _alive(row['pid'])
+        if action == 'remove' and row['status'] != 'QUEUED':
+            raise ValueError('Solo un lavoro in attesa può essere rimosso dalla coda')
+        if action in {'retry', 'restart'} and live:
+            raise ValueError('Attendi che la trascrizione attiva termini')
+        payload = json.loads(row['payload'])
+        if action in {'retry', 'restart'}:
+            item = payload['recording']
+            item['path'] = str(resolve_path(workspace, item['path']))
+            from .ingestion import is_stable
+            if not Path(item['path']).is_file() or not is_stable(Path(item['path']), workspace.configuration_store().load()['ingestion']['stable_seconds']):
+                raise ValueError('Audio mancante o ancora in aggiornamento')
+            from .asr import cache_identity
+            course = payload.get('course_profile') or profile(workspace, item)
+            sha, signature, key, _ = cache_identity(workspace, course, Path(item['path']))
+            if sha != payload['audio_sha256']:
+                raise ValueError('L’audio è cambiato: aggiungilo come nuova sorgente')
+            payload.update(course_profile=course, settings_hash=signature, force=action == 'restart', _claim=uuid.uuid4().hex)
+            conn.execute("UPDATE jobs SET status='QUEUED',payload=?,cache_key=?,error=NULL,pid=NULL,updated=? WHERE id=?", (json.dumps(payload), key, time.time(), identifier))
+        else:
+            pid = row['pid'] if action == 'cancel' and live else None
+            state = 'CANCELLING' if pid else 'CANCELLED'
+            conn.execute('UPDATE jobs SET status=?,error=NULL,updated=? WHERE id=?', (state, time.time(), identifier))
+    if pid:
+        # The worker's SIGTERM handler tears down only its own dedicated ASR group.
+        try: os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError: pass
+    return {'status': 'OK', 'message': 'Interruzione richiesta; audio conservato.' if pid else 'Registrazione rimossa dalla coda; audio conservato.' if action == 'remove' else 'Nuovo tentativo aggiunto alla coda.'}
+
+
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "enqueue", "status", "pause", "resume", "configure", "heartbeat", "close", "retry", "remove", "rename", "run", "worker"):
+    for action in ("library", "enqueue", "status", "pause", "resume", "configure", "heartbeat", "close", "retry", "restart", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
         if action == "library":
+            command.add_argument("--sync", action="store_true")
             command.add_argument("--query")
             command.add_argument("--date", help="event date in its calendar timezone, YYYY-MM-DD")
             command.add_argument("--course")
@@ -553,8 +626,15 @@ def add_parser(subparsers):
             target.add_argument("--recording", help="enqueue only this recording ID")
         if action in {"heartbeat", "close"}:
             command.add_argument("--session", required=True)
-        if action in {"worker", "retry", "remove"}:
+        if action in {"worker", "retry", "restart", "remove", "cancel"}:
             command.add_argument("--job", required=True)
+        if action in {'folder', 'relink'}:
+            command.add_argument('--path', required=True)
+        if action in {'finish', 'relink', 'download', 'associate'}:
+            command.add_argument('--recording', required=True)
+        if action == 'associate':
+            command.add_argument('--course', required=True)
+            command.add_argument('--lesson', type=int)
         if action == "rename":
             command.add_argument("--recording", required=True)
             command.add_argument("--title", required=True)
@@ -566,7 +646,9 @@ def run_cli(args):
     if not ws.is_initialized():
         raise ValueError("Initialize MyNotes first")
     if action == "library":
-        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course)}
+        from .recording_library import sync, folder, options
+        if getattr(args, 'sync', False): sync(ws)
+        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "folder_configured": bool(options(ws).get("folder"))}
     elif action == "enqueue":
         value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
     elif action == "status":
@@ -591,16 +673,33 @@ def run_cli(args):
             labels[args.recording] = title
             atomic_json_write(root(ws) / "labels.json", labels)
         value = {"status": "OK"}
-    elif action in {"retry", "remove"}:
-        with database(ws) as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute("SELECT status,pid FROM jobs WHERE id=?", (args.job,)).fetchone()
-            if row is None or (row["status"] == "RUNNING" and _alive(row["pid"])):
-                raise ValueError("Finish the active job before changing it")
-            conn.execute("UPDATE jobs SET status=?,error=NULL,pid=NULL,updated=? WHERE id=?", ("QUEUED" if action == "retry" else "CANCELLED", time.time(), args.job))
-        value = {"status": "OK"}
-        if action == "retry":
-            launch_runner(ws)
+    elif action in {'retry', 'restart', 'remove', 'cancel'}:
+        value = change_job(ws, args.job, action)
+        if action in {'retry', 'restart'}: launch_runner(ws)
+    elif action == 'folder':
+        from .recording_library import set_folder
+        value = set_folder(ws, args.path)
+    elif action == 'download':
+        from .ingestion import hydrate
+        from .recording_library import sync
+        item = next((r for r in library(ws) if r['id'] == args.recording), None)
+        if not item or not Path(item['path']).is_file(): raise ValueError('Audio non trovato: ripristinalo dal Finder')
+        hydrate(Path(item['path'])); sync(ws)
+        value = {'status': 'OK', 'message': 'Audio disponibile sul Mac.'}
+    elif action == 'associate':
+        from .capture_associations import assign
+        from .capture import CaptureStore
+        value = assign(CaptureStore(ws), {'assignments': [{'recordingID': args.recording, 'courseCode': args.course, 'lessonNumber': args.lesson}]})
+    elif action == 'relink':
+        from .recording_library import relink
+        value = relink(ws, args.recording, args.path)
+    elif action == 'finish':
+        from .recording_library import finish
+        item = next((r for r in library(ws) if r['id'] == args.recording), None)
+        if not item: raise ValueError('Registrazione non trovata')
+        value = {'status': 'OK', **finish(ws, item, item.get('transcript_json') or asr_directory(ws, item) / 'transcript.json')}
+        if value.get('archive_status') == 'PENDING':
+            value.update(status='DEFERRED', message=value.get('archive_error'))
     elif action == "worker":
         value = run_job(ws, args.job)
     else:

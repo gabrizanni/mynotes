@@ -179,3 +179,25 @@ Chat uses `transcription-queue library` to identify title/date and
 the window closed. `transcription-status --recording ID --json` reports progress.
 Repeated requests and later course assignment reuse validated output and its
 original profile. Text, slide and document imports keep their existing paths.
+
+## Original audio library and recovery (0.2.14)
+
+Agree on the original-audio folder during setup. Capture shows its path with
+Open folder / Change folder. Folder changes wait until capture and ASR are idle,
+back up existing originals privately and migrate them without replacing names.
+Any supported audio filename is discoverable; course assignment is optional.
+The library includes the inbox, processate and the existing processed archive;
+backup and transcript folders are not imported as audio.
+
+Transcription starts only on request and can run while another lesson records.
+Queued items expose Remove from queue; active items expose Interrupt transcription.
+Removing a job preserves its original and permits enqueueing again. Failed or
+interrupted attempts expose Retry; invalid results expose Retry from scratch.
+Worker claims and cancellation are serialized; previous attempts/logs are retained.
+
+After validation, technical ASR outputs stay private. A readable TXT copy is
+exported under Trascrizioni/COURSE (or Senza corso), then the unchanged original
+moves into processate. Failed exports/moves show an incomplete-archive action
+that does not run ASR again. Course reassignment relocates the exported TXT.
+User-edited TXT copies are preserved and reported instead of silently overwritten.
+The folder's historical processed membership alone does not certify a transcript.

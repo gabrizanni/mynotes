@@ -182,15 +182,20 @@ Configuration: `config/capture.json`. Timetable and runtime: `state/capture/`.
 Versions are retained under `state/capture/history/`; commands use a local file
 mailbox with responses and attempt manifests. Audio staging is in local application
 support, outside synced course folders. Keep the operational workspace local.
-The default inbox is `recordings/capture/` under the workspace; a chosen final
-inbox may be on a synced drive.
+Agree on the original-audio folder with the user before the first recording,
+then save it with `transcription-queue folder --path PATH`. The legacy default is
+`recordings/capture/`; the confirmed user folder may be on a synced drive.
+Capture shows the folder and offers Open folder / Change folder.
 
 Audio is mono 44.1 kHz AAC at 128 kbps, segmented every five minutes. Export
 validates every segment and total duration, then exclusively renames the finished
-file in its destination filesystem. Existing files are retained. Metadata in
-`COURSE_L01.m4a.capture.json` carries coverage information. MyNotes discovery keeps
-the canonical file available and flags partial recordings; hidden staging and
-microphone tests are excluded.
+file in its destination filesystem. Existing files are retained. Coverage metadata
+stays in private native sessions and the recording catalogue; historical sidecars
+remain readable for compatibility. Hidden staging and microphone tests are excluded.
+All supported audio names appear in the library. Successful validated transcription
+exports TXT under `Trascrizioni/COURSE` (or `Senza corso`), then moves the unchanged
+original into `processate`. Normalized audio, JSON, caches and logs remain private.
+Export/archive failures can be retried without running speech recognition again.
 
 Sleep/termination closes the current segment and preserves the attempt. A wake
 within the window can resume the same unambiguous interrupted attempt; the result

@@ -1,4 +1,4 @@
-"""Private, authoritative metadata links. Audio and ASR outputs never move."""
+"""Private, authoritative metadata links; ASR provenance stays stable after archival."""
 from __future__ import annotations
 
 import copy
@@ -139,7 +139,13 @@ def assign(store, payload):
                 atomic_json_write(path, metadata)
             store.save_schedule(events,config)
             store.save_config(config)
-            return {'status':'ASSIGNED','recordingIDs':updated}
+            result = {'status':'ASSIGNED','recordingIDs':updated}
+    # File export runs outside both control/queue transactions. Association never reruns ASR.
+    from .recording_library import finish
+    for item in queue.library(store.workspace):
+        if item['id'] in updated and item.get('transcription_status') == 'COMPLETED' and item.get('transcript_json'):
+            finish(store.workspace, item, item['transcript_json'])
+    return result
 
 
 def linked_recording(workspace, lecture_id):
