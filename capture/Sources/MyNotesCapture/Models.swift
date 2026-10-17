@@ -53,6 +53,9 @@ struct Lecture: Codable, Identifiable, Equatable {
         if let code = courseCode, let number = lessonNumber {
             return String(format: "%@_L%02d.m4a", code, number)
         }
+        return legacyFilename
+    }
+    var legacyFilename: String {
         if let recordingID {
             let slug = String(title.unicodeScalars.map { $0.isASCII && CharacterSet.alphanumerics.contains($0) ? String($0) : "-" }.joined().prefix(64))
             return "\(Int(startsAt.timeIntervalSince1970))-\(slug)-\(recordingID).m4a"

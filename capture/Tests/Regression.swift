@@ -52,6 +52,16 @@ struct Regression {
         stale.requestID = replayID
         try CaptureJSON.save(stale, to: root.appendingPathComponent("state/capture/sessions/\(stale.id).json"))
         let engine = try CaptureEngine(workspace: root, authorization: { false })
+        var named = scheduled
+        named.title = "QNT 03"; named.courseCode = "QNT9"; named.lessonNumber = 3
+        let legacyOutput = URL(fileURLWithPath: config.outputDirectory).appendingPathComponent(named.legacyFilename)
+        try FileManager.default.createDirectory(at: legacyOutput.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("previous original".utf8).write(to: legacyOutput)
+        precondition(engine.outputExists(named), "Existing UUID-named outputs must prevent new recordings after a naming upgrade")
+        try FileManager.default.removeItem(at: legacyOutput)
+        let canonicalOutput = legacyOutput.deletingLastPathComponent().appendingPathComponent(named.filename)
+        try Data("renamed original".utf8).write(to: canonicalOutput)
+        precondition(engine.outputExists(named), "Canonical outputs must also prevent duplicate acquisition")
         precondition(engine.sessions.first?.status == "INTERRUPTED", "Restart must preserve interrupted session")
         let requestDirectory = root.appendingPathComponent("state/capture/requests")
         let responseDirectory = root.appendingPathComponent("state/capture/responses")

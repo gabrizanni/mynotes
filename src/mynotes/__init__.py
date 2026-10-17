@@ -4,4 +4,4 @@ from .workspace import WORKSPACE_SCHEMA_VERSION, Workspace, WorkspaceError
 
 __all__ = ["WORKSPACE_SCHEMA_VERSION", "Workspace", "WorkspaceError"]
 
-__version__ = "0.2.17"
+__version__ = "0.2.18"

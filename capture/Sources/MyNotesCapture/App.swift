@@ -476,8 +476,14 @@ final class CaptureEngine: NSObject {
         }
     }
 
-    private func outputExists(_ event: Lecture) -> Bool {
-        FileManager.default.fileExists(atPath: outputDirectory.appendingPathComponent(event.filename).path)
+    func outputExists(_ event: Lecture) -> Bool {
+        // A naming upgrade must not re-record or re-export an existing original.
+        let candidates = [event.filename, event.legacyFilename].map { outputDirectory.appendingPathComponent($0).path }
+        if candidates.contains(where: { FileManager.default.fileExists(atPath: $0) }) { return true }
+        return sessions.contains { session in
+            guard session.event.id == event.id, let path = session.outputPath else { return false }
+            return FileManager.default.fileExists(atPath: path)
+        }
     }
     private func isExporting(_ event: Lecture) -> Bool { sessions.contains { $0.event.lectureID == event.lectureID && exporting.contains($0.id) } }
     private func loadSessions() {
