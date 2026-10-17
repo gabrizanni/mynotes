@@ -61,6 +61,7 @@ struct CaptureEvent: Codable, Identifiable {
 }
 struct CaptureSession: Codable {
     var id: String; var event: CaptureSessionEvent; var status: String; var outputPath: String?
+    var actualStart: String?
 }
 struct CaptureSessionEvent: Codable {
     var id: String; var courseCode: String?; var lessonNumber: Int?; var title: String?
@@ -179,5 +180,76 @@ struct CaptureQueue: Codable {
     var parallel: Int; var paused: Bool; var uiOpen: Bool; var jobs: [CaptureQueueJob]
     var waitReason: String?
     enum CodingKeys: String, CodingKey { case parallel, paused, jobs; case uiOpen = "ui_open", waitReason = "wait_reason" }
+}
+
+enum CaptureRecordingFilter: String, CaseIterable, Identifiable {
+    case all, ready, active, review, completed
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .all: return "Tutte"
+        case .ready: return "Pronte"
+        case .active: return "In coda"
+        case .review: return "Da verificare"
+        case .completed: return "Trascritte"
+        }
+    }
+    func includes(_ item: CaptureRecording) -> Bool {
+        switch self {
+        case .all: return true
+        case .ready: return item.transcriptionState == "NOT_STARTED" && (item.actions?.contains("enqueue") ?? item.transcriptionAllowed)
+        case .active: return ["QUEUED", "RUNNING", "CANCELLING"].contains(item.transcriptionState)
+        case .review: return ["FAILED", "INTERRUPTED", "NEEDS_REVIEW", "OUTDATED", "WAITING"].contains(item.transcriptionState) || item.archiveStatus == "PENDING"
+        case .completed: return item.isTranscribed
+        }
+    }
+}
+
+extension CaptureQueue {
+    // Old attempts remain in history, rather than competing with a newer
+    // request for the same original in the main queue or its counters.
+    var currentJobs: [CaptureQueueJob] {
+        var latest: [String: Int] = [:]
+        for (index, job) in jobs.enumerated() { latest[job.recordingID] = index }
+        return jobs.enumerated().filter { latest[$0.element.recordingID] == $0.offset }.map(\.element)
+    }
+    var activeJobs: [CaptureQueueJob] { currentJobs.filter { ["RUNNING", "QUEUED", "CANCELLING"].contains($0.status) } }
+    var reviewJobs: [CaptureQueueJob] { currentJobs.filter { ["FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains($0.status) || $0.archiveStatus == "PENDING" } }
+    var historyJobs: [CaptureQueueJob] {
+        let visible = Set((activeJobs + reviewJobs).map(\.id))
+        return jobs.reversed().filter { !visible.contains($0.id) }
+    }
+}
+
+enum CaptureProblem {
+    static func summary(status: String) -> String {
+        switch status {
+        case "NEEDS_REVIEW": return "Il risultato non supera i controlli. L’audio è conservato; puoi avviare una nuova trascrizione da zero."
+        case "INTERRUPTED", "CANCELLED": return "La trascrizione è stata interrotta. Audio e tentativi precedenti sono conservati."
+        case "OUTDATED": return "L’audio è cambiato rispetto alla trascrizione salvata. Verifica la sorgente prima di riprovare."
+        case "WAITING": return "L’audio non è ancora pronto: potrebbe essere in salvataggio, assente o disponibile soltanto nel cloud."
+        default: return "La trascrizione non è riuscita. L’audio è conservato; controlla i dettagli e riprova."
+        }
+    }
+}
+extension CaptureRecording {
+    var hasProblem: Bool { ["FAILED", "INTERRUPTED", "NEEDS_REVIEW", "OUTDATED", "WAITING"].contains(transcriptionState) }
+    var detailMessages: [String] {
+        var seen = Set<String>()
+        return ((warnings ?? []) + (blockingReasons ?? [])).compactMap {
+            let text = $0.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty && seen.insert(text).inserted ? text : nil
+        }
+    }
+    func arguments(for action: String, parallel: Int) -> [String]? {
+        switch action {
+        case "remove", "cancel", "retry", "restart":
+            guard let jobID, !jobID.isEmpty else { return nil }
+            return ["--job", jobID]
+        case "download", "finish": return ["--recording", id]
+        case "enqueue": return ["--recording", id, "--parallel", String(parallel)]
+        default: return nil
+        }
+    }
 }
 

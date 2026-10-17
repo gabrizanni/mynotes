@@ -43,14 +43,20 @@ struct CaptureView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
             if let error = model.error { ScrollView { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 80) }
-            if let notice = model.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            if let notice = model.notice {
+                HStack {
+                    Label(notice, systemImage: "checkmark.circle").font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button { model.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Chiudi messaggio")
+                }
+            }
             if let warning = model.refreshWarning { Label(warning, systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let snapshot {
                 status(snapshot)
                 Picker("Vista Capture", selection: $section) {
                     Text("Calendario").tag("calendar")
                     Text("Registrazioni").tag("recordings")
-                    Text("Trascrizioni").tag("transcriptions")
+                    Text("Coda").tag("transcriptions")
                 }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 460)
                 if section == "calendar" { HSplitView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -63,6 +69,11 @@ struct CaptureView: View {
                 ContentUnavailableView("Capture non disponibile", systemImage: "calendar.badge.clock", description: Text("Completa il setup di MyNotes e premi Aggiorna. Puoi registrare anche senza corso."))
             }
         }.padding(24)
+        .task(id: model.notice) {
+            guard let message = model.notice else { return }
+            try? await Task.sleep(for: .seconds(10))
+            if !Task.isCancelled && model.notice == message { model.notice = nil }
+        }
         .onAppear { if active { refreshVisible() } }
         .onReceive(poll) { date in
             if active && scenePhase == .active && sheet == nil && model.claimPoll(at: date) {
@@ -97,11 +108,10 @@ struct CaptureView: View {
     private var header: some View {
         HStack(spacing: 12) {
             if let path = Bundle.main.url(forResource: "MyNotesCaptureLogo", withExtension: "png"), let logo = NSImage(contentsOf: path) {
-                Image(nsImage: logo).resizable().scaledToFit().frame(width: 48, height: 48).accessibilityHidden(true)
+                Image(nsImage: logo).resizable().scaledToFit().frame(width: 32, height: 32).accessibilityHidden(true)
             } else { Image(systemName: "mic.fill").font(.largeTitle).foregroundStyle(.blue) }
             VStack(alignment: .leading) {
-                Text("Capture").font(.largeTitle.bold())
-                Text("Calendari e registrazioni delle tue lezioni.").foregroundStyle(.secondary)
+                Text("Capture").font(.title2.bold())
                 if let count = snapshot?.courses.filter({ $0.contextPending == true }).count, count > 0 {
                     Text(count == 1 ? "1 corso da completare nella prossima chat" : "\(count) corsi da completare nella prossima chat").font(.caption).foregroundStyle(.secondary)
                 }
@@ -110,8 +120,16 @@ struct CaptureView: View {
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
             Button("Aggiorna") { Task { await model.refresh(includeLibrary: section != "calendar") } }.disabled(model.busy)
-            Button("Nuovo corso", systemImage: "plus") { sheet = .course }.disabled(model.busy || model.isPreview)
-            Button("Programma", systemImage: "calendar.badge.plus") { openLesson(.scheduled) }.disabled(unavailable)
+            if section == "calendar" {
+                Button("Programma lezione", systemImage: "calendar.badge.plus") { openLesson(.scheduled) }.disabled(unavailable)
+            }
+            Menu("Opzioni Capture") {
+                Button("Nuovo corso…") { sheet = .course }.disabled(model.busy || model.isPreview)
+                if let snapshot {
+                    Button(snapshot.paused ? "Riprendi calendario" : "Sospendi calendario") { Task { await model.perform(snapshot.paused ? "resume" : "pause") } }.disabled(!snapshot.enabled || model.busy || model.isPreview)
+                    Button(snapshot.enabled ? "Disattiva Capture" : "Attiva Capture") { Task { await model.perform(snapshot.enabled ? "disable" : "enable") } }.disabled(snapshot.isRecording || snapshot.isExporting || model.busy || model.isPreview)
+                }
+            }.fixedSize()
             Button("Registra ora", systemImage: "record.circle") { openLesson(.immediate) }.buttonStyle(.borderedProminent).disabled(unavailable || snapshot?.running != true || snapshot?.runtime.recording == true || snapshot?.runtime.exporting == true)
         }
     }
@@ -122,14 +140,19 @@ struct CaptureView: View {
                 .foregroundStyle(snapshot.isRecording ? Color.red : Color.primary)
             if let current = snapshot.runtime.currentSession, snapshot.isRecording {
                 Text(current.event.courseLabel).font(.callout)
+                if let start = CaptureDates.read(current.actualStart) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let seconds = max(0, Int(context.date.timeIntervalSince(start)))
+                        Text(String(format: "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)).monospacedDigit().font(.callout)
+                    }
+                }
             }
             Spacer()
             Text(snapshot.runtime.microphonePermission == "AUTHORIZED" ? "Microfono autorizzato" : "Microfono da verificare").font(.caption).foregroundStyle(.secondary)
             Group { if snapshot.isRecording {
                 Button("Stop e salva") { Task { await model.stopNow() } }.disabled(model.stopping || model.isPreview)
             } else {
-                Button(snapshot.paused ? "Riprendi" : "Pausa") { Task { await model.perform(snapshot.paused ? "resume" : "pause") } }.disabled(!snapshot.enabled)
-                Button(snapshot.enabled ? "Disattiva Capture" : "Attiva Capture") { Task { await model.perform(snapshot.enabled ? "disable" : "enable") } }.disabled(snapshot.running != false && snapshot.runtime.exporting == true)
+                if snapshot.paused { Text("Calendario sospeso").font(.callout).foregroundStyle(.secondary) }
             } }.disabled(snapshot.isRecording ? model.stopping || model.isPreview : model.busy || model.isPreview)
         }.padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }

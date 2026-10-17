@@ -315,6 +315,78 @@ import Combine
         } catch { if version == revision { self.notice = nil; self.error = error.localizedDescription } }
     }
 
+    func recordingAction(_ action: String, item: CaptureRecording) async {
+        guard let arguments = item.arguments(for: action, parallel: queue?.parallel ?? 1) else {
+            notice = nil
+            error = "Il comando non è disponibile per questa registrazione. Premi Aggiorna per ricaricare lo stato."
+            return
+        }
+        await queueAction(action, arguments: arguments)
+        if error == nil, let message = notice { notice = "\(item.title): \(message)" }
+    }
+
+    func enqueueSelection(_ items: [CaptureRecording], selectedCount: Int) async {
+        guard !queueBusy, !busy, !isPreview else { return }
+        let ready = items.filter { CaptureRecordingFilter.ready.includes($0) }
+        guard !ready.isEmpty else { error = "Nessun audio selezionato è pronto da trascrivere."; return }
+        invalidateReads(); let version = revision
+        queueBusy = true; notice = nil; error = nil
+        defer { queueBusy = false }
+        var added = 0
+        var problems: [String] = []
+        let parallel = queue?.parallel ?? 1
+        for item in ready {
+            do {
+                let executable = context.launcher, workspace = context.workspace
+                let data = try await Task.detached { try Self.invoke(executable, workspace, "enqueue", ["--recording", item.id, "--parallel", String(parallel)], nil, group: "transcription-queue") }.value
+                let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+                guard result["status"] as? String == "QUEUED" else {
+                    throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: Self.queueMessage(result["message"] as? String) ?? "Inserimento non riuscito."])
+                }
+                added += result["added"] as? Int ?? 0
+                if let skipped = result["skipped"] as? [[String: Any]], !skipped.isEmpty { problems.append("\(item.title): audio non più pronto.") }
+            } catch { problems.append("\(item.title): \(error.localizedDescription)") }
+        }
+        let excluded = max(0, selectedCount-ready.count)
+        notice = (added == 1 ? "1 registrazione aggiunta alla coda." : "\(added) registrazioni aggiunte alla coda.") + (excluded > 0 ? " \(excluded) escluse perché non pronte." : "")
+        if !problems.isEmpty { error = problems.prefix(3).joined(separator: " ") }
+        do { try await reconcile(version: version, includeLibrary: true) }
+        catch { refreshWarning = "Impossibile aggiornare la vista. Premi Aggiorna per verificare i lavori aggiunti." }
+    }
+
+    func openAudio(_ path: String) {
+        notice = nil; error = nil
+        guard FileManager.default.fileExists(atPath: path) else {
+            error = "Audio non disponibile in questa posizione. Premi Aggiorna oppure ricollega il file."
+            return
+        }
+        guard let player = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.QuickTimePlayerX") else {
+            error = "QuickTime Player non è disponibile. Usa Mostra nel Finder per aprire l’audio con un altro lettore."
+            return
+        }
+        NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: player, configuration: NSWorkspace.OpenConfiguration()) { [weak self] _, failure in
+            if let failure {
+                let message = failure.localizedDescription
+                Task { @MainActor [weak self] in self?.error = "Impossibile aprire l’audio in QuickTime: \(message)" }
+            }
+        }
+    }
+    func openFile(_ path: String) {
+        notice = nil; error = nil
+        guard FileManager.default.fileExists(atPath: path), NSWorkspace.shared.open(URL(fileURLWithPath: path)) else {
+            error = "Impossibile aprire il file. Potrebbe essere stato spostato o non essere disponibile sul Mac. Premi Aggiorna per controllare il collegamento."
+            return
+        }
+    }
+    func revealFile(_ path: String) {
+        notice = nil; error = nil
+        guard FileManager.default.fileExists(atPath: path) else {
+            error = "Il file non è più in questa posizione. Premi Aggiorna oppure ricollega l’audio."
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
     func addCourse(_ name: String) async -> Bool {
         guard !busy, !queueBusy, !isPreview else { return false }
         invalidateReads(); let version = revision
