@@ -60,6 +60,7 @@ struct CaptureRecordingsView: View {
     }
     private var pendingRecordings: [CaptureRecording] { model.recordings.filter { CaptureRecordingFilter.ready.includes($0) && ($0.collection ?? "inbox") == "inbox" } }
     private var pendingCount: Int { pendingRecordings.count }
+    private var readyCount: Int { model.recordings.filter { CaptureRecordingFilter.ready.includes($0) }.count }
     private var selectedReady: [CaptureRecording] { recordings.filter { selected.contains($0.id) && CaptureRecordingFilter.ready.includes($0) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -114,7 +115,7 @@ struct CaptureRecordingsView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(queueVisible ? "Coda trascrizioni" : "Registrazioni").font(.title3.bold())
-                Text(queueVisible ? "\(model.queue?.activeJobs.filter { $0.status == "RUNNING" }.count ?? 0) in corso · \(model.queue?.activeJobs.filter { $0.status == "QUEUED" }.count ?? 0) in attesa · \(model.queue?.currentJobs.filter { $0.status == "COMPLETED" }.count ?? 0) completate" : "\(model.recordings.count) audio · \(pendingCount) pronti da trascrivere")
+                Text(queueVisible ? "\(model.queue?.activeJobs.filter { $0.status == "RUNNING" }.count ?? 0) in corso · \(model.queue?.activeJobs.filter { $0.status == "QUEUED" }.count ?? 0) in attesa · \(model.queue?.currentJobs.filter { $0.status == "COMPLETED" }.count ?? 0) completate" : "\(model.recordings.count) audio · \(readyCount) pronti, di cui \(pendingCount) non archiviati")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -127,13 +128,13 @@ struct CaptureRecordingsView: View {
                     .help("La pausa lascia terminare le trascrizioni già avviate.")
             }
             if !queueVisible {
-                Button(selected.count > 1 ? "Trascrivi selezionate (\(selectedReady.count))" : "Trascrivi tutte le pronte (\(pendingCount))", systemImage: "text.badge.plus") {
+                Button(selected.count > 1 ? "Trascrivi selezionate (\(selectedReady.count))" : "Trascrivi pronte non archiviate (\(pendingCount))", systemImage: "text.badge.plus") {
                     Task {
                         if selected.count > 1 { await model.enqueueSelection(selectedReady, selectedCount: selected.count) }
                         else { await model.enqueueSelection(pendingRecordings, selectedCount: pendingCount) }
                     }
                 }.buttonStyle(.borderedProminent).disabled(model.queueBusy || model.isPreview || (selected.count > 1 ? selectedReady.isEmpty : pendingCount == 0))
-                    .help("Aggiunge solo gli audio pronti. Usa Maiuscole o Comando per selezionare più registrazioni.")
+                    .help("Accoda solo audio pronti nella cartella principale, oppure quelli selezionati esplicitamente. Gli archivi storici richiedono una selezione. Usa Maiuscole o Comando per selezionare più registrazioni.")
             }
             if model.queueBusy { ProgressView().controlSize(.small) }
         }.disabled(model.queueBusy || model.isPreview)
