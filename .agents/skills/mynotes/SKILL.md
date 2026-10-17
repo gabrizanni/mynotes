@@ -21,6 +21,17 @@ or identity choices; do not start pending-course questionnaires before completin
 the request. Offer deferred context only afterwards when useful or when the user
 asks for course setup. These defaults never bypass source validation, external
 Word edits, course review mode or an actual authorization requirement.
+For a configured lecture use these exact commands in MYNOTES_WORKSPACE:
+`mynotes prepare COURSE-LNN`, `mynotes generate COURSE-LNN`, then
+`mynotes update COURSE-LNN`. The final command creates missing output folders.
+A source pack is at runs/COURSE-LNN/source_pack.json; its sources list identifies
+an imported_transcript path, reusable with `prepare COURSE-LNN --transcript PATH`.
+Inspect source inventory and freshness to route the task; the writing worker
+reads the complete academic evidence. Do not duplicate that full reading before
+starting the worker. Review content and source coverage after generation.
+Use relevant --help only when the required command fails or a genuinely unknown
+option is necessary. Do not explore course/config help or directories merely to
+rediscover saved paths. There is no `mynotes config show` command.
 
 At course folder linking or the next relevant note-preparation interaction,
 reuse course.files.personal_notes and course.files.handout as the exact stable paths.

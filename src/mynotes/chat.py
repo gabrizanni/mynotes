@@ -103,6 +103,7 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             "prepare -> generate -> update with content, structure and render checks and safety backups. Ask for explicit user approval only in course publication mode review; otherwise update directly. "
             "Never launch `mynotes chat` recursively."
         )
+    prompt += TASK_PRIORITY_GUIDANCE
     overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
     if selected == "agy":
         command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
