@@ -102,6 +102,9 @@ def course_template() -> dict[str, Any]:
         # Exact per-lesson sources take precedence over filename discovery.
         # Paths remain private workspace configuration, never bundled with code.
         "lesson_sources": {},
+        "files": {"personal_notes": "", "handout": ""},
+        "files_explained": False,
+        "publication": {"mode": "automatic"},
         "style": {},
         "preferences": {"persistent_instructions": []},
         "web_access": "disabled",
@@ -215,6 +218,24 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(path, str):
             raise ConfigurationError(f"Course folder {field} must be text")
         course["folders"][field] = clean_path(path) if path.strip() else ""
+    file_settings = course.get("files")
+    if not isinstance(file_settings, dict):
+        raise ConfigurationError("Course files must be an object")
+    for role in ("personal_notes", "handout"):
+        value = file_settings.get(role, "")
+        if not isinstance(value, str):
+            raise ConfigurationError("Course file paths must be text")
+        if value.strip():
+            from .note_files import file_path
+            file_settings[role] = str(file_path(value, handout=role == "handout"))
+        else:
+            file_settings[role] = ""
+    if file_settings["personal_notes"] and file_settings["personal_notes"] == file_settings["handout"]:
+        raise ConfigurationError("Personal notebook and final handout must be different files")
+    if type(course.get("files_explained")) is not bool:
+        raise ConfigurationError("Course files_explained must be boolean")
+    if not isinstance(course.get("publication"), dict) or course["publication"].get("mode") not in {"automatic", "review"}:
+        raise ConfigurationError("Publication mode must be automatic or review")
     lesson_sources = course.get("lesson_sources")
     if not isinstance(lesson_sources, dict):
         raise ConfigurationError("Course lesson_sources must be an object")

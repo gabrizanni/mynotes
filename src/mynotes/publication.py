@@ -14,7 +14,7 @@ import sqlite3
 import tempfile
 import uuid
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
@@ -1060,8 +1060,8 @@ def _course(configuration: dict[str, Any], code: str) -> dict[str, Any]:
 
 
 def _target(course: dict[str, Any], workspace: Workspace) -> Path:
-    folder = course["folders"].get("handout")
-    return (Path(folder) if folder else workspace.runs_dir / "handouts") / f"{course['code']}_COURSE_NOTES.docx"
+    from .note_files import handout_path
+    return handout_path(course, workspace)
 
 
 def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1210,7 +1210,16 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
             raise PublicationError("Candidate exceeds the effective image_limit; review the content before building")
     if profile.get("image_policy") == "none" and any(item.get("decision") == "include" for item in notes.get("visual_decisions", [])):
         raise PublicationError("Image policy is none, but this candidate includes visuals; regenerate the notes with the current course style")
-    target = _target(course, workspace); run_dir = workspace.runs_dir / lecture_id / "word"
+    target = _target(course, workspace)
+    if mode == "update" and not target.exists() and workspace.database_path.is_file():
+        from .workflow import WorkflowState
+        check = WorkflowState(workspace.database_path)
+        try:
+            if check.connection.execute("SELECT 1 FROM lesson_runs WHERE output_path=? AND status='PUBLISHED'", (str(target),)).fetchone():
+                raise PublicationError("Saved final handout is missing; locate it or restore a backup before updating")
+        finally:
+            check.close()
+    run_dir = workspace.runs_dir / lecture_id / "word"
     run_dir.mkdir(parents=True, exist_ok=True)
     output = run_dir / f"{lecture_id}-{uuid.uuid4().hex[:10]}.candidate.docx"
     baseline_hash = file_sha256(target) if mode == "update" and target.is_file() else None
@@ -1263,13 +1272,88 @@ def _journal(workspace: Workspace, payload: dict[str, Any]) -> Path:
     path = directory / f"{payload['transaction_id']}.json"; atomic_json_write(path, payload); return path
 
 
+def _content_fingerprint(payload):
+    return hashlib.sha256(json.dumps({k: v for k, v in payload.items()
+        if k not in {"published_to_word", "published_path", "published_hash"}}, sort_keys=True).encode()).hexdigest()
+
+
+def _publication_state(workspace, target):
+    from .workflow import WorkflowState
+    bootstrap = WorkflowState(workspace.database_path)
+    bootstrap.close()
+    with sqlite3.connect(workspace.database_path) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = [dict(row) for row in connection.execute("SELECT * FROM lesson_runs")
+                if Path(row["output_path"]).resolve() == target.resolve()]
+    candidates = {}
+    for row in rows:
+        path = workspace.runs_dir / row['lecture_id'] / 'lecture_notes.candidate.json'
+        if path.is_file():
+            payload = json.loads(path.read_text())
+            candidates[row['lecture_id']] = {"content_hash": _content_fingerprint(payload),
+                "publication": {k: payload[k] for k in ('published_to_word', 'published_path', 'published_hash') if k in payload}}
+    return {'lessons': rows, 'candidates': candidates}
+
+
+def _restore_publication_state(workspace, target, snapshot):
+    """Restore Word membership without discarding newer, reusable content candidates."""
+    from .workflow import WorkflowState, _write_status_markdown
+    bootstrap = WorkflowState(workspace.database_path)
+    bootstrap.close()
+    snapshot = snapshot or {'lessons': [], 'candidates': {}}
+    digest = file_sha256(target) if target.is_file() else ''
+    with sqlite3.connect(workspace.database_path) as connection:
+        affected = {row[0] for row in connection.execute('SELECT lecture_id,output_path FROM lesson_runs')
+                    if Path(row[1]).resolve() == target.resolve()}
+        affected.update(row['lecture_id'] for row in snapshot['lessons'])
+        connection.execute("UPDATE lesson_runs SET status='ROLLED_BACK',updated_at=? WHERE output_path=?", (now_compact_utc(), str(target)))
+        for row in snapshot['lessons']:
+            row = dict(row)
+            if row['status'] == 'PUBLISHED':
+                row['output_hash'] = digest
+            row['updated_at'] = now_compact_utc()
+            columns = ['lecture_id','input_hash','status','provider','model','effort','quality','output_path','output_hash','sources_json','updated_at']
+            connection.execute('INSERT OR REPLACE INTO lesson_runs VALUES(?,?,?,?,?,?,?,?,?,?,?)', [row[k] for k in columns])
+        for lecture in affected:
+            path = workspace.runs_dir / lecture / 'lecture_notes.candidate.json'
+            if not path.is_file():
+                connection.execute("UPDATE candidate_runs SET status='NEEDS_REVIEW' WHERE lecture_id=?", (lecture,))
+                continue
+            payload = json.loads(path.read_text())
+            recorded = connection.execute('SELECT candidate_hash FROM candidate_runs WHERE lecture_id=?', (lecture,)).fetchone()
+            if recorded and recorded[0] != file_sha256(path):
+                # Preserve external edits, but never leave them certified as published.
+                connection.execute("UPDATE candidate_runs SET status='NEEDS_REVIEW' WHERE lecture_id=?", (lecture,))
+                continue
+            saved = snapshot.get('candidates', {}).get(lecture)
+            matches = saved and saved['content_hash'] == _content_fingerprint(payload)
+            for key in ('published_to_word', 'published_path', 'published_hash'):
+                payload.pop(key, None)
+            payload['published_to_word'] = False
+            if matches:
+                payload.update(saved['publication'])
+                if payload.get('published_to_word'):
+                    payload['published_hash'] = digest
+            atomic_json_write(path, payload)
+            connection.execute('UPDATE candidate_runs SET status=?,candidate_hash=?,updated_at=? WHERE lecture_id=?',
+                               ('PUBLISHED' if payload.get('published_to_word') else 'CANDIDATE_READY', file_sha256(path), now_compact_utc(), lecture))
+    state = WorkflowState(workspace.database_path)
+    try:
+        _write_status_markdown(workspace, state.rows())
+    finally:
+        state.close()
+
+
 def _archive(workspace: Workspace, target: Path, course_code: str, *, reason: str) -> dict[str, Any] | None:
     if not target.is_file():
         return None
     directory = workspace.archives_dir / "word" / course_code; directory.mkdir(parents=True, exist_ok=True)
-    backup_id = f"{now_compact_utc()}-{file_sha256(target)[:12]}"
+    original_hash = file_sha256(target)
+    backup_id = f"{now_compact_utc()}-{original_hash[:12]}-{uuid.uuid4().hex[:8]}"
     path = directory / f"{backup_id}.docx"; shutil.copy2(target, path)
-    metadata = {"backup_id": backup_id, "course": course_code, "path": str(path), "sha256": file_sha256(path), "source": str(target), "reason": reason, "created_at": now_compact_utc()}
+    if file_sha256(path) != original_hash or file_sha256(target) != original_hash:
+        raise PublicationError("Word changed while saving its safety backup; no update was made")
+    metadata = {"backup_id": backup_id, "course": course_code, "path": str(path), "sha256": file_sha256(path), "source": str(target), "reason": reason, "created_at": now_compact_utc(), "publication_state": _publication_state(workspace, target)}
     atomic_json_write(directory / f"{backup_id}.json", metadata); return metadata
 
 
@@ -1297,7 +1381,8 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         raise PublicationError("Candidate changed after validation")
     if validation.get("mode","update") != "update":
         raise PublicationError("Standalone or cumulative candidates require their own explicit publication workflow")
-    with _lock(target):
+    from .workflow import _generation_lock
+    with _generation_lock(workspace, lecture_id), _lock(target):
         current = file_sha256(target) if target.is_file() else None
         with sqlite3.connect(workspace.database_path) as connection:
             published = connection.execute("SELECT status,output_path,output_hash FROM lesson_runs WHERE lecture_id=?", (lecture_id,)).fetchone()
@@ -1316,6 +1401,8 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         if current != transaction["baseline_hash"] and not accept_current_word:
             transaction["status"] = "NEEDS_REVIEW"; transaction["reason"] = "target_changed"; _journal(workspace, transaction)
             raise PublicationError("Cumulative Word changed after candidate creation; rebuild on the current file or explicitly accept it")
+        transaction["content_hash"] = _content_fingerprint(payload)
+        transaction["publication_state"] = _publication_state(workspace, target)
         transaction["backup"] = _archive(workspace, target, code, reason=f"before {lecture_id} publication")
         transaction["status"] = "BACKED_UP"; _journal(workspace, transaction)
         descriptor, temporary_name = tempfile.mkstemp(suffix=".docx", dir=target.parent); os.close(descriptor)
@@ -1360,7 +1447,114 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         finally:
             state.close()
         transaction["status"] = "COMPLETED"; transaction["completed_at"] = now_compact_utc(); _journal(workspace, transaction)
-    return {"status": "PUBLISHED", "lecture_id": lecture_id, "output": str(target), "backup": transaction.get("backup"), "transaction": str(journal)}
+    return {"status": "PUBLISHED", "lecture_id": lecture_id, "output": str(target), "backup": transaction.get("backup"), "transaction": str(journal), "undo_hint": "Puoi chiedermi di annullare l’ultimo aggiornamento."}
+
+
+def update_course_notes(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
+    """Build from the current cumulative and publish unless preview was requested."""
+    from .workflow import WorkflowState
+    lecture_id = lecture_id.upper()
+    course = _course(workspace.configuration_store().load(), lecture_id.split('-L', 1)[0])
+    target = _target(course, workspace)
+    # Repeating a completed request must not create another backup or Word version.
+    source = workspace.runs_dir / lecture_id / 'lecture_notes.candidate.json'
+    if source.is_file() and target.is_file():
+        payload, _ = _load_candidate(workspace, lecture_id)
+        state = WorkflowState(workspace.database_path)
+        try:
+            row = state.connection.execute("SELECT status FROM lesson_runs WHERE lecture_id=?", (lecture_id,)).fetchone()
+            expected = state.expected_output_hash(target)
+        finally:
+            state.close()
+        if expected and expected != file_sha256(target):
+            raise PublicationError('Final Word was edited externally; review it before an automatic update. No file was overwritten.')
+        if row and row[0] == 'PUBLISHED' and payload.get('published_to_word') and expected == file_sha256(target):
+            for record in _transactions(workspace, target):
+                if record.get('status') == 'COMPLETED' and record.get('lecture_id') == lecture_id:
+                    if record.get('content_hash') == _content_fingerprint(payload):
+                        return {'status': 'SKIPPED', 'lecture_id': lecture_id, 'output': str(target), 'reason': 'already_published'}
+                    break
+    built = build_word_candidate(workspace, lecture_id)
+    if course['publication']['mode'] == 'review':
+        return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show this candidate and publish only after approval.'}
+    result = publish_word_candidate(workspace, lecture_id, Path(built['candidate']))
+    return {**result, 'validation': built}
+
+
+def _transactions(workspace, target):
+    root = workspace.state_dir / 'publication-transactions'
+    records = []
+    for path in root.glob('*.json'):
+        record = json.loads(path.read_text())
+        if Path(record['target']).resolve() == target.resolve():
+            records.append(record)
+    return sorted(records, key=lambda r: r.get('created_at', ''), reverse=True)
+
+
+@contextmanager
+def _restore_locks(workspace, target, extra=()):
+    """Freeze affected candidate metadata as well as the cumulative Word."""
+    from .workflow import WorkflowState, _generation_lock
+    bootstrap = WorkflowState(workspace.database_path)
+    bootstrap.close()
+    with sqlite3.connect(workspace.database_path) as connection:
+        lectures = {row[0] for row in connection.execute('SELECT lecture_id,output_path FROM lesson_runs')
+                    if Path(row[1]).resolve() == target.resolve()}
+    lectures.update(extra)
+    with ExitStack() as stack:
+        for lecture in sorted(lectures):
+            stack.enter_context(_generation_lock(workspace, lecture))
+        stack.enter_context(_lock(target))
+        yield
+
+
+def undo_last_update(workspace: Workspace, course_code: str) -> dict[str, Any]:
+    """Undo one completed publication, including a document's first creation."""
+    course = _course(workspace.configuration_store().load(), course_code.upper())
+    target = _target(course, workspace)
+    records = [r for r in _transactions(workspace, target) if r.get('status') == 'COMPLETED']
+    if not records:
+        raise PublicationError('No completed update is available to undo for this course')
+    digest = file_sha256(target) if target.is_file() else None
+    record = next((r for r in records if r.get('target_hash') == digest), None)
+    if record is None:
+        raise PublicationError('Final Word changed since the last update; review it before undoing. No file was overwritten.')
+    with _restore_locks(workspace, target, [record['lecture_id']]):
+        current = file_sha256(target) if target.is_file() else None
+        if current != record.get('target_hash'):
+            raise PublicationError('Final Word changed since the last update; review it before undoing. No file was overwritten.')
+        backup = record.get('backup')
+        source = Path(backup['path']) if backup else None
+        if source is not None and (not source.is_file() or file_sha256(source) != backup['sha256']):
+            raise PublicationError('Backup is missing or corrupted; the final Word was preserved')
+        safety = _archive(workspace, target, course['code'], reason=f"before undo {record['transaction_id']}")
+        if safety is None:
+            raise PublicationError('Could not save the current Word before undo')
+        record['undo'] = {'status': 'PREPARED', 'backup': safety,
+                          'restored_hash': backup['sha256'] if backup else None}
+        _journal(workspace, record)
+        if source is not None:
+            fd, name = tempfile.mkstemp(suffix='.docx', dir=target.parent)
+            os.close(fd)
+            temporary = Path(name)
+            try:
+                shutil.copy2(source, temporary)
+                if file_sha256(temporary) != backup['sha256'] or file_sha256(target) != current:
+                    raise PublicationError('Word or backup changed during undo')
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        else:
+            if file_sha256(target) != current:
+                raise PublicationError('Word changed during undo')
+            target.unlink()  # The removed first creation remains in the verified safety backup.
+        _restore_publication_state(workspace, target, record.get('publication_state'))
+        record['status'] = 'UNDONE'
+        record['undo']['status'] = 'COMPLETED'
+        record['undo']['completed_at'] = now_compact_utc()
+        _journal(workspace, record)
+    return {'status': 'UNDONE', 'course': course['code'], 'lecture_id': record['lecture_id'],
+            'output': str(target), 'output_exists': target.is_file(), 'pre_restore_backup': safety}
 
 
 def publication_history(workspace: Workspace, course_code: str | None = None) -> list[dict[str, Any]]:
@@ -1382,11 +1576,16 @@ def restore_backup(workspace: Workspace, backup_id: str) -> dict[str, Any]:
     metadata = matches[0]; source = Path(metadata["path"]); target = Path(metadata["source"])
     if not source.is_file() or file_sha256(source) != metadata["sha256"]:
         raise PublicationError("Backup is missing or corrupted")
-    with _lock(target):
+    with _restore_locks(workspace, target, [row["lecture_id"] for row in metadata.get("publication_state", {}).get("lessons", [])]):
+        current_hash = file_sha256(target) if target.is_file() else None
         safety = _archive(workspace, target, metadata["course"], reason=f"before restore {backup_id}")
         descriptor, name = tempfile.mkstemp(suffix=".docx", dir=target.parent); os.close(descriptor); temporary = Path(name)
         try:
-            shutil.copy2(source, temporary); os.replace(temporary, target)
+            shutil.copy2(source, temporary)
+            if file_sha256(temporary) != metadata['sha256'] or (file_sha256(target) if target.is_file() else None) != current_hash:
+                raise PublicationError("Word or backup changed during restore")
+            os.replace(temporary, target)
+            _restore_publication_state(workspace, target, metadata.get('publication_state'))
         finally:
             temporary.unlink(missing_ok=True)
     return {"status": "RESTORED", "backup_id": backup_id, "output": str(target), "pre_restore_backup": safety}
@@ -1397,7 +1596,23 @@ def recover_publications(workspace: Workspace) -> list[dict[str, Any]]:
     results = []
     for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("status") in {"COMPLETED", "ABORTED", "NEEDS_REVIEW"}:
+        if payload.get('undo', {}).get('status') == 'PREPARED':
+            target = Path(payload['target'])
+            with _restore_locks(workspace, target, [payload['lecture_id']]):
+                current = file_sha256(target) if target.is_file() else None
+                if current == payload['undo']['restored_hash']:
+                    _restore_publication_state(workspace, target, payload.get('publication_state'))
+                    payload['status'] = 'UNDONE'
+                    payload['undo']['status'] = 'COMPLETED'
+                elif current == payload.get('target_hash'):
+                    payload['undo']['status'] = 'ABORTED'
+                else:
+                    payload['status'] = 'NEEDS_REVIEW'
+                    payload['reason'] = 'ambiguous_undo_state'
+                atomic_json_write(path, payload)
+                results.append(payload)
+            continue
+        if payload.get("status") in {"COMPLETED", "ABORTED", "NEEDS_REVIEW", "UNDONE"}:
             continue
         target = Path(payload["target"]); current = file_sha256(target) if target.is_file() else None
         if current == payload.get("candidate_hash"):

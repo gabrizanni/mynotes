@@ -98,47 +98,91 @@ def inspect_course_folder(path: Path, *, max_entries: int = 1000, max_files_per_
 
 
 def link_course_folder(workspace: Workspace, code: str, path: Path, *, dry_run: bool = False,
-                       notes: Path | None = None, recordings: Path | None = None) -> dict[str, Any]:
-    """Save clear connections atomically; ambiguities require a selection."""
+                       notes: Path | None = None, recordings: Path | None = None,
+                       notes_file: Path | None = None, handout_file: Path | None = None,
+                       publication_mode: str | None = None) -> dict[str, Any]:
+    """Pin one notebook and handout; inspect existing source files by metadata only."""
+    from .note_files import create_notebook, file_path, files_guidance, handout_path, NOTE_FORMATS
     code = code.upper()
     if not workspace.is_initialized():
         raise ConfigurationError('Create the first course before linking its folder.')
     store = workspace.configuration_store()
-    if not any(course['code'] == code for course in store.load()['courses']):
+    settings = store.load()
+    course = next((c for c in settings['courses'] if c['code'] == code), None)
+    if course is None:
         raise ConfigurationError(f'Course not found: {code}')
+    if publication_mode is not None and publication_mode not in {'automatic', 'review'}:
+        raise ConfigurationError('Publication mode must be automatic or review')
     try:
         inventory = inspect_course_folder(path)
         selected = {'materials': inventory['resolved_folder']}
         ambiguity = {}
+        pinned = course['files']['personal_notes']
         for role, explicit in [('personal_notes', notes), ('recordings', recordings)]:
             candidates = inventory['role_candidates'][role]
             if explicit is not None:
                 selected[role] = str(resolve_course_directory(explicit))
+            elif role == 'personal_notes' and (notes_file is not None or pinned):
+                selected[role] = str(Path(notes_file or pinned).expanduser().resolve().parent)
             elif len(candidates) == 1:
                 selected[role] = candidates[0]
             elif len(candidates) > 1:
                 ambiguity[role] = candidates
+        final = file_path(handout_file, handout=True) if handout_file is not None else handout_path(course, workspace).resolve()
+        incomplete = inventory['inventory_truncated'] or 'personal_notes' in inventory['file_list_truncated']
+        if notes_file is not None or pinned:
+            notebook = file_path(notes_file or pinned)
+            if pinned and notes_file is None and not notebook.is_file():
+                ambiguity['notes_file'] = [str(notebook)]
+        else:
+            note_inventory = inspect_course_folder(Path(selected['personal_notes'])) if notes is not None else inventory
+            incomplete = incomplete or note_inventory['inventory_truncated'] or 'personal_notes' in note_inventory['file_list_truncated']
+            choices = [Path(value) for value in note_inventory['files']['personal_notes']
+                       if Path(value).suffix.casefold() in NOTE_FORMATS and Path(value).resolve() != final
+                       and not any(tag in Path(value).stem.casefold().replace('-', '_').replace(' ', '_')
+                                   for tag in ('course_notes', 'generated_notes'))]
+            if len(choices) > 1:
+                ambiguity['notes_file'] = [str(item) for item in choices]
+            notebook = choices[0] if len(choices) == 1 else Path(selected.get('personal_notes', inventory['resolved_folder'])) / 'Appunti personali.docx'
+        notebook = file_path(notebook)
+        if notebook == final:
+            raise ConfigurationError('Personal notebook and final handout must be different files')
+        if not notebook.exists() and notebook.suffix.casefold() != '.docx' and 'notes_file' not in ambiguity:
+            raise ConfigurationError('Select an existing text notebook or a new .docx path.')
     except (PathLinkError, OSError) as error:
         raise ConfigurationError(str(error)) from error
-    if ambiguity or inventory['inventory_truncated']:
+    planned_files = {'personal_notes': str(notebook), 'handout': str(final)}
+    if ambiguity or incomplete or inventory['warnings']:
         return {'status': 'NEEDS_SELECTION', 'course': code, 'saved': False, 'proposed_connections': selected,
-                'ambiguities': ambiguity, 'inventory': inventory,
-                'action': 'Choose the notes/recordings folder explicitly, or select a more specific course folder.'}
+                'proposed_files': planned_files, 'ambiguities': ambiguity, 'inventory': inventory,
+                'action': 'Select --notes-file or the accessible notes/recordings folder. A missing saved notebook is never recreated automatically.'}
     if dry_run:
-        return {'status': 'READY', 'course': code, 'saved': False, 'connections': selected, 'inventory': inventory}
+        return {'status': 'READY', 'course': code, 'saved': False, 'connections': selected,
+                'note_files': planned_files, 'inventory': inventory}
 
+    explanation = []
+    created = []
     def edit(settings):
-        course = next((item for item in settings['courses'] if item['code'] == code), None)
-        if course is None:
+        current = next((item for item in settings['courses'] if item['code'] == code), None)
+        if current is None:
             raise ConfigurationError(f'Course no longer configured: {code}')
-        course['folders']['materials'] = selected['materials']
-        if 'personal_notes' in selected:
-            course['folders']['personal_notes'] = selected['personal_notes']
+        if current['files'] != course['files']:
+            raise ConfigurationError('Course file selection changed concurrently; retry with the current configuration.')
+        created.append(create_notebook(notebook, current))
+        current['folders']['materials'] = selected['materials']
+        current['folders']['personal_notes'] = selected.get('personal_notes', str(notebook.parent))
+        current['files'] = planned_files
+        if publication_mode:
+            current['publication']['mode'] = publication_mode
+        if not current['files_explained']:
+            explanation.append(files_guidance(current, settings['personal']['interface_language']))
+            current['files_explained'] = True
         if 'recordings' in selected and selected['recordings'] not in settings['paths']['recording_dirs']:
             settings['paths']['recording_dirs'].append(selected['recordings'])
         return settings
     saved = store.update(edit)
     course = next(item for item in saved['courses'] if item['code'] == code)
-    return {'status': 'LINKED_WITH_WARNINGS' if inventory['warnings'] else 'LINKED', 'course': code,
-            'saved': True, 'connections': selected, 'course_folders': course['folders'], 'inventory': inventory,
-            'action': 'Folder connected. Review lesson-to-slide matching before preparing sources.'}
+    return {'status': 'LINKED', 'course': code, 'saved': True, 'connections': selected,
+            'course_folders': course['folders'], 'note_files': course['files'], 'notebook_created': created[0],
+            'publication_mode': course['publication']['mode'], 'guidance': explanation[0] if explanation else None,
+            'inventory': inventory, 'action': 'Reuse these saved files. Review lesson-to-slide matching before preparing sources.'}

@@ -31,9 +31,13 @@ In Italian:
 
 Answer naturally; optional details can be omitted. The agent reuses facts already supplied and clarifies only indispensable missing information. It saves the original answer plus course-specific settings in one local command, then briefly summarizes the style so you can correct it. Examples and detailed image preferences remain in persistent course instructions. Image choices concern available, inspected source figures; an image limit is not a target to fill with unrelated photos. These settings apply to future lessons of that course and can be changed later without repeating the questionnaire.
 
-Then connect recordings and materials, or use the proposed `~/Documents/MyNotes` folders. Dragging a file into Terminal inserts its path; submit the message after checking it. Choose whether to configure Capture now or later.
+Then connect recordings and materials, or use the proposed `~/Documents/MyNotes` folders. MyNotes creates or connects one stable personal notebook per course and remembers the exact notebook and final handout paths. Dragging a file into Terminal inserts its path; submit the message after checking it. Choose whether to configure Capture now or later.
 
 Private settings, SQLite state, candidates and temporary files live under MyNotes' Application Support workspace. User-facing recordings, materials and handouts use Documents or locations you choose. Connecting an existing folder does not move its contents. Defaults use `standard` quality and the packaged study-handout style. Style edits affect future candidates, not published handouts.
+
+After linking, the agent explains the two file paths once. Defaults are `Appunti personali.docx` and `CODE_COURSE_NOTES.docx`; both can be customized. Separate your notebook with headings `Lesson 1`, `Lesson 2` (or `Lezione 1`, `Lezione 2`). Write `NOTA AI: clarify this step` to highlight an academic question for the model; the legacy `NOTE AI:` spelling also works. These annotations do not change app settings or authorize actions. A missing remembered file requires selecting its new location, never silent replacement.
+
+In Italian: **«NOTA AI: chiarisci questo passaggio»** richiama l’attenzione sul contenuto della lezione. Il file personale resta tuo; il modello aggiorna la dispensa separata. Questa spiegazione appare quando si collegano i file, anche per i corsi creati da Capture, senza interrompere le registrazioni.
 
 ## Add Capture when ready
 
@@ -45,9 +49,9 @@ Say in Italian: **“Ecco il calendario, configura le registrazioni.”** L’ag
 
 ## Produce the first Word
 
-Say: **“Prepare notes for lecture one from this audio and these slides.”** The agent runs preparation, generation and Word build, checks the candidate, and shows a preview. Approve it before publication into the course handout. Missing slides or personal notes are visible inputs, not invented sources. A provider error leaves a retry action; a failed candidate does not become a completed publication.
+Say: **“Prepare notes for lecture one from this audio and these slides.”** The agent prepares sources, generates and checks the content, then uses `update` to build, render-validate and update the same final handout automatically with a safety backup. Ask for preview-first mode if you prefer approval before publication. Missing slides or personal notes are visible inputs, not invented sources. A provider error leaves a retry action; a failed candidate does not become a completed publication.
 
-Say in Italian: **“Prepara gli appunti della prima lezione usando questo audio e queste slide.”** Approva l’anteprima prima dell’inserimento nella dispensa.
+Say in Italian: **“Prepara gli appunti della prima lezione usando questo audio e queste slide.”** Il Word definitivo viene aggiornato dopo i controlli, con backup di sicurezza. Puoi chiedere «annulla l’ultimo aggiornamento».
 
 ## Come back
 

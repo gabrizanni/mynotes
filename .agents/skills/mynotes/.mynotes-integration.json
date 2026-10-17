@@ -1,7 +1,7 @@
 {
-  "schema_version": 1,
-  "platform": "codex",
   "files": {
-    "SKILL.md": "3e1fadd600e423aa4b0c286e36b48de6bcf25b1d9e3a6f0ce7e0ae1720926cd5"
-  }
+    "SKILL.md": "2c44c4bdcdc8a6330adc01582ba04fa2dd40db9735cb176d6474a5fa1a8199b1"
+  },
+  "platform": "codex",
+  "schema_version": 1
 }

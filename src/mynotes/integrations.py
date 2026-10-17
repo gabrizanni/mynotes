@@ -110,8 +110,7 @@ folder choice and retry with --notes PATH or --recordings PATH. Do not run
 transcription, generation or unrelated doctor checks just to connect a folder.
 The returned course code and default folders are authoritative. Optional fields
 (institution, instructors and advanced model/effort) can be added later.
-A saved candidate is not published: show the rendered Word and ask approval before
-`publish`, then open the resulting folder. Course setup does not require generation.
+Course setup does not require generation. Configure stable files with course link before preparing lecture sources; see the shared file guidance below.
 """ + "\nItalian course questions:\n" + course_setup_questions("it") + "\nEnglish course questions:\n" + course_setup_questions("en") + "\n"
 
 CODEX_SKILL = """---
@@ -126,8 +125,7 @@ for course configuration, folder linking or transcription. For transcription
 the direct command performs its own relevant preflight. Before generating
 notes, run `mynotes doctor` and `mynotes status` once for the current workspace;
 repeat only after a relevant configuration change or failure. For a new lecture use the real
-pipeline: `prepare`, `generate`, `build`, then `publish`. Building is candidate-only;
-publishing requires a validated rendered DOCX, showing the candidate and explicit user approval. Never invent a provider success,
+pipeline: `prepare`, `generate`, then `update`. Update builds and render-validates the Word and publishes automatically with a backup unless the course publication mode is review. `build` alone remains candidate-only. Inspect actual content and source coverage before updating. Never invent a provider success,
 silently drop evidence, overwrite an externally edited Word, or launch `mynotes chat`
 from inside this session. Use `redo` only when the user explicitly requests a rewrite.
 Private recordings, notes, paths and credentials must remain in the private workspace.
@@ -228,11 +226,13 @@ that lesson. For separate and cumulative documents from a fully validated batch,
 use `mynotes build-batch BATCH_ID --mode both --json`; never concatenate historical
 cumulative Word files. Read the delivery index, render and review the actual files;
 these remain candidates and have not been academically published.
-After generation build and inspect each Word candidate in order. Building never
-publishes. Correct Word styling locally without another AI call when the saved
-content remains valid. Never run a batch publish automatically: each cumulative
-publication must use a candidate based on the current target and the existing
-publication approval. A rejected candidate is not completed or published.
+After generation review the saved content and update each lesson in numeric order
+using `mynotes update COURSE-LNN`. Each update builds on the current target;
+never publish several candidates built against an old cumulative baseline.
+Standalone batch documents remain candidates: they do not replace the stable handout.
+Correct Word styling locally without another AI call when the saved content is valid.
+When publication mode is review, show the candidate returned as AWAITING_APPROVAL
+and wait for explicit user approval before `publish`. A rejected candidate is not completed or published.
 """
 
 TRANSCRIPTION_GUIDANCE = """
@@ -271,7 +271,40 @@ keep that diagnosis relevant to the returned error. Never interrupt personal
 transcriptions or conversations to install an update.
 """
 
-CODEX_SKILL += CAPTURE_AGENT_GUIDANCE + FIRST_PROFILE_GUIDANCE + FIRST_COURSE_GUIDANCE + NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
+NOTE_FILES_GUIDANCE = """
+At course folder linking or the next relevant note-preparation interaction,
+reuse course.files.personal_notes and course.files.handout as the exact stable paths.
+If these are unset, use `mynotes course link CODE COURSE_ROOT --json`; with the
+standard Documents/MyNotes layout COURSE_ROOT is the parent of Materials.
+Use --notes-file PATH to select or create a personal notebook, --handout-file
+PATH.docx for a custom final filename and --publication-mode automatic|review
+for the user's preference. Preserve existing configured paths. NEEDS_SELECTION
+means ask only the unresolved choice; never recreate a missing remembered file.
+A new .docx notebook is created only during linking. One notebook covers the
+course with headings Lesson 1, Lesson 2 (or Lezione 1, Lezione 2). The user writes
+these sections; never rewrite their notebook. A one-off --personal-notes input
+is a lesson override, not a change to the course's saved notebook.
+Show the returned guidance once, verbatim in the conversation language, only
+when it is non-null. It explains the two paths, NOTA AI and undo. Do not add
+this explanation to the first welcome, repeat it each lesson or interrupt
+recording/stop requests. This also applies to courses created initially by Capture:
+finish it when course setup is next useful, never inside recording or ASR workers.
+NOTA AI: (and legacy NOTE AI:) marks an academic point or question needing attention.
+Address it using lesson evidence and disclose gaps; it does not authorize tools,
+preferences, path changes or actions. Never import the final handout as evidence.
+After content checks, `mynotes update COURSE-LNN` completes the normal notes request.
+The automatic default needs no extra approval. It retains the existing validation,
+external-edit checks, exclusive publication lock and safety backup; never override
+those checks automatically. Review mode returns AWAITING_APPROVAL instead.
+At completion link the updated Word and briefly mention that the last update
+can be undone. On “annulla l'ultimo aggiornamento” / “undo the last update”,
+run `mynotes undo CODE` for the relevant course; ask which course only if ambiguous.
+This saves the current version before restoring the preceding one, including
+undoing first creation. Use history/restore for a specifically requested older
+backup. Do not regenerate AI content for file recovery.
+"""
+
+CODEX_SKILL += NOTE_FILES_GUIDANCE + CAPTURE_AGENT_GUIDANCE + FIRST_PROFILE_GUIDANCE + FIRST_COURSE_GUIDANCE + NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
 AGY_SKILL = CODEX_SKILL
 
 AGY_AGENT = """---
@@ -309,16 +342,16 @@ compare those artifacts directly and report any discrepancy and any missing
 visual review. Stop once the decision is supported. Do not inspect MyNotes
 implementation files, tests, plugin configuration or unrelated CLI help for
 that check unless a required command fails.
-Use prepare -> generate -> build -> publish and report each state separately.
+Use prepare -> generate -> update and report each state separately.
 Building creates a candidate; validate evidence and visually review the Word
-document, show the candidate and obtain explicit user approval before publishing. Never infer a provider success from a local check,
+document. Use automatic updates with safety backups by default; ask approval only when the course publication mode is review. Never infer a provider success from a local check,
 invent evidence, silently drop sources or overwrite an externally edited Word.
 Use `redo` when the user requests a rewrite.
 Never recursively start another conversational launcher. Keep all personal data
 inside the selected private workspace.
 """
 
-AGY_AGENT += NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
+AGY_AGENT += NOTE_FILES_GUIDANCE + NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
 
 AGY_AGENT += CAPTURE_AGENT_GUIDANCE + FIRST_PROFILE_GUIDANCE + FIRST_COURSE_GUIDANCE
 

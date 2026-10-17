@@ -58,6 +58,10 @@ def test_concrete_chat_request_retains_checks_and_recursion_guard(tmp_path, monk
     assert "For note generation run `mynotes doctor` and `mynotes status`" in prompt
     assert "the task's direct command for transcription" in prompt
     assert "validate and visually inspect the word candidate" in prompt.lower()
+    assert "updates are automatic with safety backups unless the course publication mode is review" in prompt
+    assert "mynotes undo CODE" in prompt
+    assert "--notes-file" in prompt
+    assert "show it to the user and obtain their approval before publication" not in prompt
 
     monkeypatch.setenv("MYNOTES_CHAT_ACTIVE", "1")
     with pytest.raises(ChatError, match="recursive launch"):

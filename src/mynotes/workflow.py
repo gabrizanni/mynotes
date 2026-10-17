@@ -54,7 +54,7 @@ QUALITY_PHASES: dict[str, tuple[tuple[str, str], ...]] = {
     "approfondito": (("writing", "thorough"), ("scoped_review", "thorough")),
     "revisione": (("writing", "thorough"), ("evidence_audit", "thorough"), ("editorial_review", "thorough")),
 }
-GENERATION_CONTRACT_VERSION = 8
+GENERATION_CONTRACT_VERSION = 9
 
 
 class WorkflowError(RuntimeError):
@@ -376,9 +376,8 @@ def _replace_block(document: Document, lecture_id: str, notes: dict[str, Any], s
 
 
 def _output(course: dict[str, Any], workspace: Workspace) -> Path:
-    folder = course["folders"]["handout"]
-    root = Path(folder) if folder else workspace.runs_dir / "handouts"
-    return root / f"{course['code']}_COURSE_NOTES.docx"
+    from .note_files import handout_path
+    return handout_path(course, workspace)
 
 
 @contextmanager

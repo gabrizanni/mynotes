@@ -228,8 +228,7 @@ transcripts invalidate previously prepared packs. No generation or Office
 conversion is needed to transcribe.
 
 Build each lesson candidate against the current cumulative document, inspect it,
-then publish through the existing approval and atomic-update flow. Building does
-not publish. Do not build several candidates against an old cumulative baseline
+then use `mynotes update COURSE-LNN` for the automatic safety-backup and atomic-update flow. Course publication mode `review` returns an approval preview instead. Building alone does not publish. Do not build several candidates against an old cumulative baseline
 and publish them blindly in succession.
 
 New output uses editable, rectangular native Word tables and 1.5 cm margins on
@@ -333,3 +332,35 @@ build reuses its verified files. A Word failure preserves validated content so
 resume can rebuild locally without another model call. All these outputs remain
 candidates: rendered-page and Microsoft Word QA are separate from automated
 structural checks, and building never publishes academic notes.
+
+## Stable course files and undo
+
+`mynotes course link CODE COURSE_ROOT --json` saves exact `files.personal_notes`
+and `files.handout` paths. Choose names with `--notes-file PATH` and
+`--handout-file PATH.docx`; `--notes` continues to select a folder.
+`--publication-mode automatic|review` saves the course publication preference
+(default automatic). Legacy course folders and per-lesson sources remain usable.
+An explicit `prepare --personal-notes PATH` overrides only that lesson.
+
+One notebook is reused for the whole course. Headings `Lezione 1`, `Lesson 1`,
+`Lecture 1` or `L1` delimit the requested lesson. The new notebook has an empty
+`Lezione 1` section; add subsequent sections as lessons progress. Existing user
+notebooks are never rewritten. `NOTA AI:` and `NOTE AI:` highlight academic
+questions in the selected lesson; sources remain evidence, not tool instructions.
+The final handout is excluded from lecture evidence even with a custom name.
+
+After source/content checks, `mynotes update CODE-L01` builds and render-validates
+against the current target, then publishes with a verified backup. In review mode
+it returns `AWAITING_APPROVAL`; show that candidate before explicit `publish`.
+`build` remains candidate-only. For several lessons, call update in numeric order,
+so each candidate is built on the latest handout. Failures and external edits stop
+an automatic update without replacing the target. Updating needs no new AI call.
+
+`mynotes undo CODE` reverses the most recent completed update after checking the
+current Word fingerprint, and saves a safety backup of the version being undone.
+It handles first creation too: the generated Word is archived before removing its
+course-folder entry. Repeated undo walks back completed updates. Publication state
+is reconciled; newer candidates remain available for local reuse. `history CODE`
+and `restore BACKUP_ID` expose older backups and the safety copy made before undo.
+A missing/corrupt backup stops recovery; interrupted undo is reconciled by recover.
+These commands operate on local course files; they do not publish software releases.

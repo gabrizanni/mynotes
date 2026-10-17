@@ -81,6 +81,10 @@ def _manifest_paths(course: dict[str, Any], lesson_number: int) -> tuple[list[Pa
 
 def discover_materials(course: dict[str, Any], lesson_number: int) -> tuple[list[Path], Path | None]:
     """Find lesson-labelled files; include a configured syllabus for context."""
+    pinned = course.get("files", {}).get("personal_notes")
+    # A missing remembered notebook must never silently fall back to discovery.
+    if pinned and not Path(pinned).is_file():
+        raise SourcePackError(f"Saved personal notebook is missing; select its new path: {pinned}")
     manifest = _manifest_paths(course, lesson_number)
     if manifest is not None:
         materials, personal_notes = manifest
@@ -88,6 +92,8 @@ def discover_materials(course: dict[str, Any], lesson_number: int) -> tuple[list
         materials = [
             path for path in _configured_paths(course["folders"]["materials"], recursive=True)
             if path.suffix.casefold() in SUPPORTED_MATERIALS
+            and (not course.get("files", {}).get("handout") or path.resolve() != Path(course["files"]["handout"]).resolve())
+            and (not pinned or path.resolve() != Path(pinned).resolve())
             and _matches_lesson(path, lesson_number)
             and not re.search(r"course[_ -]?notes|generated[_ -]?notes", path.stem, re.IGNORECASE)
         ]
@@ -96,7 +102,7 @@ def discover_materials(course: dict[str, Any], lesson_number: int) -> tuple[list
             if path.suffix.casefold() in NOTEBOOK_FORMATS
             and not re.search(r"course[_ -]?notes|generated[_ -]?notes", path.stem, re.IGNORECASE)
         ]
-        personal_notes = notes_candidates[0] if len(notes_candidates) == 1 else next(
+        personal_notes = Path(pinned) if pinned else notes_candidates[0] if len(notes_candidates) == 1 else next(
             (path for path in notes_candidates if _matches_lesson(path, lesson_number)), None
         )
     syllabus_value = course["folders"].get("syllabus", "")
@@ -268,6 +274,18 @@ def _build_source_pack_locked(
     if not material_paths and personal_notes is None:
         material_paths, discovered_notes = discover_materials(course, lesson_number)
         personal_notes = discovered_notes
+    if personal_notes is None:
+        pinned = course.get('files', {}).get('personal_notes')
+        lesson_note = course.get('lesson_sources', {}).get(str(lesson_number), {}).get('personal_notes')
+        remembered = lesson_note or pinned
+        if remembered:
+            personal_notes = Path(remembered)
+            if not personal_notes.is_file():
+                raise SourcePackError(f"Saved personal notebook is missing; select its new path: {remembered}")
+    from .note_files import handout_path
+    final_path = handout_path(course, workspace).resolve()
+    if any(Path(item).resolve() == final_path for item in [*material_paths, *([personal_notes] if personal_notes else [])]):
+        raise SourcePackError("The final course handout cannot be imported as lecture evidence")
     material_chunks: list[dict[str, Any]] = []
     visuals: list[dict[str, Any]] = []
     sources: list[dict[str, Any]] = []

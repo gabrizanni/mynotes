@@ -45,7 +45,7 @@ Per registrare, scrivi **“Ecco il calendario, configura le registrazioni.”**
 
 Capture registra anche a chat chiusa: il Mac deve essere acceso e sveglio, con il coperchio aperto. Salva gli audio senza generare automaticamente appunti. [Comandi e limiti di Capture](docs/CAPTURE.md).
 
-Chiedi **“Prepara gli appunti della prima lezione usando questo audio e queste slide.”** L’agente prepara le fonti, genera il candidato, costruisce e verifica il Word, poi mostra l’anteprima. Approva il candidato prima che venga inserito nella dispensa del corso.
+Chiedi **“Prepara gli appunti della prima lezione usando questo audio e queste slide.”** L’agente prepara le fonti, genera e verifica gli appunti, poi aggiorna lo stesso Word definitivo con un backup di sicurezza. Puoi chiedere la modalità con anteprima oppure «annulla l’ultimo aggiornamento».
 
 In seguito riapri MyNotes oppure usa:
 
@@ -75,6 +75,6 @@ uv run python scripts/build_dmg.py
 
 Gli strumenti di compilazione servono solo sul computer che crea il pacchetto. Il builder compila setup nativo, Capture ed eseguibile di trascrizione e include i file di runtime con versioni bloccate. L’utente installa il risultato compilato.
 
-La pipeline è `prepare → generate → build → publish`: conserva provenienza delle fonti, usa contratti JSON per i candidati, crea formule Word modificabili e protegge la pubblicazione da modifiche concorrenti e lezioni duplicate. [Script](scripts/README.md) · [Verifiche effettuate e mancanti](docs/VALIDATION.md) · [Aggiornamenti e rollback](docs/UPDATES.md).
+Il flusso abituale è `prepare → generate → update`; `build` e `publish` restano disponibili separatamente per la modalità con anteprima. Il sistema conserva provenienza delle fonti, usa contratti JSON per i candidati, crea formule Word modificabili e protegge la pubblicazione da modifiche concorrenti e lezioni duplicate. [Script](scripts/README.md) · [Verifiche effettuate e mancanti](docs/VALIDATION.md) · [Aggiornamenti e rollback](docs/UPDATES.md).
 
 [Licenza MIT](LICENSE) · [Licenze di terze parti](THIRD_PARTY_NOTICES.md) · [Gabriele Zanni](https://github.com/gabrizanni)

@@ -39,7 +39,7 @@ To configure recording, say **“Here is my calendar; set up the recordings.”*
 
 Capture records with the chat closed; the Mac must be on and awake, with its lid open. It saves audio and does not generate notes automatically. [Capture controls and limitations](docs/CAPTURE.md).
 
-Ask **“Prepare notes for the first lecture from this audio and these slides.”** The agent prepares sources, generates a candidate, builds and checks the Word document, and shows a preview. Approve the candidate before it is added to the course handout.
+Ask **“Prepare notes for the first lecture from this audio and these slides.”** The agent prepares sources, generates and checks the notes, then updates the same Word handout with a safety backup. Ask for preview-first mode if you prefer approval. You can ask to undo the last update.
 
 Later, open MyNotes again or use:
 
@@ -69,6 +69,6 @@ uv run python scripts/build_dmg.py
 
 Build tools are required only on the packaging machine. The release builder compiles the native setup, Capture and local transcription executable, and bundles locked runtime inputs. The user installs the compiled result.
 
-The pipeline is `prepare → generate → build → publish`. It retains source provenance, uses JSON contracts for candidates, writes editable Word equations, and guards publication against concurrent changes and duplicate lectures. [Models and coordinated generation](docs/GENERATION.md) · [Script reference](scripts/README.md) · [Validation evidence and pending acceptance](docs/VALIDATION.md) · [Updates and rollback](docs/UPDATES.md).
+The usual pipeline is `prepare → generate → update`; `build` and `publish` remain available separately for preview-first work. It retains source provenance, uses JSON contracts for candidates, writes editable Word equations, and guards publication against concurrent changes and duplicate lectures. [Models and coordinated generation](docs/GENERATION.md) · [Script reference](scripts/README.md) · [Validation evidence and pending acceptance](docs/VALIDATION.md) · [Updates and rollback](docs/UPDATES.md).
 
 [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Gabriele Zanni](https://github.com/gabrizanni)

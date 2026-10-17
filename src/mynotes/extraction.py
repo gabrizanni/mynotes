@@ -20,8 +20,8 @@ class ExtractionError(RuntimeError):
     """Raised when a declared source cannot be extracted truthfully."""
 
 
-LECTURE_HEADING_RE = re.compile(r"^\s*(?:lecture|lesson|lezione|l)\s*0*(\d{1,3})(?:\b|\s*[-:])", re.IGNORECASE)
-INSTRUCTION_RE = re.compile(r"^\s*(?:NOTE|DOMANDA|ISTRUZIONI)\s+AI\s*:\s*(.*)$", re.IGNORECASE)
+LECTURE_HEADING_RE = re.compile(r"^\s*(?:#{1,6}\s+)?(?:lecture|lesson|lezione|l)\s*0*(\d{1,3})(?:\b|\s*[-:])", re.IGNORECASE)
+INSTRUCTION_RE = re.compile(r"^\s*(?:NOTA|NOTE|DOMANDA|ISTRUZIONI)\s+AI\s*:\s*(.*)$", re.IGNORECASE)
 INSTRUCTION_END_RE = re.compile(r"^\s*FINE\s+ISTRUZIONI\s+AI\s*$", re.IGNORECASE)
 URL_RE = re.compile(r"https://[^\s<>\]\[)\"']+", re.IGNORECASE)
 
@@ -221,7 +221,10 @@ def _docx_items(path: Path) -> list[dict[str, Any]]:
 
 
 def extract_docx(path: Path, lesson_number: int | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    items = _docx_items(path)
+    return _scope_lesson(path, _docx_items(path), lesson_number)
+
+
+def _scope_lesson(path, items, lesson_number):
     if lesson_number is None:
         return items, []
     headings = [(index, int(match.group(1))) for index, item in enumerate(items)
@@ -260,6 +263,9 @@ def extract_material(path: Path, *, visual_dir: Path | None = None, lesson_numbe
             return extract_docx(path, lesson_number)
         if suffix in {".txt", ".md"}:
             content = path.read_text(encoding="utf-8").strip()
+            if lesson_number is not None and any(LECTURE_HEADING_RE.match(line) for line in content.splitlines()):
+                items = [{"content": line, "paragraph": number} for number, line in enumerate(content.splitlines(), 1) if line.strip()]
+                return _scope_lesson(path, items, lesson_number)
             return ([{"content": content, "paragraph": 1}] if content else []), []
         if suffix == ".ipynb":
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -295,7 +301,7 @@ def split_directives(chunks: list[dict[str, Any]]) -> tuple[list[dict[str, Any]]
             match = INSTRUCTION_RE.match(line)
             if match:
                 label = line.split(":", 1)[0].strip().casefold()
-                kind = "question" if "domanda" in label else "note" if label.startswith("note") else "instruction"
+                kind = "question" if "domanda" in label else "note" if label.startswith(("nota", "note")) else "instruction"
                 value = match.group(1).strip()
                 if not value and kind == "instruction":
                     multiline = []

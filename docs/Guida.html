@@ -126,11 +126,12 @@
 <p><strong>Rispondi a entrambe in un unico messaggio, liberamente.</strong> Puoi tralasciare i dettagli che non conosci. L’agente riusa le informazioni già date, salva la risposta originale e le preferenze del corso e riassume brevemente lo stile scelto, così puoi correggerlo. Le preferenze valgono per le lezioni future del corso; puoi cambiarle più avanti o chiedere un’eccezione per una lezione.</p>
 <p>Per le immagini puoi scegliere nessuna, poche essenziali o più figure spiegate. Si usano le figure pertinenti disponibili nelle fonti; una quantità richiesta è un limite, non un numero da raggiungere con foto decorative.</p>
 <p>Poi collega materiali, registrazioni e appunti personali, usando le cartelle proposte in <code>~/Documents/MyNotes</code> o quelle esistenti. Scegli se configurare Capture ora o più avanti.</p>
+<p>Al collegamento MyNotes prepara <strong>Appunti personali.docx</strong> oppure ricorda il file che scegli. Usa un unico file per corso, con titoli come <strong>Lezione 1</strong> e <strong>Lezione 2</strong>. Puoi scrivere <code>NOTA AI: chiarisci questo passaggio</code> per richiamare l’attenzione del modello quando unisce le fonti. Il definitivo separato si chiama inizialmente <strong>CODICE_COURSE_NOTES.docx</strong>; entrambi i percorsi sono personalizzabili e vengono riutilizzati. Questa breve spiegazione appare una volta, anche per i corsi creati da Capture. Se un file ricordato manca, indica dove si trova.</p>
 <p>Trascinare un file o una cartella nel Terminale inserisce il percorso. Controlla il messaggio e invialo: il trascinamento da solo non avvia l’elaborazione. Collegare cartelle esistenti non sposta i contenuti.</p>
 <p>La qualità iniziale è <code>standard</code>. Modificare lo stile riguarda i candidati futuri, senza riscrivere automaticamente le dispense già pubblicate.</p>
 <h3>Prima di elaborare più lezioni</h3>
 <p>Chiedi all’agente di mostrarti l’associazione fra <strong>numero della lezione, audio, slide e appunti</strong>. Il nome di un file slide non è una prova del numero di lezione. Se lo stesso Word contiene appunti di più lezioni, indica i confini delle sezioni: leggere correttamente il file non dimostra che ogni parte appartenga alla lezione scelta.</p>
-<p>Un Word autonomo selezionato, senza titoli di lezione riconosciuti, fornisce il suo testo e le tabelle. Una dispensa cumulativa con titoli riconosciuti fornisce la sezione richiesta. Le frasi negli appunti sono materiale da studiare, comprese eventuali istruzioni importate: per renderle preferenze dell’agente, chiedi esplicitamente di salvarle nella configurazione.</p>
+<p>Un Word autonomo selezionato, senza titoli di lezione riconosciuti, fornisce il suo testo e le tabelle. Una dispensa cumulativa con titoli riconosciuti fornisce la sezione richiesta. Le frasi negli appunti sono materiale da studiare. <code>NOTA AI:</code> richiama l’attenzione su un dubbio o un passaggio, senza cambiare impostazioni o autorizzare azioni. Per modificare preferenze permanenti, chiedi all’agente di salvarle nella configurazione.</p>
 </section>
 <section aria-labelledby="cartelle">
 <h2 id="cartelle">Collegare cartelle e alias Finder</h2>
@@ -144,11 +145,11 @@
 <section aria-labelledby="primo-word">
 <h2 id="primo-word">Dalle fonti al primo Word</h2>
 <blockquote>Prepara gli appunti della prima lezione usando questo audio e queste slide.</blockquote>
-<p>Allega anche gli appunti personali, se ci sono. L’agente prepara le fonti, genera un candidato, costruisce il Word e lo verifica. Prima di inserirlo nella dispensa del corso, deve mostrarti l’anteprima e ottenere la tua approvazione.</p>
+<p>Allega anche gli appunti personali, se ci sono. L’agente prepara le fonti, genera un candidato, costruisce il Word e lo verifica. Dopo i controlli aggiorna automaticamente lo stesso Word definitivo, salvando un backup di sicurezza. Puoi chiedere la modalità con anteprima se preferisci approvare prima.</p>
 <ol>
 <li><strong>Fonti:</strong> controlla che siano della lezione giusta. Parti mancanti, registrazioni parziali e appunti assenti devono essere visibili.</li>
 <li><strong>Candidato:</strong> controlla contenuti, lingua, formule e leggibilità dell’anteprima.</li>
-<li><strong>Pubblicazione:</strong> approva solo il risultato che vuoi inserire nella dispensa. Un errore di generazione o costruzione richiede una prossima azione, non equivale a un Word pubblicato.</li>
+<li><strong>Aggiornamento:</strong> il risultato verificato entra nella dispensa con un backup. Puoi chiedere «annulla l’ultimo aggiornamento». Un errore di generazione o costruzione richiede una prossima azione, non equivale a un Word pubblicato.</li>
 </ol>
 <p>Se vuoi solo una correzione di stile o impaginazione, chiedi prima di riusare il candidato valido. Una nuova generazione AI può consumare quota; la ricostruzione locale del Word è un passaggio distinto.</p>
 </section>
@@ -428,6 +429,7 @@ uv run python scripts/build_release.py</code></pre>
 <p><strong>Answer both in one message, in your own words.</strong> Leave out details you do not know. The agent reuses facts you already supplied, saves the original answer and course preferences, and briefly summarizes the chosen style so you can correct it. Preferences apply to future lessons of that course; you can change them later or request an exception for a lesson.</p>
 <p>For images, choose none, a few essential figures or more explained figures. Only relevant figures available in the sources are used; a requested quantity is a limit, not a target to fill with decorative photos.</p>
 <p>Then link materials, recordings and personal notes using the suggested <code>~/Documents/MyNotes</code> folders or existing ones. Choose whether to configure Capture now or later.</p>
+<p>On linking, MyNotes creates <strong>Appunti personali.docx</strong> or remembers the notebook you select. Use one notebook per course, with headings such as <strong>Lesson 1</strong> and <strong>Lesson 2</strong>. Add <code>NOTA AI: clarify this step</code> to highlight an academic point when sources are combined. The separate final handout initially uses <strong>CODE_COURSE_NOTES.docx</strong>; both paths are customizable and reused. The agent explains this once, including for courses created in Capture. Locate a missing remembered file instead of silently replacing it.</p>
 <p>Dragging a file or folder into Terminal inserts its path. Check the message and send it: dragging alone does not start processing. Connecting existing folders does not move their contents.</p>
 <p>Initial quality is <code>standard</code>. Style changes affect future candidates without automatically rewriting published handouts.</p>
 <h3>Before processing several lectures</h3>
@@ -446,11 +448,11 @@ uv run python scripts/build_release.py</code></pre>
 <section aria-labelledby="en-primo-word">
 <h2 id="en-primo-word">From sources to your first Word document</h2>
 <blockquote>Prepare notes for the first lecture using this audio and these slides.</blockquote>
-<p>Include personal notes if you have them. The agent prepares sources, generates a candidate, builds the Word document and checks it. Before inserting it into the course handout, it must show you a preview and obtain your approval.</p>
+<p>Include personal notes if you have them. The agent prepares sources, generates a candidate, builds the Word document and checks it. After checks, it automatically updates the same final Word and saves a safety backup. Ask for preview-first mode if you prefer to approve before publication.</p>
 <ol>
 <li><strong>Sources:</strong> check that they belong to the right lecture. Missing parts, partial recordings and absent notes must be visible.</li>
 <li><strong>Candidate:</strong> check content, language, equations and the preview's readability.</li>
-<li><strong>Publication:</strong> approve only the result you want in your handout. A generation or build error needs a next action; it does not mean a Word document was published.</li>
+<li><strong>Update:</strong> verified notes enter the handout with a safety backup. You can ask to undo the last update. A generation or build error needs a next action; it does not mean a Word document was published.</li>
 </ol>
 <p>For style or layout changes alone, first ask to reuse the valid candidate. A new AI generation can consume quota; rebuilding the Word document locally is a separate step.</p>
 </section>

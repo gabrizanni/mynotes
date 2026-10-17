@@ -273,6 +273,9 @@ def build_parser() -> argparse.ArgumentParser:
     link.add_argument("path", help="course folder or Finder alias; quote paths with spaces")
     link.add_argument("--workspace", help="private workspace path")
     link.add_argument("--notes", help="explicit personal-notes folder if selection is ambiguous")
+    link.add_argument("--notes-file", help="stable personal notebook; create a new .docx or select an existing file")
+    link.add_argument("--handout-file", help="custom final cumulative .docx path")
+    link.add_argument("--publication-mode", choices=("automatic", "review"), help="save automatic updates or preview-first publication")
     link.add_argument("--recordings", help="explicit recordings folder if selection is ambiguous")
     link.add_argument("--dry-run", action="store_true", help="inspect without changing configuration")
     link.add_argument("--json", action="store_true", help="return resolved paths and bounded inventory as JSON")
@@ -397,6 +400,12 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--workspace", help="private workspace path")
     publish.add_argument("--candidate", help="specific validated candidate DOCX")
     publish.add_argument("--accept-current-word", action="store_true", help="accept an explicitly reviewed external Word change")
+    update = subparsers.add_parser("update", help="build validated notes and update the stable handout, with a safety backup")
+    update.add_argument("lecture_id", help="COURSE-LNN")
+    update.add_argument("--workspace", help="private workspace path")
+    undo = subparsers.add_parser("undo", help="undo the last course update, preserving a safety copy")
+    undo.add_argument("course", help="course code")
+    undo.add_argument("--workspace", help="private workspace path")
     word_history = subparsers.add_parser("history", help="list restorable cumulative-Word backups")
     word_history.add_argument("course", nargs="?", help="optional course code")
     word_history.add_argument("--workspace", help="private workspace path")
@@ -477,7 +486,10 @@ def _course(arguments: argparse.Namespace) -> int:
         from .course_links import link_course_folder
         result = link_course_folder(Workspace.from_value(arguments.workspace), arguments.code, Path(arguments.path),
             dry_run=arguments.dry_run, notes=Path(arguments.notes) if arguments.notes else None,
-            recordings=Path(arguments.recordings) if arguments.recordings else None)
+            recordings=Path(arguments.recordings) if arguments.recordings else None,
+            notes_file=Path(arguments.notes_file) if arguments.notes_file else None,
+            handout_file=Path(arguments.handout_file) if arguments.handout_file else None,
+            publication_mode=arguments.publication_mode)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return 0 if result["status"] != "NEEDS_SELECTION" else 1
     workspace = _workspace(arguments)
@@ -978,6 +990,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "publish":
             candidate = Path(arguments.candidate).expanduser() if arguments.candidate else None
             print(json.dumps(publish_word_candidate(_workspace(arguments), arguments.lecture_id, candidate, accept_current_word=arguments.accept_current_word), ensure_ascii=False, sort_keys=True))
+            return 0
+        if arguments.command == "update":
+            from .publication import update_course_notes
+            print(json.dumps(update_course_notes(_workspace(arguments), arguments.lecture_id), ensure_ascii=False, sort_keys=True))
+            return 0
+        if arguments.command == "undo":
+            from .publication import undo_last_update
+            print(json.dumps(undo_last_update(_workspace(arguments), arguments.course), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "history":
             print(json.dumps(publication_history(_workspace(arguments), arguments.course), ensure_ascii=False, indent=2))
