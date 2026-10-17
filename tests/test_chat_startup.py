@@ -99,3 +99,31 @@ def test_prepare_reuses_transcript_without_recording_discovery(tmp_path, monkeyp
     assert seen[0][0] == "OPS-L03"
     assert seen[0][1]["transcript_path"] == transcript
     assert seen[0][1]["audio"] is None
+
+
+def test_cli_and_chat_do_not_change_process_parts_policy(tmp_path, monkeypatch):
+    import os
+    monkeypatch.delenv("MYNOTES_AGY_PARTS", raising=False)
+    assert main(["init", "--workspace", str(tmp_path / "cli")]) == 0
+    assert "MYNOTES_AGY_PARTS" not in os.environ
+    workspace, configuration = _setup(tmp_path)
+    monkeypatch.setattr("mynotes.chat.shutil.which", lambda _: "/usr/bin/agy")
+    calls = []
+    monkeypatch.setattr("mynotes.chat.subprocess.run", lambda command, **kwargs:
+                        calls.append((command, kwargs)) or type("Done", (), {"returncode": 0})())
+    configuration["courses"][0]["context_setup"] = "pending"
+    launch_chat(workspace, configuration, "agy", "Prepara OPS-L03")
+    assert "MYNOTES_AGY_PARTS" not in os.environ
+    prompt = calls[0][0][calls[0][0].index("--prompt-interactive") + 1]
+    assert "do not start pending-course questionnaires before completing" in prompt
+    assert "Optional course context never" in prompt
+    assert "no extra approval" in prompt and "review mode" in prompt
+
+
+def test_installed_integrations_share_operational_priority(tmp_path):
+    for platform in ("codex", "agy", "claude"):
+        installed = install_integration(platform, tmp_path)
+        for name in (["agents/mynotes.md", "skills/mynotes/SKILL.md"] if platform == "agy" else ["SKILL.md"]):
+            content = (Path(installed["path"]) / name).read_text()
+            assert "do not start pending-course questionnaires before completing" in content
+            assert "After completing the operational request" in content

@@ -17,7 +17,7 @@ from test_batch_generation import workspace_and_deck, Adapter, VERIFIED
 def test_compact_context_preserves_every_utterance_and_provenance():
     rows = [{"id": f"T{n:03d}", "kind": "transcript", "text": f"Exact source sentence {n}.",
              "start_seconds": n, "end_seconds": n+1, "speaker": "UNKNOWN",
-             "speaker_role": "Professor" if n == 400 else "UNKNOWN",
+             "speaker_role": "Professor" if n == 200 else "UNKNOWN",
              "speaker_role_source": "unverified", "speaker_role_confidence": None}
             for n in range(1, 1001)]
     req = ProviderRequest("TEST-L01", {}, {}, RequestedModel("agy", "test", "high", "standard"), source_pack={"evidence": rows})
@@ -198,3 +198,16 @@ def test_staged_request_inputs_preserve_earlier_attempt_sources(tmp_path):
     second = providers._stage_agy_context(newer, tmp_path)
     assert first != second
     assert all(path.read_bytes() == data for path, data in before.items())
+
+
+def test_staged_evidence_is_byte_bounded_without_an_arbitrary_line_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(providers, "AGY_INLINE_CONTEXT_BYTES", 1)
+    rows = [{"id": f"T{n:03d}", "text": "x"} for n in range(1, 201)]
+    req = ProviderRequest("TEST-L01", {}, {}, RequestedModel("agy", "test", "high", "standard"),
+                          source_pack={"evidence": rows, "syllabus": "Context. " * 5000}, run_dir=tmp_path)
+    providers._stage_agy_context(req, tmp_path)
+    manifest = next((tmp_path / "request-inputs").glob("*/manifest.json"))
+    files = [p for p in manifest.parent.glob("evidence-*.jsonl")]
+    assert len(files) == 1
+    assert len(files[0].read_text().splitlines()) == 200
+    assert files[0].stat().st_size <= providers.AGY_INPUT_PART_BYTES

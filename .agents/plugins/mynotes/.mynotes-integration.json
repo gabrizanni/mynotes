@@ -1,8 +1,8 @@
 {
   "files": {
-    "agents/mynotes.md": "8959612d6ed877ae94d3df6a49a9b195d61c0827656cab9efb80b371855f2b7f",
+    "agents/mynotes.md": "b9e4372e4e1a7d4f81396ca570d970508409717f90995ab0e97c733daa9f97df",
     "plugin.json": "940a413bef39c782c4777e7ad9f46cb1bad0e2b4001e6e0a4717728e878e8b1e",
-    "skills/mynotes/SKILL.md": "2c44c4bdcdc8a6330adc01582ba04fa2dd40db9735cb176d6474a5fa1a8199b1"
+    "skills/mynotes/SKILL.md": "71b2268186d9a2ef7256e97ddf9e0a38aa60d868fd5c7ce6425995cb5da9e1b3"
   },
   "platform": "agy",
   "schema_version": 1

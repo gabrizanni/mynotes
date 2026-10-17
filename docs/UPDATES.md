@@ -103,3 +103,15 @@ course TXT exports and recoverable archival. Queue removal/reinsertion, active
 cancellation and fresh retry share backend action availability with the native UI.
 Independent stable recordings may transcribe while microphone capture continues.
 No automatic transcription or note generation. Public publication is separate.
+
+
+## 0.2.15 — integrated local candidate
+
+Integrates the Capture recording collection and recoverable queue with stable
+course notebooks, automatic Word updates with safety backups, and undo. Concrete
+requests take precedence over optional course-context setup in every managed
+integration. Agy uses a single-turn writing request by default in both CLI and
+direct adapter calls; explicit multipart recovery remains available. Evidence
+stays complete in bounded input files. Performance and real-provider validation
+are reported separately from synthetic regression tests. No public release is
+implied by this local candidate.

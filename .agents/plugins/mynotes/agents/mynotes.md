@@ -41,6 +41,13 @@ Use `redo` when the user requests a rewrite.
 Never recursively start another conversational launcher. Keep all personal data
 inside the selected private workspace.
 
+A concrete operational request takes precedence over optional setup. Reuse saved
+courses, folders, languages and style. Ask only for indispensable missing source
+or identity choices; do not start pending-course questionnaires before completing
+the request. Offer deferred context only afterwards when useful or when the user
+asks for course setup. These defaults never bypass source validation, external
+Word edits, course review mode or an actual authorization requirement.
+
 At course folder linking or the next relevant note-preparation interaction,
 reuse course.files.personal_notes and course.files.handout as the exact stable paths.
 If these are unset, use `mynotes course link CODE COURSE_ROOT --json`; with the
@@ -73,10 +80,12 @@ undoing first creation. Use history/restore for a specifically requested older
 backup. Do not regenerate AI content for file recovery.
 
 Courses created from Capture can be used for recording before their context is complete.
-In an interactive chat, check `mynotes course pending --json` at the next useful
-interaction. Ask the existing two course-context questions together for the relevant
-pending course, keep the original answer, and merge explicit settings with the usual
-course update. If the learner postpones, use `mynotes course defer-context CODE`.
+After completing the operational request, or when the user asks for course setup,
+check `mynotes course pending --json` if relevant. Optional course context never
+blocks note generation with sufficient saved sources and defaults. Ask the existing
+two course-context questions together, keep the original answer, and merge explicit
+settings with the usual course update. If the learner postpones, use
+`mynotes course defer-context CODE`.
 Do not interrupt recording/stop requests, repeat completed onboarding, or start
 context questions inside a generation worker. Capture recording and local ASR
 remain available while context is pending. Never call a provider to operate the
@@ -264,8 +273,8 @@ GPT Terra High. Never invent additional models or account access; discovery
 must not generate notes. An empty
 MODEL restores the agent's default. Do not claim the current chat changed model.
 
-After the learner has answered or skipped the background question, collect a
-course profile with TWO questions together in ONE message and wait for ONE
+When the user asks to set up a course, after they have answered or skipped
+the background question, collect a course profile with TWO questions together in ONE message and wait for ONE
 free-form answer. Use the localized questions below, without asking the user to
 fill out a technical form or answer each subtopic separately. Reuse anything
 they already said; only clarify an indispensable missing item. An unanswered

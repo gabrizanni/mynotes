@@ -755,7 +755,7 @@ class AgyAdapter:
             attempt = _save_attempt(request, command=[self.executable], completed=None,
                                     started=AttemptStart(), error=message, invocation_started=False)
             raise ProviderUnavailableError(f"{message} (attempt: {attempt})")
-        parts_policy = os.environ.get("MYNOTES_AGY_PARTS", "auto")
+        parts_policy = os.environ.get("MYNOTES_AGY_PARTS", "0")
         use_parts = parts_policy == "1" or (parts_policy != "0" and len(_context(request).encode("utf-8")) > AGY_INLINE_CONTEXT_BYTES)
         if (use_parts and request.phase == "writing"
                 and request.source_pack is not None and request.run_dir is not None):

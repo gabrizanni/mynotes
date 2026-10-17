@@ -891,8 +891,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("MYNOTES_GENERATION_WORKER") == "1":
         print("Note-writing workers cannot invoke MyNotes. Return the structured notes from the supplied evidence; do not coordinate another workflow.")
         return 3
-    if "MYNOTES_AGY_PARTS" not in os.environ:
-        os.environ["MYNOTES_AGY_PARTS"] = "0"
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:

@@ -36,24 +36,25 @@ def test_portions_assemble_without_rewriting_or_duplicate_metadata(tmp_path):
     assert one['result']['blocks']==portion()['result']['blocks']
 
 
-def test_adapter_uses_incremental_writing_for_large_context_only(tmp_path, monkeypatch):
+@pytest.mark.parametrize('policy,incremental', [(None, False), ('0', False), ('1', True), ('auto', True)])
+def test_adapter_defaults_to_single_call_and_retains_explicit_parts(tmp_path, monkeypatch, policy, incremental):
     from mynotes import providers
     req = request(tmp_path)
-    monkeypatch.delenv('MYNOTES_AGY_PARTS', raising=False)
+    if policy is None:
+        monkeypatch.delenv('MYNOTES_AGY_PARTS', raising=False)
+    else:
+        monkeypatch.setenv('MYNOTES_AGY_PARTS', policy)
     monkeypatch.setattr(providers, 'provider_executable', lambda _: sys.executable)
     monkeypatch.setattr(a, 'generate_parts', lambda value: 'incremental')
     monkeypatch.setattr(providers, '_context', lambda value: 'x' * (providers.AGY_INLINE_CONTEXT_BYTES + 1))
-    assert providers.AgyAdapter().generate(req) == 'incremental'
-    # Small requests, an explicit escape hatch, and review phases keep the
-    # existing single-turn path; intercept it before any actual provider call.
     def single(*args, **kwargs): raise RuntimeError('single-turn')
     monkeypatch.setattr(providers, '_run_agy_worker', single)
     monkeypatch.setattr(providers, '_stage_agy_context', lambda *args, **kwargs: 'staged test context')
-    monkeypatch.setenv('MYNOTES_AGY_PARTS', '0')
-    with pytest.raises(RuntimeError, match='single-turn'): providers.AgyAdapter().generate(req)
-    monkeypatch.delenv('MYNOTES_AGY_PARTS')
-    monkeypatch.setattr(providers, '_context', lambda value: 'small')
-    with pytest.raises(RuntimeError, match='single-turn'): providers.AgyAdapter().generate(req)
+    if incremental:
+        assert providers.AgyAdapter().generate(req) == 'incremental'
+    else:
+        with pytest.raises(RuntimeError, match='single-turn'): providers.AgyAdapter().generate(req)
+    assert os.environ.get('MYNOTES_AGY_PARTS') == policy
 
 
 @pytest.mark.parametrize('change',[

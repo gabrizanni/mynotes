@@ -104,13 +104,18 @@ automatically spending quota. Shared provider attempts are stored and counted
 once; per-lesson candidates reference them without multiplying consumption.
 Counter semantics and unknown values remain separate; there is no inferred bill.
 
-### Bounded Agy writing
+### Single-turn default and optional bounded Agy portions
 
-Large Agy writing requests (source context over 32,000 UTF-8 bytes) use one
-conversation/process with consecutive portions of up to 12 blocks. This is still
+Agy writing uses one single-turn request by default, including large source packs.
+Inputs over 32,000 UTF-8 bytes are staged losslessly in evidence files bounded
+by 20,000 bytes instead of one oversized inline message. No source rows are omitted.
+There is no guarantee of a sub-minute response or immunity to network failures.
+
+Explicit `MYNOTES_AGY_PARTS=1` selects one conversation/process with consecutive
+portions of up to 12 blocks. `MYNOTES_AGY_PARTS=auto` retains the previous
+size-based selection for diagnostics and existing workflows. This is still
 one writing phase: no general AI review is added. Sources are staged losslessly
-once; continuations keep the conversation, model, effort and style. Small writing
-requests and explicitly requested review phases keep their existing path.
+once; continuations keep the conversation, model, effort and style. Explicitly requested review phases keep their existing single-turn path.
 
 Each portion requires its own SUCCESS result and an integrity-checked checkpoint.
 The assembled notes still pass the full coverage, duplicate, style and Word
@@ -126,8 +131,9 @@ events do not reset that timer. A deadline is a failure bound, not
 a promise of successful completion or a word limit. Completed portions are
 retained on cancellation. Real progress reports accepted portion counts and
 elapsed time, never invented completion percentages. `MYNOTES_AGY_PARTS=0`
-provides an explicit single-turn diagnostic escape hatch, without changing the
-saved model/effort. Usage is the CLI's cumulative session snapshot, not a sum of
+selects the default single-turn path explicitly, without changing the saved
+model/effort. CLI and direct adapter calls use the same default without changing
+the parent process environment. Usage is the CLI's cumulative session snapshot, not a sum of
 the same counters across portions or resumes; cache/thinking are not added again.
 
 Temporary transport failure permits one automatic resume after 10 seconds with
@@ -243,7 +249,7 @@ building the DMG. Unit tests, native compilation, real provider runs, rendered
 page inspection, Microsoft Word checks and isolated installer checks are
 distinct evidence. A skipped visual check never counts as passed.
 
-### Bounded Agy writing workers
+### Single-turn default and optional bounded Agy portions workers
 
 Agy generation selects `mynotes-note-writer`, a private, per-attempt agent with
 `view_file` for the exact staged text inputs/source images and `finish` to return the structured

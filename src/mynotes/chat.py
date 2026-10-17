@@ -26,7 +26,6 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     from .models import resolve_provider_options
     model, effort = resolve_provider_options(configuration, selected)
     environment = provider_environment()
-    environment.setdefault("MYNOTES_AGY_PARTS", "0")
     executable = shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
     if not executable:
         raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
@@ -66,8 +65,8 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         "The built-in Word style is authoritative; never ask for or read a reference "
         "DOCX/PDF to apply formatting. "
     )
-    from .integrations import CAPTURE_AGENT_GUIDANCE, FIRST_PROFILE_GUIDANCE, FIRST_COURSE_GUIDANCE, NOTE_GENERATION_GUIDANCE, TRANSCRIPTION_GUIDANCE, NOTE_FILES_GUIDANCE
-    style_guidance += NOTE_FILES_GUIDANCE + CAPTURE_AGENT_GUIDANCE + FIRST_PROFILE_GUIDANCE + FIRST_COURSE_GUIDANCE + NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
+    from .integrations import CAPTURE_AGENT_GUIDANCE, FIRST_PROFILE_GUIDANCE, FIRST_COURSE_GUIDANCE, NOTE_GENERATION_GUIDANCE, TRANSCRIPTION_GUIDANCE, NOTE_FILES_GUIDANCE, TASK_PRIORITY_GUIDANCE
+    style_guidance += TASK_PRIORITY_GUIDANCE + NOTE_FILES_GUIDANCE + CAPTURE_AGENT_GUIDANCE + FIRST_PROFILE_GUIDANCE + FIRST_COURSE_GUIDANCE + NOTE_GENERATION_GUIDANCE + TRANSCRIPTION_GUIDANCE
     if not configuration.get("courses") and not background_known and not message:
         welcome = (
             "Benvenuto in MyNotes: ti aiuto a trasformare registrazioni, slide e appunti in materiale di studio ordinato e documenti Word.\n"
@@ -88,7 +87,7 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             "the task's direct command for transcription and course setup. For note generation run "
             "`mynotes doctor` and `mynotes status` through the command tool for this workspace; "
             "if either cannot run, report that and stop. Then inspect only task-relevant files. "
-            "Execute the requested task directly with sensible defaults; do not interrupt with onboarding questions or confirmation gates. "
+            "Execute the requested task directly with sensible defaults; ask only for indispensable missing identification or sources; respect review mode and external-edit checks. "
             "For ordinary lesson notes, follow prepare -> generate -> update with content, structure and render checks. For quiz/study guides use the standalone study path; "
             "for transcription use only the direct transcription path. Validate and visually inspect the Word "
             "candidate and the resulting Word; updates are automatic with safety backups unless the course publication mode is review. In review mode show the candidate and obtain explicit user approval before publication. Never launch `mynotes chat` recursively."
