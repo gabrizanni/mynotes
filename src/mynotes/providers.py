@@ -698,7 +698,7 @@ def _stage_agy_context(request: ProviderRequest, directory: Path, *, write: bool
     chunks, size, part = [], 0, 1
     for row in evidence or []:
         line = json.dumps(row, ensure_ascii=True, separators=(",", ":"))
-        if chunks and (size + len(line.encode("utf-8")) + 1 > AGY_INPUT_PART_BYTES or len(chunks) >= 150):
+        if chunks and (size + len(line.encode("utf-8")) + 1 > AGY_INPUT_PART_BYTES):
             save(f"evidence-{part:03d}.jsonl", "\n".join(chunks))
             chunks, size, part = [], 0, part + 1
         chunks.append(line)
