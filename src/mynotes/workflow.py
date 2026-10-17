@@ -643,8 +643,19 @@ def ordinary_emphasis_diagnostics(notes: dict[str, Any], source_pack: dict[str, 
             "required": required, "missing": required and not spans}
 
 
-def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True) -> dict[str, Any]:
+def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True, normalization_report_path: Path | None = None) -> dict[str, Any]:
     """Reject a polished-looking draft unless it accounts for its actual evidence."""
+    from .evidence_refs import normalize_references, EvidenceReferenceError
+    try:
+        original_notes = notes
+        notes, transformations = normalize_references(notes, {item["id"] for item in source_pack["evidence"]})
+        if transformations and normalization_report_path is not None:
+            atomic_json_write(normalization_report_path, {
+                "raw_response_sha256": hashlib.sha256(json.dumps(original_notes, sort_keys=True).encode()).hexdigest(),
+                "transformations": transformations,
+            })
+    except EvidenceReferenceError as error:
+        raise WorkflowError(str(error)) from error
     result = _validate_notes(notes, lecture_id)
     # Some providers repeat the document title as a level-2 block even though
     # the Word renderer inserts that heading itself. Remove only that exact
@@ -924,13 +935,13 @@ def _generation_lock(workspace: Workspace, lecture_id: str) -> Iterator[None]:
 def generate_candidate(workspace: Workspace, lecture_id: str, *, source_pack_path: Path | None = None,
                        provider: str | None = None, quality: str = "standard",
                        provider_adapter: ProviderAdapter | None = None,
-                       instructions: str = "", image_limit: int | None = None) -> dict[str, Any]:
+                       instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None) -> dict[str, Any]:
     lecture_id = lecture_id.upper()
     parse_lecture_id(lecture_id)
     with _generation_lock(workspace, lecture_id):
         return _generate_candidate_locked(workspace, lecture_id, source_pack_path=source_pack_path,
                                           provider=provider, quality=quality, provider_adapter=provider_adapter,
-                                          instructions=instructions, image_limit=image_limit)
+                                          instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus)
 
 
 def _generate_candidate_locked(
@@ -943,6 +954,7 @@ def _generate_candidate_locked(
     provider_adapter: ProviderAdapter | None = None,
     instructions: str = "",
     image_limit: int | None = None,
+    speaker_focus: str | None = None,
 ) -> dict[str, Any]:
     """Generate a non-published candidate from a validated source pack.
 
@@ -953,7 +965,10 @@ def _generate_candidate_locked(
     lecture_id = lecture_id.upper()
     course_code, _ = parse_lecture_id(lecture_id)
     configuration = workspace.configuration_store().load()
-    course = _course(configuration, course_code)
+    course = dict(_course(configuration, course_code))
+    if speaker_focus is not None:
+        if speaker_focus not in {"lecture","professor"}:raise WorkflowError("Invalid speaker_focus")
+        course['speaker_focus']=speaker_focus
     requested = resolve_model(configuration, provider, quality)
     path = source_pack_path or workspace.runs_dir / lecture_id / "source_pack.json"
     try:
@@ -1022,7 +1037,8 @@ def _generate_candidate_locked(
                     response = invoke_provider(request, provider_adapter)
                     _save_generation_phase(returned, previous, response)
                 validated = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
-                                                     final_phase=phase == QUALITY_PHASES[requested.quality][-1][0])
+                                                     final_phase=phase == QUALITY_PHASES[requested.quality][-1][0],
+                                                     normalization_report_path=checkpoint.with_suffix(".normalization.json"))
                 if not checkpoint.exists():
                     _save_generation_phase(checkpoint, previous, response)
                     state.record_attempt(lecture_id, requested, status=f"SUCCESS_{phase.upper()}", response=response)
@@ -1048,9 +1064,12 @@ def _generate_candidate_locked(
             state.record_nonpublished(lecture_id, input_hash, requested, candidate_path, sources, "FAILED")
             _write_status_markdown(workspace, state.rows())
             raise WorkflowError("Sources changed during generation; the prior candidate was preserved. Prepare/review the sources before retrying.")
+        from .generation_diagnostics import speaker_warning
+        warning = speaker_warning(pack, course.get("speaker_focus", "lecture"))
         atomic_json_write(candidate_path, {
+            "warnings": [warning] if warning else [],
             "notes": previous, "source_pack": str(path), "source_pack_hash": pack_hash,
-            "request_options": {"instructions": instructions, "image_limit": image_limit}, "effective_style": editorial_style,
+            "request_options": {"instructions": instructions, "image_limit": image_limit, **({"speaker_focus": speaker_focus} if speaker_focus else {})}, "effective_style": editorial_style,
             "requested_model": requested.__dict__,
             "actual_model": {"provider": response.provider, "model": response.model, "effort": response.effort},
             "quality": requested.quality, "phases": [phase for phase, _ in QUALITY_PHASES[requested.quality]],
@@ -1061,6 +1080,7 @@ def _generate_candidate_locked(
         state.record_candidate(lecture_id, input_hash, response, requested.quality, candidate_path)
         _write_status_markdown(workspace, state.rows())
         return {"lecture_id": lecture_id, "status": "CANDIDATE_READY", "candidate": str(candidate_path), "published_to_word": False,
+                "warnings": [warning] if warning else [],
                 "requested_model": requested.__dict__, "actual_model": {"provider": response.provider, "model": response.model, "effort": response.effort},
                 "quality": requested.quality, "phases": [phase for phase, _ in QUALITY_PHASES[requested.quality]]}
     finally:

@@ -192,6 +192,8 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Invalid course context setup state")
     if course["context"].strip() and course["context_setup"] in {"pending", "deferred"}:
         course["context_setup"] = "complete"
+    if "speaker_focus" in course and course["speaker_focus"] not in {"lecture", "professor"}:
+        raise ConfigurationError("speaker_focus must be lecture or professor")
     course["aliases"] = _string_list(course["aliases"], "course aliases")
     course["instructors"] = _string_list(course["instructors"], "course instructors")
     course["modules"] = _string_list(course["modules"], "course modules")

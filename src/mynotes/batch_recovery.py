@@ -78,12 +78,23 @@ def compatible_response(root, plan, lectures, continuity):
         if not same: continue
         directory=root/'generation-checkpoints'/_hash(intent(old,lectures,continuity,reviewed=True))
         path=directory/filename
-        if not path.is_file() or not prompt_matches(directory,old,plan,lectures,continuity):continue
+        if not prompt_matches(directory,old,plan,lectures,continuity):continue
+        if not path.is_file():
+            from .batch import _request
+            from .providers import RequestedModel
+            from .local_recovery import recover_parts
+            request,_=_request({**old,'packs':plan['packs'],'inventory':plan['inventory'],'requested':RequestedModel(**old['requested_model'])},lectures,directory,continuity)
+            response,receipt=recover_parts(request,directory,apply=True)
+            if response is not None:
+                return response, {'manifest':str(manifest),'manifest_sha256':file_sha256(manifest),
+                                  'returned':response.attempt_path,'returned_sha256':file_sha256(Path(response.attempt_path)),
+                                  'reason':'Complete original SUCCESS stream with locally canonicalized references'}
+            continue
         response=_load_generation_phase(path,previous=None)
         if response is None or not response.attempt_path:continue
         if not Path(response.attempt_path).is_absolute() or not Path(response.attempt_path).is_file():continue
         record=json.loads(Path(response.attempt_path).read_text())
-        if record.get('error') or record.get('returncode')!=0:continue
+        if record.get('transport') != 'agy_local_recovery_v1' and (record.get('error') or record.get('returncode')!=0):continue
         from .batch import _request
         from .providers import RequestedModel
         runtime={**old,'packs':plan['packs'],'inventory':plan['inventory'],'requested':RequestedModel(**old['requested_model'])}
@@ -100,6 +111,11 @@ def compatible_response(root, plan, lectures, continuity):
 def certify_response(response,request,root):
     if not response.attempt_path or not Path(response.attempt_path).is_absolute():return response
     record=json.loads(Path(response.attempt_path).read_text())
+    if record.get('transport') == 'agy_local_recovery_v1':
+        from .local_recovery import verify_local_receipt
+        raw=verify_local_receipt(Path(response.attempt_path),root)
+        if response.notes != raw: raise WorkflowError('Recovered result changed')
+        return response
     if record.get('error') or record.get('returncode')!=0:raise WorkflowError('Saved response came from a failed provider transport')
     if record.get('envelope',{}).get('transport')!='agy_parts_v1':return response
     from .agy_parts import verify_receipt
@@ -269,9 +285,29 @@ def batch_status(workspace,batch_id):
                     activity={**activity,'status':state['status'],'active_seconds':state.get('used_seconds'),'suspended_seconds':state.get('suspended_seconds',0)}
     status='INTERRUPTED' if manifest['status']=='RUNNING' and activity.get('status')=='STOPPED' else manifest['status']
     if status=='RUNNING' and activity.get('status')=='UNKNOWN':status='STATUS_UNAVAILABLE'
+    recovery=None
+    if status in {'FAILED','INTERRUPTED'} and manifest.get('activity',{}).get('checkpoint'):
+        try:
+            from .local_recovery import recover_batch
+            recovery=recover_batch(workspace,batch_id,apply=False)
+        except (OSError,ValueError,RuntimeError,KeyError,TypeError) as error:
+            recovery={'status':'NEEDS_REVIEW','message':str(error),'provider_invoked':False}
+    for group in (recovery or {}).get('lessons', []):
+        for row in lessons:
+            if row['lecture_id'] in group['lessons'] and not row['content_validated']:
+                row.update({k:group[k] for k in ('status','phase','defects','next_action','raw_result_preserved') if k in group})
+                row['active_seconds']=group.get('active_seconds_preserved')
+    for row in lessons:
+        budgets=[]
+        for file in (root/'active-budgets').glob('*.json'):
+            value=json.loads(file.read_text())
+            if row['lecture_id'] in value.get('lessons',[]):budgets.append(value.get('used_seconds',0))
+        row['active_seconds']=max([v for v in [*budgets,row.get('active_seconds')] if v is not None],default=None)
     return {'batch_id':batch_id,'status':status,'lessons':lessons,'activity':activity,
             'problem':manifest.get('problem',manifest.get('error')),'network_retries':retries,
-            'published_to_word':False}
+            'local_recovery':recovery,'warnings':manifest.get('warnings',[]),
+            'phase':next((r['phase'] for r in lessons if r.get('phase')),None) or (manifest.get('problem') if isinstance(manifest.get('problem'),dict) else {}).get('phase') or activity.get('status'), 'published_to_word':False}
+
 
 
 def verify_repair_lineage(candidate,workspace_root):

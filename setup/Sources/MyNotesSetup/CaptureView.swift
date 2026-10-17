@@ -5,9 +5,19 @@ import Combine
 // Preserve the State property wrapper when Command Line Tools lack SwiftUI macros.
 typealias CaptureViewState<Value> = SwiftUI.State<Value>
 
-private enum CaptureSheet: String, Identifiable {
+private enum CaptureSheet: Equatable, Identifiable {
     case calendar, scheduled, immediate, edit, course
-    var id: String { rawValue }
+    case repair(String)
+    var id: String {
+        switch self {
+        case .calendar: return "calendar"
+        case .scheduled: return "scheduled"
+        case .immediate: return "immediate"
+        case .edit: return "edit"
+        case .course: return "course"
+        case .repair(let sourceID): return "repair:" + sourceID
+        }
+    }
 }
 
 struct CaptureView: View {
@@ -17,6 +27,7 @@ struct CaptureView: View {
     @CaptureViewState<Bool> private var showCancelled = false
     @CaptureViewState<String> private var section = "calendar"
     @CaptureViewState<CaptureSheet?> private var sheet: CaptureSheet?
+    @Environment(\.scenePhase) private var scenePhase
     let active: Bool
     private let poll = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     private var snapshot: CaptureSnapshot? { model.snapshot }
@@ -33,6 +44,7 @@ struct CaptureView: View {
             header
             if let error = model.error { ScrollView { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }.frame(maxHeight: 80) }
             if let notice = model.notice { Text(notice).font(.callout).foregroundStyle(.secondary) }
+            if let warning = model.refreshWarning { Label(warning, systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let snapshot {
                 status(snapshot)
                 Picker("Vista Capture", selection: $section) {
@@ -51,19 +63,36 @@ struct CaptureView: View {
                 ContentUnavailableView("Capture non disponibile", systemImage: "calendar.badge.clock", description: Text("Completa il setup di MyNotes e premi Aggiorna. Puoi registrare anche senza corso."))
             }
         }.padding(24)
-        .onAppear { Task {
-            await model.refresh()
-            if model.isPreview { selected = model.snapshot?.events.first?.id }
-        } }
-        .onReceive(poll) { _ in if active && sheet == nil { Task { await model.refresh(silent: true) } } }
+        .onAppear { if active { refreshVisible() } }
+        .onReceive(poll) { date in
+            if active && scenePhase == .active && sheet == nil && model.claimPoll(at: date) {
+                Task { await model.refresh(silent: true, includeLibrary: section != "calendar") }
+            }
+        }
+        .onChange(of: active) { _, visible in if visible { refreshVisible() } }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refreshVisible() } }
+        .onChange(of: section) { _, _ in refreshVisible() }
+        .onChange(of: sheet) { _, value in if value == nil { refreshVisible() } }
         .onChange(of: model.lastEventID) { _, value in if let value { selected = value } }
         .sheet(item: $sheet) { kind in
             if let snapshot {
                 if kind == .course { CaptureCourseForm(model: model) }
+                else if case .repair(let sourceID) = kind { CaptureCalendarForm(model: model, snapshot: snapshot, repairing: sourceID) }
                 else if kind == .calendar { CaptureCalendarForm(model: model, snapshot: snapshot) }
                 else { CaptureLessonForm(model: model, snapshot: snapshot, event: kind == .edit ? selectedEvent : nil, immediate: kind == .immediate) }
             }
         }
+    }
+    private func refreshVisible() {
+        guard active, scenePhase == .active, sheet == nil else { return }
+        _ = model.claimPoll(force: true)
+        Task {
+            await model.refresh(silent: model.snapshot != nil, includeLibrary: section != "calendar")
+            if model.isPreview && selected == nil { selected = model.snapshot?.events.first?.id }
+        }
+    }
+    private func openLesson(_ kind: CaptureSheet) {
+        Task { if await model.prepareLesson() { sheet = kind } }
     }
     private var header: some View {
         HStack(spacing: 12) {
@@ -80,10 +109,10 @@ struct CaptureView: View {
             }
             Spacer()
             if model.busy { ProgressView().controlSize(.small) }
-            Button("Aggiorna") { Task { await model.refresh() } }.disabled(model.busy)
+            Button("Aggiorna") { Task { await model.refresh(includeLibrary: section != "calendar") } }.disabled(model.busy)
             Button("Nuovo corso", systemImage: "plus") { sheet = .course }.disabled(model.busy || model.isPreview)
-            Button("Programma", systemImage: "calendar.badge.plus") { sheet = .scheduled }.disabled(unavailable)
-            Button("Registra ora", systemImage: "record.circle") { sheet = .immediate }.buttonStyle(.borderedProminent).disabled(unavailable || snapshot?.running != true || snapshot?.runtime.recording == true || snapshot?.runtime.exporting == true)
+            Button("Programma", systemImage: "calendar.badge.plus") { openLesson(.scheduled) }.disabled(unavailable)
+            Button("Registra ora", systemImage: "record.circle") { openLesson(.immediate) }.buttonStyle(.borderedProminent).disabled(unavailable || snapshot?.running != true || snapshot?.runtime.recording == true || snapshot?.runtime.exporting == true)
         }
     }
     private var unavailable: Bool { model.busy || model.isPreview }
@@ -116,8 +145,11 @@ struct CaptureView: View {
                 if !snapshot.sources.isEmpty { ScrollView { VStack(alignment: .leading, spacing: 12) { ForEach(snapshot.sources) { source in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Label(source.label, systemImage: "calendar").font(.callout.bold()); Spacer()
+                            Label(source.label, systemImage: "calendar").font(.callout.bold()).fixedSize(horizontal: false, vertical: true)
+                        }
+                        HStack {
                             Button("Sincronizza") { Task { await model.perform("sync", arguments: ["--source", source.id]) } }
+                            Button("Correggi collegamento") { sheet = .repair(source.id) }
                             Button("Scollega") { Task { await model.perform("unsubscribe", arguments: ["--source", source.id]) } }
                         }.disabled(model.busy || model.isPreview)
                         if source.importMode == nil || source.importMode == "mapped" {
@@ -140,7 +172,13 @@ struct CaptureView: View {
                                 }
                             }
                         }
-                        if source.error != nil { Text("Sincronizzazione non riuscita. Il precedente calendario è conservato: controlla il link e riprova.").font(.caption).foregroundStyle(.red) }
+                        if source.error != nil {
+                            Text(source.message ?? "Sincronizzazione non riuscita. Controlla il collegamento e riprova.")
+                                .font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                            Text(source.lastSuccess == nil ? "Nessuna lezione importata." : "Conservata la pianificazione dell’ultimo aggiornamento riuscito.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            if source.retryable == false { Text("Aggiornamento automatico sospeso: correggi il collegamento o premi Sincronizza per riprovare.").font(.caption).fixedSize(horizontal: false, vertical: true) }
+                        }
                     }
                 } } }.frame(maxHeight: 210) }
                 Text("Aggiornamento automatico ogni \(snapshot.refreshHours, specifier: "%g") ore quando Capture è attivo.").font(.caption).foregroundStyle(.secondary)
@@ -296,7 +334,10 @@ private struct CaptureMappingDraft: Identifiable {
 private struct CaptureCalendarForm: View {
     @ObservedObject var model: CaptureModel
     let snapshot: CaptureSnapshot
+    let repairing: String?
     @Environment(\.dismiss) private var dismiss
+    @CaptureViewState<Bool> private var loaded = false
+    @CaptureViewState<String> private var mode = "all_timed"
     @CaptureViewState<String> private var label = "Calendario lezioni"
     @CaptureViewState<String> private var url = ""
     @CaptureViewState<String> private var timezone = TimeZone.current.identifier
@@ -305,12 +346,12 @@ private struct CaptureCalendarForm: View {
     @CaptureViewState<[CaptureMappingDraft]> private var mappings: [CaptureMappingDraft]
     @CaptureViewState<String> private var sourceID = UUID().uuidString
     @CaptureViewState<Bool> private var advanced = false
-    init(model: CaptureModel, snapshot: CaptureSnapshot) {
-        self.model = model; self.snapshot = snapshot
+    init(model: CaptureModel, snapshot: CaptureSnapshot, repairing: String? = nil) {
+        self.model = model; self.snapshot = snapshot; self.repairing = repairing
         _mappings = State(initialValue: [])
     }
     private var valid: Bool {
-        !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !url.isEmpty && periodIsValid
+        loaded && !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && periodIsValid
             && mappings.allSatisfy { !$0.match.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.courseCode.isEmpty && (1...999).contains($0.firstLesson) }
     }
     private var periodIsValid: Bool {
@@ -319,16 +360,18 @@ private struct CaptureCalendarForm: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Collega calendario").font(.title2.bold())
+            Text(repairing == nil ? "Collega calendario" : "Correggi collegamento").font(.title2.bold())
+            ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
             Form {
                 TextField("Nome", text: $label)
-                SecureField("Link HTTPS o webcal/iCal", text: $url)
+                SecureField("Link Google Calendar, HTTPS o webcal/iCal", text: $url)
                 TextField("Fuso orario", text: $timezone)
                 DatePicker("Da", selection: $start, displayedComponents: [.date])
                 DatePicker("Fino a", selection: $end, displayedComponents: [.date])
             }.environment(\.timeZone, TimeZone(identifier: timezone) ?? .current).disabled(model.busy)
             Text("Importa tutti gli eventi con orario. I corsi riconosciuti vengono associati automaticamente; potrai organizzare gli altri nella chat.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             DisclosureGroup("Associazioni avanzate", isExpanded: $advanced) {
             ScrollView {
                 VStack(spacing: 12) {
@@ -337,7 +380,8 @@ private struct CaptureCalendarForm: View {
                             TextField("Il titolo contiene…", text: $mapping.match)
                             HStack {
                                 Picker("Corso", selection: $mapping.courseCode) { ForEach(snapshot.courses) { Text($0.name).tag($0.code) } }
-                                Text("Numero dal titolo, se presente").font(.caption).foregroundStyle(.secondary)
+                                if mode == "mapped" { Stepper("Prima lezione: \(mapping.firstLesson)", value: $mapping.firstLesson, in: 1...999) }
+                                else { Text("Numero dal titolo, se presente").font(.caption).foregroundStyle(.secondary) }
                                 Button("Rimuovi", systemImage: "minus.circle") { mappings.removeAll { $0.id == mapping.id } }
                             }
                         }
@@ -346,22 +390,40 @@ private struct CaptureCalendarForm: View {
             }.frame(maxHeight: 200).disabled(model.busy)
             Button("Aggiungi associazione", systemImage: "plus") { mappings.append(CaptureMappingDraft(courseCode: snapshot.courses.first?.code ?? "")) }.disabled(model.busy || snapshot.courses.isEmpty)
             }
-            Text("Usa il link iCal di un calendario dedicato alle lezioni. Il link resta privato. Gli eventi senza corso o numero possono essere registrati e trascritti.").font(.caption).foregroundStyle(.secondary)
+            Text("Puoi incollare il link Google Calendar oppure un link iCal HTTPS/webcal. Il collegamento resta privato. Se il calendario Google non è pubblico, usa l’indirizzo iCal privato dalle sue impostazioni.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if model.busy, let notice = model.notice { Text(notice).font(.callout).fixedSize(horizontal: false, vertical: true) }
             if let error = model.error { Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            }
+            }.frame(maxHeight: 580)
             HStack {
                 Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.busy); Spacer()
                 if model.busy { ProgressView().controlSize(.small) }
-                Button("Collega e sincronizza") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(!valid || model.busy)
+                Button(repairing == nil ? "Collega e sincronizza" : "Verifica e salva") { Task { await save() } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(!valid || model.busy)
             }
-        }.padding(24).frame(width: 650).disabled(model.isPreview)
+        }.padding(24).frame(width: 700).disabled(model.isPreview)
+        .task {
+            guard !loaded else { return }
+            if let repairing {
+                guard let source = await model.calendarSource(repairing) else { return }
+                sourceID = source.sourceID; label = source.label; url = source.url; timezone = source.timezone
+                start = CaptureDates.read(source.periodStart) ?? start
+                end = (CaptureDates.read(source.periodEnd) ?? end).addingTimeInterval(-1)
+                mode = source.importMode ?? "mapped"
+                mappings = source.mappings.map { CaptureMappingDraft(match: $0.match, courseCode: $0.courseCode, firstLesson: $0.firstLesson ?? 1) }
+            }
+            loaded = true
+        }
     }
     private func save() async {
         guard let (first, last) = CaptureDates.calendarPeriod(start, end, zone: timezone) else { return }
         let payload: [String: Any] = ["sourceID": sourceID, "label": label.trimmingCharacters(in: .whitespacesAndNewlines), "url": url.trimmingCharacters(in: .whitespacesAndNewlines), "timezone": timezone,
-            "periodStart": CaptureDates.write(first), "periodEnd": CaptureDates.write(last), "importMode": "all_timed",
-            "mappings": mappings.map { ["match": $0.match.trimmingCharacters(in: .whitespacesAndNewlines), "courseCode": $0.courseCode] as [String: Any] }]
-        if await model.perform("subscribe", payload: payload) {
-            if await model.perform("sync", arguments: ["--source", sourceID]) { dismiss() }
-        }
+            "periodStart": CaptureDates.write(first), "periodEnd": CaptureDates.write(last), "importMode": mode,
+            "mappings": mappings.map { mapping -> [String: Any] in
+                var result: [String: Any] = ["match": mapping.match.trimmingCharacters(in: .whitespacesAndNewlines), "courseCode": mapping.courseCode]
+                if mode == "mapped" { result["firstLesson"] = mapping.firstLesson }
+                return result
+            }]
+        if await model.perform("connect", payload: payload) { dismiss() }
     }
 }

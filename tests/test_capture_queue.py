@@ -117,11 +117,11 @@ def test_changed_input_does_not_start_engine(ws,monkeypatch):
     assert engine.calls==0
 
 
-def test_partial_audio_and_duplicate_contents_are_not_repeated(ws,monkeypatch):
+def test_final_partial_audio_and_duplicate_contents_are_not_repeated(ws,monkeypatch):
     fake_registry(monkeypatch)
     audio(ws,partial=True);audio(ws,'One');audio(ws,'Duplicate bytes')
     result=q.enqueue(ws)
-    assert result['added']==1 and len(result['skipped'])==1
+    assert result['added']==1 and result['skipped']==[]
 
 
 def test_shared_asr_slots_bound_direct_and_queued_work(ws):

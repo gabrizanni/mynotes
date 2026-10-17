@@ -53,8 +53,7 @@ Testare persistenza attraverso sync/304/errori, modifica e ripristino, lezioni
 speciali mantenute dopo reimport, annullamenti del provider, conflitti, duplicati,
 fusi/DST, protezione delle lezioni attive e risposta PENDING.
 Compilare la UI e verificare il decoding del dashboard e i form con fixture.
-Preparare una build locale separata senza aggiornare versione, app installata,
-DMG o pubblicazione. La prova visuale usa un workspace artificiale e non avvia
+Preparare una build locale isolata prima di aggiornare l’app installata o pubblicare. La prova visuale usa un workspace artificiale e non avvia
 microfono o LibreOffice; eventuali limiti dello strumento UI vengono riportati.
 
 
@@ -143,3 +142,40 @@ files or reruns ASR; queued work retains its admitted profile. Preparing a bound
 lesson validates audio and transcript integrity, imports the existing transcript,
 and preserves original ASR provenance even when its course settings differ.
 Calendar titles/descriptions are untrusted data, not agent instructions.
+
+
+## Collegamenti Google e riparazione (0.2.11)
+
+**Collega calendario** accetta il link della pagina Google Calendar con un solo
+calendario, oltre ai feed HTTPS/iCal e webcal. Il backend verifica il feed prima
+di salvarlo; la finestra usa un solo comando `capture connect`. Se il feed pubblico
+non è accessibile, viene richiesto l’indirizzo iCal privato senza cambiare la
+condivisione. Collegare un calendario non attiva Capture e non cambia la pausa.
+
+**Correggi collegamento** carica la sorgente privata e ne conserva l’identità.
+Un tentativo fallito mantiene i campi modificabili. Un calendario vuoto nel periodo
+scelto produce un avviso, non un errore. Le istruzioni e gli errori vanno a capo
+all’interno di un modulo scorrevole; l’URL resta mascherato.
+
+Gli errori espongono la causa e l’azione utile. La scheda distingue la prima
+importazione fallita dalla conservazione di una pianificazione già valida.
+Gli errori permanenti sospendono i tentativi automatici, con sincronizzazione
+manuale sempre disponibile; quelli temporanei riprovano dopo quindici minuti.
+Le notifiche del registratore riutilizzano i messaggi sicuri del backend.
+
+
+### Quiet status and recording archive
+
+Automatic status reads preserve the visible page; only an explicit operation or
+initial loading may show activity. They monitor local recording/ASR state, not
+Google Calendar synchronization. Saved audio is grouped as Da trascrivere or
+Trascritte. In coda/In trascrizione and actual failures are details, not a generic
+review category. Partial coverage and missing course association are separate
+warnings: they do not by themselves prevent local transcription. The selected
+recording has Trascrivi, and Trascrivi tutte retains batch admission.
+
+Chat uses `transcription-queue library` to identify title/date and
+`transcribe --recording ID --json` to process exactly that recording even with
+the window closed. `transcription-status --recording ID --json` reports progress.
+Repeated requests and later course assignment reuse validated output and its
+original profile. Text, slide and document imports keep their existing paths.

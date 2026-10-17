@@ -321,12 +321,14 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe = subparsers.add_parser("transcribe", help="transcribe only the selected lecture with validated timestamped results")
     from .transcription_queue import add_parser as add_queue_parser
     add_queue_parser(subparsers)
-    transcribe.add_argument("lecture_id", help="COURSE-LNN")
+    transcribe.add_argument("lecture_id", nargs="?", help="COURSE-LNN, alternatively --recording ID")
+    transcribe.add_argument("--recording", help="specific Capture recording ID, no course required")
     transcribe.add_argument("--workspace", help="private workspace path")
     transcribe.add_argument("--audio", help="specific recording; otherwise resolve only this lecture")
     transcribe.add_argument("--json", action="store_true", help="structured result; progress goes to stderr")
     transcription_status = subparsers.add_parser("transcription-status", help="read one transcription's progress without starting work")
-    transcription_status.add_argument("lecture_id", help="COURSE-LNN")
+    transcription_status.add_argument("lecture_id", nargs="?", help="COURSE-LNN, alternatively --recording ID")
+    transcription_status.add_argument("--recording", help="specific Capture recording ID")
     transcription_status.add_argument("--workspace", help="private workspace path")
     transcription_status.add_argument("--json", action="store_true")
     study = subparsers.add_parser("study", help="create a standalone source-bound quiz guide with the shared Word renderer")
@@ -354,6 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--source-pack", help="prepared source-pack JSON; defaults to the lecture run")
     generate.add_argument("--provider", choices=("codex", "agy", "claude"), help="provider override")
     generate.add_argument("--quality", default="standard", help="base, standard, approfondito, or revisione")
+    generate.add_argument("--speaker-focus",choices=("lecture","professor"))
     generate.add_argument("--instructions", default="", help="temporary lesson instructions; does not save course preferences")
     generate.add_argument("--image-limit", type=int, help="maximum inserted images for this request; zero inserts none")
     batch = subparsers.add_parser("generate-batch", help="coordinate ordered lessons with shared slide ownership; candidates only")
@@ -366,6 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--budgets", help="JSON with verified selected-model context/output limits")
     batch.add_argument("--instructions", help="temporary instructions for this batch")
     batch.add_argument("--image-limit", type=int, help="maximum inserted images per lesson for this request")
+    batch.add_argument("--speaker-focus", choices=("lecture","professor"), help="use lecture content or explicitly prioritize verified lecturer contributions")
     batch.add_argument("--plan-only", action="store_true", help="inspect existing packs without writes or provider calls")
     batch.add_argument("--resume", metavar="BATCH_ID", help="resume a saved batch without repeating its lesson selection")
     batch.add_argument("--build-word", action="store_true", help="build each validated lesson as a Word candidate before advancing")
@@ -374,9 +378,20 @@ def build_parser() -> argparse.ArgumentParser:
     batch_status.add_argument("batch_id")
     batch_status.add_argument("--workspace")
     batch_status.add_argument("--json", action="store_true")
+    recover = subparsers.add_parser("recover-batch", help="diagnose or certify complete locally rejected responses without AI")
+    recover.add_argument("batch_id")
+    recover.add_argument("--workspace")
+    recover.add_argument("--json", action="store_true")
+    recover.add_argument("--apply", action="store_true")
     build = subparsers.add_parser("build", help="build and render-validate a Word candidate without publishing it")
     build.add_argument("lecture_id", help="COURSE-LNN")
     build.add_argument("--workspace", help="private workspace path")
+    build.add_argument("--mode", choices=("update","standalone"), default="update")
+    batch_build=subparsers.add_parser("build-batch",help="build standalone lessons and/or a fresh cumulative Word without publishing")
+    batch_build.add_argument("batch_id")
+    batch_build.add_argument("--workspace")
+    batch_build.add_argument("--mode",choices=("standalone","cumulative","both"),default="both")
+    batch_build.add_argument("--json",action="store_true")
     publish = subparsers.add_parser("publish", help="atomically publish a validated Word candidate")
     publish.add_argument("lecture_id", help="COURSE-LNN")
     publish.add_argument("--workspace", help="private workspace path")
@@ -662,7 +677,7 @@ def _generate(arguments: argparse.Namespace, *, provider: str | None = None, qua
     result = generate_candidate(
         workspace, arguments.lecture_id, source_pack_path=Path(arguments.source_pack).expanduser() if arguments.source_pack else None,
         provider=provider or arguments.provider, quality=quality or arguments.quality,
-        instructions=getattr(arguments, "instructions", ""), image_limit=getattr(arguments, "image_limit", None),
+        instructions=getattr(arguments, "instructions", ""), image_limit=getattr(arguments, "image_limit", None), speaker_focus=getattr(arguments,"speaker_focus",None),
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0
@@ -672,26 +687,30 @@ def _transcription(arguments: argparse.Namespace) -> int:
     from .transcription import run_transcription, transcription_status
     from .asr import ASRBusyError, ASRReviewError
     workspace = Workspace.from_value(arguments.workspace)
+    lecture = arguments.lecture_id.upper() if arguments.lecture_id else None
+    recording = getattr(arguments, "recording", None)
+    identity = {"recording_id": recording} if recording else {"lecture_id": lecture}
     try:
+        if bool(lecture) == bool(recording) or (recording and getattr(arguments, "audio", None)):
+            raise ValueError("Indica una lezione oppure --recording ID, senza combinarli")
         if arguments.command == "transcription-status":
-            result = transcription_status(workspace, arguments.lecture_id.upper())
+            result = transcription_status(workspace, recording_id=recording) if recording else transcription_status(workspace, lecture)
+        elif recording:
+            result = run_transcription(workspace, recording_id=recording, progress=True)
         else:
-            result = run_transcription(workspace, arguments.lecture_id.upper(),
+            result = run_transcription(workspace, lecture,
                                        audio=Path(arguments.audio).expanduser() if arguments.audio else None,
                                        progress=True)
     except ASRBusyError as error:
-        result = {"status": "BUSY", "lecture_id": arguments.lecture_id.upper(), "message": str(error),
-                  "current": getattr(error, "state", {})}
+        result = {"status": "BUSY", **identity, "message": str(error), "current": getattr(error, "state", {})}
         print(json.dumps(result, ensure_ascii=False))
         return 3
     except ASRReviewError as error:
-        result = {"status": "NEEDS_REVIEW", "lecture_id": arguments.lecture_id.upper(),
-                  "message": str(error), "issues": getattr(error, "issues", []),
-                  "raw_path": str(getattr(error, "path", ""))}
+        result = {"status": "NEEDS_REVIEW", **identity, "message": str(error), "issues": getattr(error, "issues", []), "raw_path": str(getattr(error, "path", ""))}
         print(json.dumps(result, ensure_ascii=False))
         return 4
     except (ASRError, ConfigurationError, SourcePackError, IngestionError, WorkflowError, OSError, ValueError) as error:
-        result = {"status": "FAILED", "lecture_id": arguments.lecture_id.upper(), "message": str(error)}
+        result = {"status": "FAILED", **identity, "message": str(error)}
         print(json.dumps(result, ensure_ascii=False))
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
@@ -819,6 +838,7 @@ def _generate_batch(arguments: argparse.Namespace) -> int:
         budgets=budget_values,
         instructions=arguments.instructions if arguments.instructions is not None else options.get("instructions", ""),
         image_limit=arguments.image_limit if arguments.image_limit is not None else options.get("image_limit"),
+        speaker_focus=arguments.speaker_focus or options.get("speaker_focus"),
         plan_only=arguments.plan_only, batch_id=arguments.resume, build_word=arguments.build_word,
         repair_missing=bool(arguments.resume or arguments.build_word),
         pause_after=f'{arguments.course.upper()}-L{arguments.stop_after:02d}' if arguments.stop_after is not None else None,
@@ -934,6 +954,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate(arguments)
         if arguments.command == "generate-batch":
             return _generate_batch(arguments)
+        if arguments.command == "recover-batch":
+            from .local_recovery import recover_batch
+            result=recover_batch(Workspace.from_value(arguments.workspace),arguments.batch_id,apply=arguments.apply)
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0
         if arguments.command == "batch-status":
             from .batch_recovery import batch_status
             result=batch_status(Workspace.from_value(arguments.workspace),arguments.batch_id)
@@ -943,8 +968,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 for lesson in result['lessons']:print(f"{lesson['lecture_id']}: {lesson['status']}")
                 if result.get('problem'):print(json.dumps(result['problem'],ensure_ascii=False))
             return 0
+        if arguments.command == "build-batch":
+            from .batch_documents import build_batch_documents
+            print(json.dumps(build_batch_documents(_workspace(arguments),arguments.batch_id,mode=arguments.mode),ensure_ascii=False,indent=2))
+            return 0
         if arguments.command == "build":
-            print(json.dumps(build_word_candidate(_workspace(arguments), arguments.lecture_id), ensure_ascii=False, sort_keys=True))
+            print(json.dumps(build_word_candidate(_workspace(arguments), arguments.lecture_id, mode=arguments.mode), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "publish":
             candidate = Path(arguments.candidate).expanduser() if arguments.candidate else None

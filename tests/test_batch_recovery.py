@@ -334,6 +334,14 @@ def test_unexpected_local_renderer_error_is_saved_as_stopped(tmp_path,monkeypatc
     root=ws.runs_dir/'_batches';batch_id=next(root.iterdir()).name;status=batch_status(ws,batch_id)
     assert status['status']=='FAILED' and status['activity']['status']=='STOPPED'
     assert status['problem']['kind']=='KeyError' and status['lessons'][0]['status']=='CONTENT_READY'
+    class NoProvider:
+        def generate(self, *_): pytest.fail('A Word error must never trigger another generation')
+    def restored(workspace, lecture, **kwargs):
+        path=workspace.runs_dir/lecture/'rebuilt.docx';path.write_bytes(b'synthetic renderer result')
+        return {'candidate':str(path)}
+    monkeypatch.setattr(publication,'build_word_candidate',restored)
+    resumed=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=NoProvider(),build_word=True)
+    assert resumed['status']=='CANDIDATE_READY' and resumed['word_candidates']['OPS-L01']
 
 
 def test_missing_process_permission_is_not_reported_as_interruption(tmp_path,monkeypatch):

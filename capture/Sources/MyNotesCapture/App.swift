@@ -437,7 +437,10 @@ final class CaptureEngine: NSObject {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.syncProcess = nil
-                if process.terminationStatus != 0 { self.announce("Calendar update failed", "Using the last valid timetable; ask your agent for status", notice: true) }
+                if process.terminationStatus != 0 {
+                    let response = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+                    self.announce("Aggiornamento calendario non riuscito", response?["message"] as? String ?? "Controlla il collegamento del calendario in Capture.", notice: true)
+                }
                 else if force { self.announce("Calendar updated", String(data: data, encoding: .utf8) == nil ? "Check status through your agent" : "Latest timetable loaded", notice: true) }
                 self.evaluate(now: Date())
             }

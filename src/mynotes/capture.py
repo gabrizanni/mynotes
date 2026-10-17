@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from .utils import atomic_json_write, now_compact_utc
 from .workspace import Workspace
+from . import capture_links
 
 LABEL = "com.gabrizanni.mynotes-capture"
 MAX_FEED_BYTES = 10 * 1024 * 1024
@@ -269,17 +270,13 @@ def import_schedule(store: CaptureStore, payload: Any) -> dict:
         return {"status": "IMPORTED", "events": len(incoming), "revision": store.schedule()["revision"]}
 
 
-def subscribe(store: CaptureStore, source: dict) -> dict:
+def prepare_source(store: CaptureStore, source: dict) -> dict:
     if not isinstance(source, dict) or not {"url", "timezone", "periodStart", "periodEnd"} <= source.keys():
-        raise CaptureError("Subscription needs url, timezone, periodStart, periodEnd and mappings")
+        raise CaptureError("Subscription needs url, timezone, periodStart and periodEnd")
     source = copy.deepcopy(source)
     source_id = source.get("sourceID") or uuid.uuid4().hex
-    url = source.get("url", "")
-    if url.startswith("webcal://"):
-        url = "https://" + url[len("webcal://"):]
+    url = capture_links.resolve(source.get("url", ""))
     parsed = urllib.parse.urlsplit(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
-        raise CaptureError("Provide an HTTPS or webcal subscription link without HTTP basic credentials")
     timezone = source.get("timezone")
     if not timezone:
         raise CaptureError("Provide the calendar timezone")
@@ -294,7 +291,10 @@ def subscribe(store: CaptureStore, source: dict) -> dict:
     if mode not in {"mapped", "all_timed"}:
         raise CaptureError("Unknown calendar import mode")
     if mode == "all_timed":
-        require_calendar_recordings(store)
+        try:
+            require_calendar_recordings(store)
+        except CaptureError as error:
+            raise capture_links.CalendarLinkError("RECORDER_INCOMPATIBLE") from error
     mappings = source.get("mappings", [])
     courses = {c["code"] for c in store.workspace.configuration_store().load()["courses"]}
     if not isinstance(mappings, list) or (mode == "mapped" and not mappings):
@@ -309,22 +309,118 @@ def subscribe(store: CaptureStore, source: dict) -> dict:
         raise CaptureError("Calendar label must contain between 1 and 200 characters")
     source = {"sourceID": str(source_id), "label": label.strip(), "url": url, "timezone": timezone,
               "periodStart": iso(start), "periodEnd": iso(end), "mappings": mappings, "importMode": mode}
+    return source
+
+
+def check_source_replacement(store: CaptureStore, current: dict | None, source: dict, metadata: dict) -> None:
+    if not current or current["url"] == source["url"]:
+        return
+    try:
+        same_url = capture_links.resolve(current["url"]) == source["url"]
+    except capture_links.CalendarLinkError:
+        same_url = False
+    same_google = capture_links.google_identity(current["url"])
+    if same_url or (same_google and same_google == capture_links.google_identity(source["url"])):
+        return
+    populated = any(e["sourceID"] == source["sourceID"] for e in store.source_events())
+    if not populated and not metadata.get("lastSuccess"):
+        return
+    raise capture_links.CalendarLinkError("SOURCE_CHANGED")
+
+
+def subscribe(store: CaptureStore, source: dict) -> dict:
+    try:
+        source = prepare_source(store, source)
+    except capture_links.CalendarLinkError as error:
+        raise CaptureError(str(error)) from error
+    source_id = source["sourceID"]
     with store.lock():
         config = store.config()
         current = next((s for s in config["sources"] if s["sourceID"] == source_id), None)
-        if current and current["url"] != url:
-            raise CaptureError("Use a new sourceID when replacing the calendar source")
+        path = store.directory / "sync.json"
+        metadata = read_json(path, {"sources": {}})
+        check_source_replacement(store, current, source, metadata["sources"].get(source_id, {}))
+        sources = [s for s in config["sources"] if s["sourceID"] != source_id] + [source]
+        if len(sources) > 10:
+            raise CaptureError("At most ten calendar sources are supported")
         if current and current != source:
-            # A changed interpretation must not receive HTTP 304 for an old projection.
-            path = store.directory / "sync.json"
-            metadata = read_json(path, {"sources": {}})
             metadata["sources"].pop(source_id, None)
             atomic_json_write(path, metadata)
-        config["sources"] = [s for s in config["sources"] if s["sourceID"] != source_id] + [source]
-        if len(config["sources"]) > 10:
-            raise CaptureError("At most ten calendar sources are supported")
+        config["sources"] = sources
         store.save_config(config)
         return {"status": "SUBSCRIBED", "sourceID": source_id}
+
+
+def recognition_key(details: list[dict]) -> str:
+    return hashlib.sha256(json.dumps([
+        {key: c.get(key) for key in ("code", "name", "aliases")}
+        for c in details], sort_keys=True).encode()).hexdigest()
+
+
+def project_calendar(data: bytes, source: dict, old: list[dict], details: list[dict]) -> tuple[list[dict], dict]:
+    capture_links.validate_body(data, source["url"])
+    summary = {}
+    try:
+        events = calendar_events(data, source, old, {c["code"] for c in details}, course_details=details, report=summary)
+    except (ValueError, KeyError, TypeError) as error:
+        raise capture_links.CalendarLinkError("INVALID_CALENDAR") from error
+    if not summary:
+        summary = {"imported": len(events), "recognizedCourses": len({e["courseCode"] for e in events if e.get("courseCode")}),
+                   "pending": 0, "excluded": 0, "issues": []}
+    return events, summary
+
+
+def connect(store: CaptureStore, raw: dict) -> dict:
+    """Verify once before publishing; reproject against current state under lock."""
+    source = None
+    try:
+        try:
+            source = prepare_source(store, raw)
+        except CaptureError as error:
+            raise capture_links.CalendarLinkError("INVALID_SOURCE") from error
+        # No subscription/schedule writes and no calendar lock during network I/O.
+        data, headers = download(source, {})
+        if data is None:
+            raise capture_links.CalendarLinkError("INVALID_CALENDAR")
+        project_calendar(data, source, [], store.workspace.configuration_store().load()["courses"])
+        with store.lock():
+            config = store.config()
+            current = next((s for s in config["sources"] if s["sourceID"] == source["sourceID"]), None)
+            metadata = read_json(store.directory / "sync.json", {"sources": {}})
+            check_source_replacement(store, current, source, metadata["sources"].get(source["sourceID"], {}))
+            sources = [s for s in config["sources"] if s["sourceID"] != source["sourceID"]] + [source]
+            if len(sources) > 10:
+                raise capture_links.CalendarLinkError("INVALID_SOURCE")
+            if source["importMode"] == "all_timed":
+                try:
+                    require_calendar_recordings(store)
+                except CaptureError as error:
+                    raise capture_links.CalendarLinkError("RECORDER_INCOMPATIBLE") from error
+            details = store.workspace.configuration_store().load()["courses"]
+            old = store.source_events()
+            imported, summary = project_calendar(data, source, old, details)
+            events = validate_windows([e for e in old if e["sourceID"] != source["sourceID"]] + imported, config)
+            now = datetime.now(UTC)
+            metadata["sources"][source["sourceID"]] = success_metadata(source, headers, details, summary, now, config)
+            config["sources"] = sources
+            config["courseCodes"] = sorted(c["code"] for c in details)
+            store.save_schedule(events, config)
+            atomic_json_write(store.directory / "sync.json", metadata)
+            store.save_config(config)  # Notify only after the effective schedule is ready.
+        count = summary.get("imported", len(imported))
+        message = f"Calendario collegato: {count} eventi nel periodo selezionato."
+        if count == 0:
+            message += " Il calendario è valido, ma non contiene lezioni nel periodo scelto."
+        return {"status": "CONNECTED", "sourceID": source["sourceID"], "summary": summary, "message": message}
+    except Exception as error:
+        return {"status": "FAILED", **capture_links.diagnostic(error, source["url"] if source else "")}
+
+
+def success_metadata(source, headers, details, summary, now, config):
+    return {**{k: headers[k] for k in ("etag", "lastModified") if k in headers}, "feedURLHash": hashlib.sha256(source["url"].encode()).hexdigest(),
+            "recognitionKey": recognition_key(details), "summary": summary,
+            "lastSuccess": iso(now), "lastAttempt": iso(now), "error": None,
+            "nextAttempt": iso(now + timedelta(hours=config["refreshHours"]))}
 
 
 def download(source: dict, metadata: dict) -> tuple[bytes | None, dict]:
@@ -335,16 +431,16 @@ def download(source: dict, metadata: dict) -> tuple[bytes | None, dict]:
     class CalendarRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, redirect_headers, newurl):
             if urllib.parse.urlsplit(newurl).scheme != "https":
-                raise CaptureError("Calendar redirect must remain HTTPS")
+                raise capture_links.CalendarLinkError("INSECURE_REDIRECT")
             return super().redirect_request(req, fp, code, msg, redirect_headers, newurl)
     opener = urllib.request.build_opener(CalendarRedirect())
     try:
         with opener.open(urllib.request.Request(source["url"], headers=headers), timeout=20) as response:
             if urllib.parse.urlsplit(response.url).scheme != "https":
-                raise CaptureError("Calendar redirect must remain HTTPS")
+                raise capture_links.CalendarLinkError("INSECURE_REDIRECT")
             data = response.read(MAX_FEED_BYTES + 1)
             if len(data) > MAX_FEED_BYTES:
-                raise CaptureError("Calendar exceeds the ten MB download limit")
+                raise capture_links.CalendarLinkError("FEED_TOO_LARGE")
             return data, {"etag": response.headers.get("ETag"), "lastModified": response.headers.get("Last-Modified")}
     except urllib.error.HTTPError as error:
         if error.code == 304:
@@ -446,34 +542,38 @@ def sync(store: CaptureStore, *, if_due: bool = False, now: datetime | None = No
                 continue
             calendar_id = source["sourceID"]
             meta = metadata["sources"].get(calendar_id, {})
-            if if_due and meta.get("nextAttempt") and timestamp(meta["nextAttempt"]) > now:
+            if if_due and (meta.get("retryable") is False or (meta.get("nextAttempt") and timestamp(meta["nextAttempt"]) > now)):
                 continue
+            resolved = None
             try:
+                resolved = {**source, "url": capture_links.resolve(source["url"])}
                 if source.get("importMode") == "all_timed":
-                    require_calendar_recordings(store)
+                    try:
+                        require_calendar_recordings(store)
+                    except CaptureError as error:
+                        raise capture_links.CalendarLinkError("RECORDER_INCOMPATIBLE") from error
                 course_details = store.workspace.configuration_store().load()["courses"]
-                recognition_key = hashlib.sha256(json.dumps([
-                    {key: c.get(key) for key in ("code", "name", "aliases")}
-                    for c in course_details], sort_keys=True).encode()).hexdigest()
-                # HTTP 304 describes the provider data, not our course catalog.
-                # Refresh once without validators after names/aliases/courses change.
-                validators = {} if source.get("importMode") == "all_timed" and meta.get("recognitionKey") != recognition_key else meta
-                data, headers = download(source, validators)
+                key = recognition_key(course_details)
+                url_hash = hashlib.sha256(resolved["url"].encode()).hexdigest()
+                changed_url = (source["url"] != resolved["url"] or
+                               (meta.get("feedURLHash") is not None and meta["feedURLHash"] != url_hash))
+                validators = {} if changed_url or (source.get("importMode") == "all_timed" and meta.get("recognitionKey") != key) else meta
+                data, headers = download(resolved, validators)
+                summary = meta.get("summary")
+                if data is None and not meta.get("lastSuccess"):
+                    raise capture_links.CalendarLinkError("INVALID_CALENDAR")
                 if data is not None:
-                    summary = {}
-                    imported = calendar_events(data, source, events, courses,
-                        course_details=course_details, report=summary)
+                    imported, summary = project_calendar(data, resolved, events, course_details)
                     candidate = [e for e in events if e["sourceID"] != calendar_id] + imported
-                    # Validate before accepting HTTP validators or replacing the last good schedule.
                     events = validate_windows(candidate, config)
-                meta = {**headers, "recognitionKey": recognition_key, "summary": summary if data is not None else meta.get("summary"), "lastSuccess": iso(now), "lastAttempt": iso(now), "error": None,
-                        "nextAttempt": iso(now + timedelta(hours=config["refreshHours"]))}
-                reports.append({"sourceID": calendar_id, "status": "UNCHANGED" if data is None else "UPDATED", "summary": meta.get("summary")})
+                meta = success_metadata(resolved, headers, course_details, summary, now, config)
+                source["url"] = resolved["url"]
+                reports.append({"sourceID": calendar_id, "status": "UNCHANGED" if data is None else "UPDATED", "summary": summary})
             except Exception as error:
-                # Subscription URLs can contain secret tokens; never include URL-bearing exceptions.
-                meta = {**meta, "lastAttempt": iso(now), "error": type(error).__name__,
-                        "nextAttempt": iso(now + timedelta(minutes=15))}
-                reports.append({"sourceID": calendar_id, "status": "FAILED", "error": type(error).__name__})
+                detail = capture_links.diagnostic(error, resolved["url"] if resolved else "")
+                meta = {**meta, **detail, "lastAttempt": iso(now), "error": detail["code"],
+                        "nextAttempt": iso(now + timedelta(minutes=15)) if detail["retryable"] else None}
+                reports.append({"sourceID": calendar_id, "status": "FAILED", "error": detail["code"], **detail})
             metadata["sources"][calendar_id] = meta
         courses_changed = sorted(courses) != config["courseCodes"]
         config["courseCodes"] = sorted(courses)
@@ -483,7 +583,11 @@ def sync(store: CaptureStore, *, if_due: bool = False, now: datetime | None = No
         if reports or courses_changed:
             # Wake the native watcher after publishing all calendar changes.
             store.save_config(config)
-        return {"status": "SYNCED" if all(r["status"] != "FAILED" for r in reports) else "SYNC_FAILED", "sources": reports}
+        failed = [r for r in reports if r["status"] == "FAILED"]
+        output = {"status": "SYNC_FAILED" if failed else "SYNCED", "sources": reports}
+        if failed:
+            output["message"] = failed[0]["message"]
+        return output
 
 
 def capture_status(store: CaptureStore) -> dict:
@@ -594,11 +698,11 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
 def add_parser(subparsers) -> None:
     capture = subparsers.add_parser("capture", help="configure and control MyNotes Capture")
     commands = capture.add_subparsers(dest="capture_command", required=True)
-    for name in ("configure", "import", "subscribe", "schedule", "status", "dashboard", "add-lesson", "edit-lesson", "reset-lesson", "unsubscribe", "sync", "pending", "assign", "set-import-mode", "enable", "disable", "pause", "resume", "start", "stop", "test", "recover", "confirm-test"):
+    for name in ("configure", "import", "subscribe", "connect", "source", "schedule", "status", "dashboard", "add-lesson", "edit-lesson", "reset-lesson", "unsubscribe", "sync", "pending", "assign", "set-import-mode", "enable", "disable", "pause", "resume", "start", "stop", "test", "recover", "confirm-test"):
         command = commands.add_parser(name)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
-        if name in {"configure", "import", "subscribe", "add-lesson", "edit-lesson", "assign"}:
+        if name in {"configure", "import", "subscribe", "connect", "add-lesson", "edit-lesson", "assign"}:
             command.add_argument("--file", required=name != "configure", help="private JSON input")
         if name == "confirm-test":
             command.add_argument("--audio", required=True)
@@ -611,7 +715,7 @@ def add_parser(subparsers) -> None:
             command.add_argument("--mode", choices=("mapped", "all_timed"), required=True)
         if name in {"edit-lesson", "reset-lesson"}:
             command.add_argument("--event", required=True)
-        if name == "unsubscribe":
+        if name in {"unsubscribe", "source"}:
             command.add_argument("--source", required=True)
         if name == "start":
             command.add_argument("--course")
@@ -646,6 +750,13 @@ def run_cli(arguments) -> int:
         output = configure(store, read_json(Path(arguments.file)) if arguments.file else {})
     elif action == "import":
         output = import_schedule(store, read_json(Path(arguments.file)))
+    elif action == "connect":
+        output = connect(store, read_json(Path(arguments.file)))
+    elif action == "source":
+        source = next((s for s in store.config()["sources"] if s["sourceID"] == arguments.source), None)
+        if source is None:
+            raise CaptureError("Calendar source not found")
+        output = {"status": "SOURCE", "source": source}
     elif action == "subscribe":
         output = subscribe(store, read_json(Path(arguments.file)))
     elif action == "set-import-mode":

@@ -1,5 +1,7 @@
 # MyNotes + Capture
 
+Versione candidata in sviluppo: **0.2.13**, con aggiornamenti Capture silenziosi e trascrizione delle registrazioni dalla chat. Vedi le [note di aggiornamento](docs/UPDATES.md).
+
 Registra le lezioni e trasforma audio, slide e appunti personali in dispense Word con formule modificabili. Capture è incluso: non serve scaricarlo separatamente.
 
 Italiano | [English](README.md)

@@ -35,7 +35,7 @@ from .execution import AttemptStart, SleepMonitor, prevent_idle_sleep
 PROTOCOL = 1
 BLOCKS_PER_PART = 12
 MAX_PARTS = 16
-TOTAL_SECONDS = 1170  # the final 30 seconds belong to the Word builder
+TOTAL_SECONDS = 1080  # reserve at least two minutes for local validation and Word
 FIRST_TURN_SECONDS = 300
 NEXT_TURN_SECONDS = 300
 
@@ -83,6 +83,11 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
     merged, seen, last_lesson = {}, {}, 0
     valid_ids = {r['id'] for r in request.source_pack.get('evidence', [])}
     for number, part in enumerate(parts):
+        from .evidence_refs import normalize_references, EvidenceReferenceError
+        try:
+            part, _ = normalize_references(part, valid_ids)
+        except EvidenceReferenceError as error:
+            raise ProviderError('Writing portion cites unknown evidence: ' + str(error)) from error
         if (not isinstance(part, dict) or type(part.get('part_index')) is not int or part['part_index'] != number
                 or type(part.get('complete')) is not bool or not isinstance(part.get('next_topic'), str)
                 or not isinstance(part.get('result'), dict)):
@@ -162,7 +167,7 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         def interrupted(_sig, _frame): raise ProviderCancelledError('Note generation interrupted by user')
         previous = signal.signal(signal.SIGTERM, interrupted)
     started = turn_started = time.monotonic(); turn_limit = first_seconds
-    pending = b''; finished = False; useful = set(); sleep = SleepMonitor()
+    pending = b''; finished = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
     try:
         process.stdin.write(_wire(prompt)); process.stdin.flush()
         with selectors.DefaultSelector() as selector:
@@ -198,9 +203,13 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                         step = event.get('step_update', {})
                         progress = (step.get('step_index'), step.get('step_type'))
                         initialization = ('init', event.get('conversation_id'))
-                        if ((event.get('event') == 'init' and initialization not in useful) or
-                                (event.get('event') == 'step_update' and step.get('state') == 'DONE'
-                                 and step.get('step_type') in {'tool', 'agent_response'} and progress not in useful)):
+                        useful_step = (event.get('event') == 'step_update' and step.get('state') == 'DONE'
+                                       and step.get('step_type') in {'tool','agent_response'} and progress not in useful)
+                        if useful_step and step.get('tool_name') == 'view_file':
+                            read_key=json.dumps(step.get('tool_info',{}).get('parameters',{}),sort_keys=True)
+                            useful_step=read_key not in read_requests
+                            read_requests.add(read_key)
+                        if ((event.get('event') == 'init' and initialization not in useful) or useful_step):
                             useful.add(initialization if event.get('event') == 'init' else progress)
                             turn_started = time.monotonic()
                         if event.get('event') != 'result': continue
@@ -300,6 +309,9 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         state.update({'fingerprint':identity,'parts':refs,'used_seconds':used_seconds+time.monotonic()-started,**changes})
         atomic_json_write(state_path,state)
     def observe(event):
+        if used_seconds+time.monotonic()-started >= 600 and not state.get('ten_minute_warning'):
+            print('MyNotes: writing active for more than ten minutes; saved portions retained, no completion estimate.',file=sys.stderr,flush=True)
+            save_state(ten_minute_warning=True)
         if event.get('event') == 'init':
             cid = event.get('conversation_id')
             if not isinstance(cid, str) or not cid or (state.get('conversation_id') and state['conversation_id'] != cid):
@@ -323,6 +335,13 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         index=len(parts); path=root/f'part-{index:03d}.json'
         raw={'envelope':envelope,'part':part}
         atomic_json_write(root/f'returned-{index:03d}.json',raw)
+        from .evidence_refs import normalize_references, EvidenceReferenceError
+        try:
+            _, transformations = normalize_references(part, [row['id'] for row in request.source_pack['evidence']])
+            if transformations:
+                atomic_json_write(root/f'normalization-{index:03d}.json', {'returned_sha256':file_sha256(root/f'returned-{index:03d}.json'), 'transformations':transformations})
+        except EvidenceReferenceError:
+            pass  # assemble reports all bad references and preserves the raw return.
         try: assemble(request,[*parts,part])
         except (ProviderError,KeyError,TypeError,ValueError):
             save_state(local_rejection=True,conversation_id=cid)

@@ -48,3 +48,31 @@ def test_batch_usage_cli_does_not_create_absent_workspace(tmp_path, capsys):
     absent = tmp_path / "absent"
     assert main(["usage", "--batch", "OPS-0123456789ab", "--workspace", str(absent), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["attempts"] == [] and not absent.exists()
+
+
+def test_resumed_writing_counters_are_counted_once_per_conversation(tmp_path):
+    workspace = Workspace.from_value(tmp_path / "private")
+    for conversation, tokens, thinking, cache in [("same", 10, 2, 100), ("same", 18, 3, 150), ("other", 7, 1, 20)]:
+        path = attempt(workspace, {})
+        data = json.loads(path.read_text())
+        data["requested"]["provider"] = "agy"
+        data["reported_usage"] = {"session_cumulative": {"input_tokens": tokens, "thinking_tokens": thinking, "cache_read_tokens": cache}}
+        data["stdout"] = json.dumps({"event": "result", "result": {"conversation_id": conversation}})
+        path.write_text(json.dumps(data))
+    report = batch_usage(workspace, "OPS-0123456789ab")
+    provider = report["providers"]["agy"]
+    assert provider["attempts"] == 3
+    assert provider["reported_totals"] == {"input_tokens": 25, "thinking_tokens": 4, "cache_read_tokens": 170}
+    assert len(provider["conversations"]) == 2
+    assert len(report["attempts"]) == 3
+
+
+def test_cumulative_counters_without_conversation_are_not_assumed_independent(tmp_path):
+    workspace = Workspace.from_value(tmp_path / "private")
+    path = attempt(workspace, {})
+    data = json.loads(path.read_text())
+    data["reported_usage"] = {"session_cumulative": {"input_tokens": 100}}
+    path.write_text(json.dumps(data))
+    report = batch_usage(workspace, "OPS-0123456789ab")
+    assert report["providers"]["codex"]["reported_totals"] == {}
+    assert report["partial"]

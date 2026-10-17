@@ -19,7 +19,7 @@ TOKEN_COUNTERS = {
     "input_tokens", "output_tokens", "total_tokens", "cached_input_tokens",
     "cache_read_input_tokens", "cache_creation_input_tokens", "prompt_tokens",
     "completion_tokens", "promptTokenCount", "candidatesTokenCount",
-    "totalTokenCount", "cachedContentTokenCount",
+    "totalTokenCount", "cachedContentTokenCount", "thinking_tokens", "cache_read_tokens",
 }
 
 
@@ -56,6 +56,7 @@ def lecture_usage(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
     warnings: list[dict[str, str]] = []
     attempts: list[dict[str, Any]] = []
     providers: dict[str, Any] = {}
+    cumulative = {}
     records: dict[str, tuple[dict[str, Any], Path, str]] = {}
     conflicts: set[str] = set()
     def warn(path: Path, reason: str):
@@ -90,14 +91,11 @@ def lecture_usage(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
             records[identifier] = (data, path, digest)
         except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
             warn(path, f"Unreadable/invalid attempt; usage unknown ({type(error).__name__})")
-    from .providers import reported_usage
     for identifier, (data, path, _) in records.items():
         if identifier in conflicts:
             continue
         provider = data["requested"]["provider"]
-        raw = data.get("reported_usage")
-        if raw is None:
-            raw = reported_usage(provider, data["stdout"], data.get("envelope"))
+        raw = _attempt_usage(data)
         if raw is not None and not isinstance(raw, dict):
             warn(path, "Invalid usage object; counters unknown"); raw = None
         started = data.get("invocation_started")
@@ -116,15 +114,25 @@ def lecture_usage(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
             if started is not False:
                 warn(path, "No reported usage counters; unknown, not zero")
             continue
-        if set(raw) - TOKEN_COUNTERS:
+        session, counters = _session_snapshot(data, raw)
+        attempts[-1]["conversation_id"] = session
+        if "session_cumulative" in raw and session is None:
+            warn(path, "Cumulative counters have no unique conversation; excluded from totals")
+            continue
+        if session:
+            bucket = cumulative.setdefault((provider, session), {})
+        if set(counters) - TOKEN_COUNTERS:
             warn(path, "Non-additive or unfamiliar counters are retained per attempt, not totaled")
-        for name, value in raw.items():
+        for name, value in counters.items():
             if name not in TOKEN_COUNTERS:
                 # Keep future/nested/cost counters verbatim per attempt rather
                 # than assuming units or inventing an additive cost metric.
                 continue
             if not isinstance(value, (int, float)) or isinstance(value, bool) or (isinstance(value, float) and not math.isfinite(value)) or value < 0:
                 warn(path, f"Invalid {name} counter; excluded from subtotal")
+                continue
+            if session:
+                bucket[name] = max(bucket.get(name, 0), value)
                 continue
             try:
                 subtotal = group["reported_totals"].get(name, 0) + value
@@ -135,8 +143,21 @@ def lecture_usage(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
                 continue
             group["reported_totals"][name] = subtotal
             group["counter_reporting_attempts"][name] = group["counter_reporting_attempts"].get(name, 0) + 1
+    for (provider, session), counters in cumulative.items():
+        group = providers[provider]
+        group.setdefault("conversations", []).append({"conversation_id": session, "reported_cumulative": counters})
+        for name, value in counters.items():
+            subtotal = group["reported_totals"].get(name, 0) + value
+            if not math.isfinite(subtotal):
+                warn(run, f"Non-finite conversation subtotal {name}")
+                continue
+            group["reported_totals"][name] = subtotal
+            group["counter_reporting_attempts"][name] = group["counter_reporting_attempts"].get(name, 0) + 1
     for provider, group in providers.items():
-        expected = group["attempts"] - group["local_rejected"]
+        relevant = [a for a in attempts if a["provider"] == provider and a["outcome"] != "local_rejected"]
+        expected = sum(not a.get("conversation_id") for a in relevant) + len({a["conversation_id"] for a in relevant if a.get("conversation_id")})
+        group["expected_reporting_units"] = expected
+        group["counter_reporting_units"] = dict(group["counter_reporting_attempts"])
         if any(count < expected for count in group["counter_reporting_attempts"].values()):
             warn(run, f"{provider}: some counter subtotals cover only part of the attempts; inspect counter_reporting_attempts")
     phases = []
@@ -171,7 +192,47 @@ def lecture_usage(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
             warn(path, f"Reuse event is invalid; excluded ({type(error).__name__})")
     return {"lecture_id": lecture_id, "workspace": str(workspace.root), "attempts": attempts, "providers": providers,
             "successful_saved_phases": phases, "reuse": reuse, "partial": bool(warnings), "warnings": warnings,
-            "scope": "Exact reported counters across unique local attempts, including failures. Metrics are separate and may overlap; no derived token total, cost estimate or billing claim. Saved phases/reuse are not added to attempt totals."}
+            "scope": "Reported counters across unique local attempts, including failures. Cumulative writing uses the largest reported snapshot per conversation. Metrics are separate and may overlap; no derived token total, cost estimate or billing claim. Saved phases/reuse are not added to attempt totals."}
+
+
+def _attempt_usage(data):
+    from .providers import reported_usage
+    usage = data.get("reported_usage")
+    if usage is None:
+        usage = reported_usage(data["requested"]["provider"], data.get("stdout", ""), data.get("envelope"))
+    if usage is None and (data.get("envelope") or {}).get("transport") == "agy_parts_v1":
+        # Older local-rejection records have no summary envelope usage, but
+        # retain the original per-turn result events. Never edit those records.
+        for line in reversed(data.get("stdout", "").splitlines()):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            result = event.get("result") if isinstance(event, dict) else None
+            if isinstance(result, dict) and isinstance(result.get("usage"), dict) and result["usage"]:
+                return {"session_cumulative": result["usage"]}
+    return usage
+
+
+def _session_snapshot(data, usage):
+    """Only explicitly cumulative writing transports share a counter bucket."""
+    if not isinstance(usage, dict):
+        return None, usage
+    nested = usage.get("session_cumulative")
+    if not isinstance(nested, dict):
+        return None, usage
+    identifiers = set()
+    for line in data.get("stdout", "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        envelope = event.get("result", {}) if event.get("event") == "result" else event
+        if isinstance(envelope, dict) and envelope.get("conversation_id"):
+            identifiers.add(envelope["conversation_id"])
+    return next(iter(identifiers)) if len(identifiers) == 1 else None, nested
 
 
 def batch_usage(workspace: Workspace, batch_id: str) -> dict[str, Any]:
@@ -205,13 +266,11 @@ def batch_usage(workspace: Workspace, batch_id: str) -> dict[str, Any]:
         except (OSError, ValueError, KeyError, TypeError) as error:
             warnings.append({"path": str(path), "reason": f"Invalid shared attempt; consumption unknown ({type(error).__name__})"})
     from .providers import reported_usage
-    attempts, providers = [], {}
+    attempts, providers, cumulative = [], {}, {}
     for identifier, (data, path, _) in records.items():
         if identifier in conflicts:
             continue
-        usage = data.get("reported_usage")
-        if usage is None:
-            usage = reported_usage(data["requested"]["provider"], data.get("stdout", ""), data.get("envelope"))
+        usage = _attempt_usage(data)
         if not isinstance(usage, dict):
             usage = None
         started = data.get("invocation_started")
@@ -228,12 +287,24 @@ def batch_usage(workspace: Workspace, batch_id: str) -> dict[str, Any]:
             if started is not False:
                 warnings.append({"path": str(path), "reason": "Shared attempt usage is unknown, not zero"})
             continue
-        for name, value in usage.items():
+        session, counters = _session_snapshot(data, usage)
+        attempt["conversation_id"] = session
+        if "session_cumulative" in usage and session is None:
+            warnings.append({"path": str(path), "reason": "Cumulative counters have no unique conversation; excluded from totals"})
+            continue
+        if session:
+            bucket = cumulative.setdefault((attempt["provider"], session), {})
+        for name, value in counters.items():
             if name not in TOKEN_COUNTERS:
                 warnings.append({"path": str(path), "reason": "Unfamiliar/non-additive counters retained without totals"})
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or not math.isfinite(value):
                 warnings.append({"path": str(path), "reason": f"Invalid shared counter {name}"})
+                continue
+            if session:
+                # The maximum is a reported cumulative snapshot, not a sum of
+                # resumed processes. Preserve every raw snapshot above.
+                bucket[name] = max(bucket.get(name, 0), value)
                 continue
             combined = totals["reported_totals"].get(name, 0) + value
             if not math.isfinite(combined):
@@ -241,8 +312,22 @@ def batch_usage(workspace: Workspace, batch_id: str) -> dict[str, Any]:
                 continue
             totals["reported_totals"][name] = combined
             totals["counter_reporting_attempts"][name] = totals["counter_reporting_attempts"].get(name, 0) + 1
+    for (provider, session), counters in cumulative.items():
+        totals = providers[provider]
+        totals.setdefault("conversations", []).append({"conversation_id": session, "reported_cumulative": counters})
+        for name, value in counters.items():
+            combined = totals["reported_totals"].get(name, 0) + value
+            if not math.isfinite(combined):
+                warnings.append({"path": str(root), "reason": f"Non-finite conversation subtotal {name}"})
+                continue
+            totals["reported_totals"][name] = combined
+            totals["counter_reporting_attempts"][name] = totals["counter_reporting_attempts"].get(name, 0) + 1
     for provider, totals in providers.items():
-        if any(count < totals["attempts"] - totals["local_rejected"] for count in totals["counter_reporting_attempts"].values()):
+        provider_attempts = [a for a in attempts if a["provider"] == provider and a["outcome"] != "local_rejected"]
+        units = sum(not a.get("conversation_id") for a in provider_attempts) + len({a["conversation_id"] for a in provider_attempts if a.get("conversation_id")})
+        totals["expected_reporting_units"] = units
+        totals["counter_reporting_units"] = dict(totals["counter_reporting_attempts"])
+        if any(count < units for count in totals["counter_reporting_attempts"].values()):
             warnings.append({"path": str(root), "reason": f"{provider}: some counters cover only part of shared attempts"})
     return {"batch_id": batch_id, "attempts": attempts, "providers": providers, "partial": bool(warnings), "warnings": warnings,
-            "scope": "All unique immutable shared attempts across this batch's versions, including failures. Counted once per invocation, never once per lesson. Counter units stay separate; no inferred billed cost."}
+            "scope": "All unique immutable shared attempts across this batch's versions, including failures. Cumulative writing counters use the largest reported snapshot per conversation, never their sum; other counters are counted per invocation. Raw historical attempts remain separate. Counter units stay separate; no inferred billed cost."}

@@ -407,7 +407,7 @@ def _fits(request: ProviderRequest, count: int, budget: BatchBudget) -> bool:
 
 def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int], *, provider: str | None = None,
                quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
-               instructions: str = "", image_limit: int | None = None) -> dict:
+               instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None) -> dict:
     """Inspect existing prepared packs; write nothing and invoke no provider."""
     code = course_code.upper()
     if not lesson_numbers or any(type(number) is not int or number < 1 or number > 99 for number in lesson_numbers):
@@ -419,6 +419,9 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     course = deepcopy(_course(configuration, code))
     # Onboarding progress is administrative, never an input to lesson writing.
     course.pop('context_setup', None)
+    if speaker_focus is not None:
+        if speaker_focus not in {"lecture", "professor"}:raise WorkflowError("Invalid speaker_focus")
+        course['speaker_focus']=speaker_focus
     requested = resolve_model(configuration, provider, quality)
     style = _style(configuration, code, instructions, image_limit)
     batch_id = code + "-" + _hash(lectures)[:12]
@@ -447,7 +450,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     payload = {"course_code": code, "lectures": lectures, "sources": snapshots, "ownership": ownership,
                "requested_model": asdict(requested), "style": style, "course": course, "budgets": asdict(budget),
                "prior_publications": prior_snapshots, "prior_continuity": prior_continuity,
-               "selection": selection, "request_options": {"instructions": instructions, "image_limit": image_limit},
+               "selection": selection, "request_options": {"instructions": instructions, "image_limit": image_limit, **({"speaker_focus":speaker_focus} if speaker_focus else {})},
                "contract": BATCH_CONTRACT_VERSION, "generation_contract": GENERATION_CONTRACT_VERSION,
                "prompt_contract": file_sha256(Path(__file__).with_name("providers.py"))}
     fingerprint = _hash(payload)
@@ -509,7 +512,19 @@ def _normalized(block: dict) -> str:
 
 
 def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str], maps: dict, *, final_phase: bool, continuity: list[dict]) -> dict:
-    entries = response.notes.get("lessons")
+    from .evidence_refs import normalize_references, EvidenceReferenceError
+    valid_ids = {i for mapping in maps.values() for i in mapping.values()}
+    try:
+        normalized, _ = normalize_references(response.notes, valid_ids)
+    except EvidenceReferenceError as error:
+        raise WorkflowError(str(error)) from error
+    from .generation_diagnostics import group_defects
+    defects=group_defects(response,plan,lectures,maps)
+    if defects:
+        error=WorkflowError("A study summary must remain a brief reference; local content validation requires review: " + "; ".join(f"{d['lecture_id']} {d['path']} {d['code']}" for d in defects))
+        error.defects=defects
+        raise error
+    entries = normalized.get("lessons")
     if not isinstance(entries, list) or [row.get("lecture_id") for row in entries if isinstance(row, dict)] != lectures or len(entries) != len(lectures):
         raise WorkflowError("Batch response must contain each selected lesson exactly once in numeric order")
     notes_by_lesson, duplicate_texts = {}, {}
@@ -586,8 +601,8 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                         raise WorkflowError("A later slide reference/new insight cannot repeat its table, figure or formula")
                     if role == "reference" and len(str(block.get("text", "")).split()) > 50:
                         raise WorkflowError("A cross-lesson slide reference must remain brief")
-                    if role == "new_insight" and not any(identifier.startswith("T") and str(local_evidence[identifier].get("speaker_role", "")).casefold() == "professor" for identifier in block["evidence_ids"]):
-                        raise WorkflowError("New insight requires this lesson's teacher transcript evidence")
+                    if role == "new_insight" and not any(identifier.startswith("T")  for identifier in block["evidence_ids"]):
+                        raise WorkflowError("New insight requires this lesson's transcript evidence")
             text = _normalized(block)
             digest = _hash(text) if text and len(text) >= 20 else None
             if digest and block.get("coverage_role") != "reference":
@@ -674,9 +689,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
-                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None) -> dict:
+                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None) -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
-    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit)
+    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus)
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
     if batch_id is not None and batch_id != plan["batch_id"]:
         raise WorkflowError("Resume batch ID does not match the selected course and lessons")
@@ -711,6 +726,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
             _save(root / "manifest.json", plan)
         state = WorkflowState(workspace.database_path)
         continuity, results, shared_attempts = deepcopy(plan.get("prior_continuity", [])), [], []
+        from .generation_diagnostics import speaker_warning
+        warnings=[{"lecture_id":l,**warning} for l,p in packs.items()
+                  if (warning:=speaker_warning(p,plan["course"].get("speaker_focus","lecture"))) is not None]
         word_candidates = {}; activity = {}; network_retries = 0
         generation_started = time.monotonic()
         budget_path=None;spent=0.;group_started=generation_started
@@ -722,12 +740,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 spent = historical_active_seconds(root,runtime,lectures,continuity)
                 budget_path = root / "active-budgets" / (_hash(intent(runtime,lectures,continuity)) + ".json")
                 if budget_path.exists():spent=max(spent,json.loads(budget_path.read_text())["used_seconds"])
-                def budget_remaining(reserve=30):
+                def budget_remaining(reserve=120):
                     return 1200 - reserve - spent - (time.monotonic()-group_started)
                 def save_progress(status="RUNNING",problem=None):
                     progress={**plan,"status":status,"completed_groups":len({e['group'] for e in shared_attempts}),"shared_attempts":shared_attempts,
                               "candidates":results,"word_candidates":word_candidates,"activity":activity,
-                              "network_retries":network_retries,"problem":problem}
+                              "network_retries":network_retries,"problem":problem,"warnings":warnings}
                     _save(manifest,progress);_save(root/"manifest.json",progress)
                 activity={"pid":os.getpid(),"lessons":lectures,"status":"VALIDATING_CACHE"}
                 save_progress()
@@ -745,6 +763,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 phases = []
                 repair_lineage = None
                 origin = None
+                phase_metrics = []
                 completed_path = group_dir / "complete.json"
                 group_reused = completed_path.exists()
                 if (version_group / "complete.json").exists():
@@ -760,6 +779,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     active = with_phase(request, phase, context_mode, previous)
                     checkpoint = group_dir / f"{phase}-{_hash(continuity)[:12]}.json"
                     phase_started = time.monotonic()
+                    phase_wall = time.time()
+                    validation_started = None
                     response = _load_generation_phase(checkpoint, previous=previous)
                     returned = checkpoint.with_name("returned-" + checkpoint.name)
                     if response is None:
@@ -792,9 +813,15 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         # successful transport or trigger another paid write.
                         _save_generation_phase(returned, previous, response)
                     try:
+                        from .evidence_refs import normalize_references
+                        _, transformations=normalize_references(response.notes,{r['id'] for r in active.source_pack['evidence']})
+                        if transformations:
+                            atomic_json_write(group_dir/"reference-normalization.json",{"attempt":response.attempt_path,"transformations":transformations})
                         if phase == 'writing' and repair_lineage is None:
                             from .batch_recovery import certify_response
                             response=certify_response(response,active,root)
+                        validation_started=time.monotonic()
+                        activity={**activity,"status":"LOCAL_VALIDATION"};save_progress()
                         validated = _validate_group(response, runtime, lectures, maps, final_phase=phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
                     except CoverageError as error:
                         cached_repair = (group_dir/'coverage-repair/repair.json').is_file()
@@ -815,6 +842,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     if not checkpoint.exists():
                         _unchanged(runtime)
                         _save_generation_phase(checkpoint, previous, response)
+                    phase_metrics.append({"phase":phase,"started_at_epoch":phase_wall,"ended_at_epoch":time.time(),
+                        "elapsed_seconds":time.monotonic()-phase_started,"reused":reused,
+                        "local_validation_seconds":time.monotonic()-validation_started if validation_started is not None else None,
+                        "attempt_path":response.attempt_path})
+                    atomic_json_write(group_dir/"phase-metrics.json",{"lessons":lectures,"phases":phase_metrics,
+                        "note":"Provider records distinguish reading, writing, suspension and reported usage; local wall time is not AI time."})
                     phases.append({"phase": phase, "attempt_path": response.attempt_path, "reported_usage": response.usage, "reused": reused, "elapsed_seconds": time.monotonic() - phase_started})
                     previous = response.notes
                 _unchanged(runtime)
@@ -873,11 +906,14 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         if budget_remaining(reserve=0)<=0:raise WorkflowError("Word deferred: lesson active budget exhausted")
                         from .execution import prevent_idle_sleep
                         with prevent_idle_sleep():
-                            built=build_word_candidate(workspace,lecture,timeout_seconds=min(30,budget_remaining(reserve=0)))
+                            word_started=time.monotonic()
+                            built=build_word_candidate(workspace,lecture,timeout_seconds=budget_remaining(reserve=0))
+                            phase_metrics.append({"phase":"BUILDING_WORD","lecture_id":lecture,"elapsed_seconds":time.monotonic()-word_started})
+                            atomic_json_write(group_dir/"phase-metrics.json",{"lessons":lectures,"phases":phase_metrics})
                         path=Path(built['candidate']);word_candidates[lecture]={"path":str(path),"sha256":file_sha256(path),
                             "source_candidate_hash":file_sha256(workspace.runs_dir/lecture/'lecture_notes.candidate.json'),
                             "renderer_hash":word_renderer_hash()}
-                atomic_json_write(budget_path,{"used_seconds":spent+time.monotonic()-group_started})
+                atomic_json_write(budget_path,{"lessons":lectures,"used_seconds":spent+time.monotonic()-group_started})
                 save_progress()
                 if pause_after and pause_after in lectures:
                     activity={};save_progress(status='PAUSED_REVIEW')
@@ -885,7 +921,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
             ready = {**plan, "status": "CANDIDATE_READY", "completed_groups": len(plan["groups"]),
                      "candidates": results, "manifest": str(manifest), "shared_attempts": shared_attempts,
                      "elapsed_seconds": time.monotonic() - generation_started,"word_candidates":word_candidates,
-                     "activity":{},"network_retries":network_retries}
+                     "activity":{},"network_retries":network_retries,"warnings":warnings}
             _save(manifest, ready)
             _save(root / "manifest.json", ready)
             return ready
@@ -900,8 +936,11 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                       "error": str(error), "completed_groups": len({entry["group"] for entry in shared_attempts}),
                       "shared_attempts": shared_attempts, "candidates": results,"word_candidates":word_candidates,
                       "activity":{**activity,"status":"STOPPED"},"network_retries":network_retries,
-                      "problem":{"kind":type(error).__name__,"message":str(error),"defects":getattr(error,"defects",[])}}
-            if budget_path is not None:atomic_json_write(budget_path,{"used_seconds":spent+time.monotonic()-group_started})
+                      "problem":{"kind":type(error).__name__,"message":str(error),"defects":getattr(error,"defects",[]),
+                                 "phase":activity.get("status","LOCAL_VALIDATION"),
+                                 "next_action":"build_word_without_generation" if isinstance(error,PublicationError) else "review_saved_content",
+                                 "saved_content_preserved":True},"warnings":warnings}
+            if budget_path is not None:atomic_json_write(budget_path,{"lessons":lectures,"used_seconds":spent+time.monotonic()-group_started})
             _save(manifest, failed)
             _save(root / "manifest.json", failed)
             if not isinstance(error,(ProviderError,WorkflowError,PublicationError,KeyboardInterrupt)):

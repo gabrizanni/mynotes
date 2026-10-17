@@ -34,6 +34,8 @@ elif action=='sync':
 elif action=='stop':
  data['runtime']={'recording':False,'exporting':False,'sessions':[]};state.write_text(json.dumps(data))
  print(json.dumps({'status':'PARTIAL','message':'Audio saved'}))
+elif action=='status' and sys.argv[1]=='transcription-queue':print(json.dumps({'parallel':1,'paused':False,'ui_open':False,'jobs':[]}))
+elif action=='library':print(json.dumps({'recordings':[]}))
 elif action=='status':print(json.dumps({'running':True,'enabled':True,'paused':False,'runtime':data['runtime']}))
 else:raise SystemExit(2)
 ''')

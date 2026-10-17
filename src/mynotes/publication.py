@@ -1091,6 +1091,10 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
             raise PublicationError("Candidate transport is outside its private workspace")
         try:
             record = json.loads(attempt.read_text())
+            if record.get("transport") == "agy_local_recovery_v1":
+                from .local_recovery import verify_local_receipt
+                verify_local_receipt(attempt, workspace.root)
+                continue
             if record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
                 verify_receipt(record, workspace.root)
@@ -1187,7 +1191,8 @@ def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected
             "lesson_tables": len(tables), "margin_cm": 1.5, "sections": len(document.sections)}
 
 
-def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_seconds: float | None = None, mode: str = "update") -> dict[str, Any]:
+    if mode not in {"update","standalone"}:raise PublicationError("Unknown Word build mode")
     build_started = time.monotonic()
     lecture_id = lecture_id.upper(); code = lecture_id.split("-L", 1)[0]
     configuration = workspace.configuration_store().load(); course = _course(configuration, code)
@@ -1208,8 +1213,8 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
     target = _target(course, workspace); run_dir = workspace.runs_dir / lecture_id / "word"
     run_dir.mkdir(parents=True, exist_ok=True)
     output = run_dir / f"{lecture_id}-{uuid.uuid4().hex[:10]}.candidate.docx"
-    baseline_hash = file_sha256(target) if target.is_file() else None
-    if target.is_file():
+    baseline_hash = file_sha256(target) if mode == "update" and target.is_file() else None
+    if mode == "update" and target.is_file():
         document = Document(target)
         _configure_document(document, profile)
     else:
@@ -1227,7 +1232,7 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
               if timeout_seconds is not None else _render_and_validate(output, run_dir / f"{output.stem}-render"))
     if file_sha256(source_candidate) != source_candidate_hash:
         raise PublicationError("Notes candidate changed during Word build; rebuild from the current notes")
-    validation = {"lecture_id": lecture_id, "source_candidate_hash": source_candidate_hash, "renderer_hash": word_renderer_hash(), "candidate": str(output), "candidate_hash": file_sha256(output), "target": str(target), "baseline_hash": baseline_hash, "structure": structure, "render": render, "validated_at": now_compact_utc()}
+    validation = {"lecture_id": lecture_id, "mode": mode, "source_candidate_hash": source_candidate_hash, "renderer_hash": word_renderer_hash(), "candidate": str(output), "candidate_hash": file_sha256(output), "target": str(target), "baseline_hash": baseline_hash, "structure": structure, "render": render, "validated_at": now_compact_utc()}
     atomic_json_write(output.with_suffix(".validation.json"), validation)
     from .workflow import WorkflowState
     state = WorkflowState(workspace.database_path)
@@ -1290,6 +1295,8 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
     candidate_hash = file_sha256(candidate_path)
     if validation.get("candidate_hash") != candidate_hash:
         raise PublicationError("Candidate changed after validation")
+    if validation.get("mode","update") != "update":
+        raise PublicationError("Standalone or cumulative candidates require their own explicit publication workflow")
     with _lock(target):
         current = file_sha256(target) if target.is_file() else None
         with sqlite3.connect(workspace.database_path) as connection:

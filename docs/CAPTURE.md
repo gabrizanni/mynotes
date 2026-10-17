@@ -111,14 +111,19 @@ source ID, UID and original occurrence time, including moved exceptions.
 
 HTTPS and `webcal://` subscriptions are supported (`webcal` becomes HTTPS).
 Links may contain private subscription tokens; they are stored privately and
-are excluded from diagnostics. Browser pages, OAuth login, CalDAV and calendar
-editing are outside this version. Selected all-day events or events without
+are excluded from diagnostics. Google Calendar `/calendar/embed?src=...` pages
+with a single calendar are resolved automatically to their public iCal feed.
+If that feed is unavailable, use the private iCal address from Google Calendar
+settings; Capture does not change sharing permissions. Other browser pages,
+OAuth login, CalDAV and calendar editing are unsupported. Selected all-day events or events without
 start/end times must be corrected before import.
 
 The app checks refresh deadlines every five minutes, refreshes due sources at
 startup/wake, and defaults to six hours between successful updates. HTTP validators
-avoid unchanged downloads. Failed feeds retry after fifteen minutes and preserve
-the last valid schedule. Explicit cancellations disable the event; unexplained
+avoid unchanged downloads. Temporary network failures retry after fifteen minutes
+and preserve the last valid schedule. Invalid links, unavailable feeds and other
+errors requiring correction suspend automatic retries. Explicit sync always
+allows a manual retry. Explicit cancellations disable the event; unexplained
 disappearance becomes `NEEDS_REVIEW` and suppresses automatic recording. The
 teaching period is bounded to 550 days, feeds to ten sources and downloads to ten
 MB each. Refreshes require no AI runtime.
@@ -222,3 +227,26 @@ distribution signature. Without it, builds are explicitly local ad-hoc signed
 candidates and may require renewed microphone permission after an upgrade.
 Notarization and public release are separate steps. `MYNOTES_CAPTURE_APP` selects
 a development app bundle; `MYNOTES_CAPTURE_HOME` isolates local test runtime.
+
+
+## Verified connection and repair (0.2.11)
+
+Use `mynotes capture connect --file calendar-source.json --json` for a verified
+connection. It accepts the subscription payload above, or `importMode: all_timed`
+with optional mappings. The command resolves the URL, downloads once and validates
+the calendar before writing a new source or schedule. A valid feed with no events
+in the selected period is a successful connection with a warning. The selected
+period/timezone is not replaced by Google display parameters.
+
+`subscribe` remains available for existing scripts. Synchronization also resolves
+Google embed links saved by earlier versions, preserving the source ID, event
+identities, recording IDs and local overrides. Successful resolution stores the
+feed URL. Correct a source in the UI with **Correggi collegamento**; replacing a
+populated source with a different calendar requires a new connection. A failed
+source with no successful import or events can be corrected in place.
+
+JSON failures provide `code`, `message`, `retryable` and `suggestedAction` without
+provider response bodies or secret URLs. The dashboard includes these optional
+fields while remaining readable with legacy metadata. `capture source --source ID
+--json` returns the private subscription only for explicitly editing that source;
+it must not be included in public diagnostics.

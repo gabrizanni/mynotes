@@ -56,7 +56,7 @@ def asr_directory(workspace, recording):
 def profile(workspace, recording):
     from .configuration import course_template
     from .sourcepack import transcription_course_context
-    if recording.get("course_code"):
+    if recording.get("course_code") in {c["code"] for c in workspace.configuration_store().load()["courses"]}:
         if recording.get("lecture_id"):
             course = transcription_course_context(workspace, recording["lecture_id"])
         else:
@@ -82,6 +82,16 @@ def library(workspace, *, query=None, date=None, course=None):
     dirs.add(Path(store.config()["outputDirectory"]))
     items = {}
     course_codes = {c["code"] for c in settings["courses"]}
+    runtime = read_json(store.runtime_path, {})
+    active_ids = set()
+    if _alive(runtime.get("pid")):
+        sessions = list(runtime.get("sessions") or [])
+        if runtime.get("currentSession"):
+            sessions.append(runtime["currentSession"])
+        for current in sessions:
+            if current.get("status") in {"RECORDING", "STARTED_LATE", "EXPORTING"}:
+                event = current.get("event") or {}
+                active_ids.update(filter(None, (event.get("recordingID"), event.get("id"))))
     for directory in dirs:
         if not directory.is_dir():
             continue
@@ -92,7 +102,7 @@ def library(workspace, *, query=None, date=None, course=None):
                     continue
                 event = apply(session["event"], links)
                 audio = Path(session.get("outputPath") or str(sidecar)[:-13])
-                if not audio.is_file() or audio.resolve().parent != directory.resolve():
+                if audio.resolve().parent != directory.resolve():
                     continue
                 code, number = event.get("courseCode"), event.get("lessonNumber")
                 if code is not None and (not isinstance(code, str) or not re.fullmatch(r"[A-Z0-9]+", code) or (number is not None and (type(number) is not int or not 1 <= number <= 999))):
@@ -105,7 +115,11 @@ def library(workspace, *, query=None, date=None, course=None):
                     "course_code": code, "lecture_id": lecture, "storage_recording_id": event.get("recordingID"), "event_id": event.get("id"), "source_id": event.get("sourceID"), "duration": session.get("durationSeconds"),
                     "language": event.get("transcriptionLanguage"),
                     "created_at": event.get("startsAt", ""), "timezone": event.get("timezone", "UTC"), "partial": session.get("partial") is True,
-                    "stable": session.get("status") == "COMPLETED" and is_stable(audio, settings["ingestion"]["stable_seconds"]),
+                    "capture_status": session.get("status"), "capture_reason": session.get("reason", ""),
+                    "audio_available": audio.is_file(),
+                    "stable": audio.is_file() and session.get("status") in {"COMPLETED", "PARTIAL"}
+                        and identifier not in active_ids and event.get("id") not in active_ids
+                        and is_stable(audio, settings["ingestion"]["stable_seconds"]),
                     "unknown_course": code is not None and code not in course_codes}
             except (OSError, ValueError, KeyError, TypeError):
                 continue
@@ -122,7 +136,7 @@ def library(workspace, *, query=None, date=None, course=None):
             items[str(path.resolve())] = {'id': hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:32],
                 'path': str(path), 'title': path.stem, 'course_code': code, 'lecture_id': f'{code}-L{number:02d}',
                 'duration': None, 'created_at': '', 'partial': False,
-                'stable': is_stable(path, settings['ingestion']['stable_seconds'])}
+                'audio_available': True, 'stable': is_stable(path, settings['ingestion']['stable_seconds'])}
     counts = {}
     for item in items.values():
         if item["lecture_id"]:
@@ -130,36 +144,125 @@ def library(workspace, *, query=None, date=None, course=None):
     labels = _read(root(workspace) / "labels.json", {})
     for item in items.values():
         item["title"] = labels.get(item["id"], item["title"])
-        item["status"] = "NOT_STARTED" if item["stable"] else "WAITING"
-        if item["partial"] or item.get("unknown_course") or counts.get(item["lecture_id"], 0) > 1:
-            item["status"] = "NEEDS_REVIEW"
+        item["warnings"], item["blocking_reasons"] = [], []
+        if item["partial"]:
+            manual = item.get("capture_reason") == "Stopped manually"
+            reason = item.get("capture_reason", "").casefold()
+            recovered = "recover" in reason or "interruption" in reason
+            late = "late" in reason
+            code = "MANUAL_STOP" if manual else "RECOVERED_AUDIO" if recovered else "STARTED_LATE" if late else "PARTIAL_COVERAGE"
+            message = ("Registrazione terminata manualmente." if manual else
+                "Recuperata dopo un’interruzione: potrebbe mancare una parte della lezione." if recovered else
+                "Registrazione avviata in ritardo: manca l’inizio della lezione." if late else
+                "La registrazione copre solo una parte della lezione; l’audio salvato può essere trascritto.")
+            item["warnings"].append({"code": code, "message": message})
+        if item.get("unknown_course"):
+            item["warnings"].append({"code": "UNKNOWN_COURSE", "message": "Corso non configurato: puoi trascrivere e associarlo in seguito."})
+        elif not item.get("course_code"):
+            item["warnings"].append({"code": "COURSE_UNASSIGNED", "message": "Corso da associare; puoi già trascrivere."})
+        if counts.get(item["lecture_id"], 0) > 1:
+            item["warnings"].append({"code": "DUPLICATE_LECTURE", "message": "Più audio indicano questa lezione: seleziona la registrazione da usare."})
+        if counts.get(item["lecture_id"], 0) > 1 and not item.get("storage_recording_id"):
+            item["blocking_reasons"].append({"code": "AMBIGUOUS_LEGACY_LECTURE", "message": "Più file usano la stessa destinazione storica: scegli la sorgente prima di trascrivere."})
+        state = "NOT_STARTED" if item["stable"] else "WAITING"
+        if not item["audio_available"]:
+            item["blocking_reasons"].append({"code": "AUDIO_UNAVAILABLE", "message": "File audio non disponibile. Ripristina il file prima di trascrivere."})
+        elif not item["stable"]:
+            item["blocking_reasons"].append({"code": "AUDIO_NOT_FINAL", "message": "Audio ancora in registrazione, salvataggio o aggiornamento. Attendi che il salvataggio termini."})
         path = asr_directory(workspace, item) / "transcript.json"
-        if path.is_file() and item["status"] == "NOT_STARTED":
+        if path.is_file():
             try:
                 from .asr import validate_transcript, segments_digest
                 saved = json.loads(path.read_text())
                 if (saved.get("status") == "COMPLETED" and not validate_transcript(saved, saved.get("audio_duration_seconds"))
                         and saved.get("segments_sha256") == segments_digest(saved.get("segments"))):
-                    item["status"] = "COMPLETED" if Path(item["path"]).stat().st_mtime <= path.stat().st_mtime else "OUTDATED"
-                    item["transcript_text"] = str(path.with_suffix(".txt"))
-                    item["transcript_json"] = str(path)
+                    if item["stable"]:
+                        state = "COMPLETED" if Path(item["path"]).stat().st_mtime <= path.stat().st_mtime else "OUTDATED"
+                        if state == "COMPLETED":
+                            if path.with_suffix(".txt").is_file():
+                                item["transcript_text"] = str(path.with_suffix(".txt"))
+                            item["transcript_json"] = str(path)
+                        else:
+                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio è cambiato dopo la trascrizione. Verifica la sorgente prima di ritrascrivere."})
                 else:
-                    item["status"] = "NEEDS_REVIEW"
+                    state = "NEEDS_REVIEW"
+                    item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione salvata non supera i controlli di integrità. Controlla il risultato prima di riutilizzarlo."})
             except (OSError, ValueError, TypeError):
-                item["status"] = "NEEDS_REVIEW"
+                state = "NEEDS_REVIEW"
+                item["blocking_reasons"].append({"code": "TRANSCRIPT_UNREADABLE", "message": "La trascrizione salvata non è leggibile. Controlla il file prima di riprovare."})
+        try:
+            detail = _read(asr_directory(workspace, item) / "status.json", {})
+        except (OSError, ValueError):
+            detail = {"status": "NEEDS_REVIEW", "error": "Lo stato della trascrizione non è leggibile."}
+        if state == "NOT_STARTED" and detail.get("status") in {"RUNNING", "FAILED", "INTERRUPTED", "NEEDS_REVIEW", "COMPLETED"}:
+            state = detail["status"]
+            if state == "RUNNING" and not _alive(detail.get("pid")):
+                state = "INTERRUPTED"
+            if state == "COMPLETED":
+                state = "NEEDS_REVIEW"
+                detail = {**detail, "error": "Il risultato della trascrizione completata non è più disponibile. Ripristina i file salvati."}
+            if state in {"FAILED", "INTERRUPTED", "NEEDS_REVIEW"}:
+                message = str(detail.get("error") or "La trascrizione è stata interrotta prima del completamento.").strip()[:600]
+                item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": message})
+                if state == "NEEDS_REVIEW":
+                    item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
+        item["transcription_status"] = state
+        # Existing clients retain the old aggregate status; new clients use the
+        # independent transcription state and explicit availability information.
+        item["status"] = "NEEDS_REVIEW" if state == "NOT_STARTED" and (item["partial"] or item.get("unknown_course") or counts.get(item["lecture_id"], 0) > 1) else state
     # The explicit enqueue action records duplicate identities; polling never hashes audio.
     if (root(workspace) / "queue.sqlite3").exists():
         with database(workspace, readonly=True) as conn:
+            jobs = {row["recording_id"]: row for row in conn.execute("SELECT * FROM jobs ORDER BY created")}
+            aliases = {}
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='recording_aliases'").fetchone():
-                aliases = {row["recording_id"]: row for row in conn.execute("SELECT a.*,j.status,j.result FROM recording_aliases a JOIN jobs j ON j.id=a.job_id")}
-                for item in items.values():
-                    alias = aliases.get(item["id"])
-                    stat = Path(item["path"]).stat()
-                    if alias and item["status"] == "NOT_STARTED" and (stat.st_mtime_ns, stat.st_size) == (alias["mtime_ns"], alias["size"]):
-                        item["status"] = "NOT_STARTED" if alias["status"] == "CANCELLED" else alias["status"]
-                        if alias["status"] == "COMPLETED" and alias["result"]:
-                            item["transcript_text"] = json.loads(alias["result"]).get("transcript_text")
-                            item["transcript_json"] = json.loads(alias["result"]).get("transcript_json")
+                aliases = {row["recording_id"]: row for row in conn.execute("SELECT a.*,j.status,j.result,j.pid,j.error FROM recording_aliases a JOIN jobs j ON j.id=a.job_id")}
+            for item in items.values():
+                if item["transcription_status"] not in {"NOT_STARTED", "RUNNING", "FAILED", "INTERRUPTED", "NEEDS_REVIEW"}:
+                    continue
+                alias = aliases.get(item["id"])
+                stat = Path(item["path"]).stat() if item["audio_available"] else None
+                if alias and stat and (stat.st_mtime_ns, stat.st_size) == (alias["mtime_ns"], alias["size"]):
+                    job = alias
+                else:
+                    job = jobs.get(item["id"])
+                if not job or job["status"] == "CANCELLED":
+                    continue
+                job_state = "INTERRUPTED" if job["status"] == "RUNNING" and not _alive(job["pid"]) else job["status"]
+                if job_state == "COMPLETED" and job["result"]:
+                    result = json.loads(job["result"])
+                    # A completed alias is only a pointer. Validate its small
+                    # transcript metadata as well; audio hashes are checked on use.
+                    candidate = Path(result.get("transcript_json") or "")
+                    try:
+                        saved = json.loads(candidate.read_text())
+                        from .asr import validate_transcript, segments_digest
+                        valid = (saved.get("status") == "COMPLETED" and not validate_transcript(saved, saved.get("audio_duration_seconds"))
+                            and saved.get("segments_sha256") == segments_digest(saved.get("segments")))
+                    except (OSError, ValueError, TypeError):
+                        valid = False
+                    if valid:
+                        if result.get("transcript_text") and Path(result["transcript_text"]).is_file():
+                            item["transcript_text"] = result["transcript_text"]
+                        item["transcript_json"] = str(candidate)
+                    else:
+                        job_state = "NEEDS_REVIEW"
+                        item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione collegata non supera i controlli di integrità."})
+                if job_state in {"QUEUED", "RUNNING", "COMPLETED"}:
+                    item["warnings"] = [w for w in item["warnings"] if w["code"] != "TRANSCRIPTION_FAILED"]
+                    item["blocking_reasons"] = [r for r in item["blocking_reasons"] if r["code"] != "ASR_RESULT_INVALID"]
+                item["transcription_status"] = job_state
+                if job is alias or job_state not in {"QUEUED", "RUNNING"}:
+                    item["status"] = job_state
+                if job["error"] or job_state == "NEEDS_REVIEW":
+                    message = "Trascrizione non riuscita: " + str(job["error"] or "Il risultato non supera i controlli di integrità.").strip()[:600]
+                    item["warnings"].append({"code": "TRANSCRIPTION_FAILED", "message": message})
+                    if job_state == "NEEDS_REVIEW":
+                        item["blocking_reasons"].append({"code": "ASR_RESULT_INVALID", "message": message})
+    for item in items.values():
+        if item["transcription_status"] in {"QUEUED", "RUNNING"}:
+            item["blocking_reasons"].append({"code": "TRANSCRIPTION_ACTIVE", "message": "La registrazione è già in coda o in trascrizione."})
+        item["can_transcribe"] = item["stable"] and not item["blocking_reasons"] and item["transcription_status"] != "COMPLETED"
     values = items.values()
     if query:
         from .capture_calendar import contains
@@ -226,22 +329,40 @@ def status(workspace):
             "wait_reason": _read(root(workspace) / "wait.json", {}).get("reason")}
 
 
-def enqueue(workspace, parallel=1):
+def enqueue(workspace, parallel=1, *, recording_id=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
     if type(parallel) is not int or not 1 <= parallel <= 4:
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
+    recordings = library(workspace)
+    if recording_id is not None:
+        recordings = [item for item in recordings if item["id"] == recording_id]
+        if not recordings:
+            raise ValueError("Registrazione non trovata")
     configure(workspace, parallel=parallel)
     added, skipped = 0, []
-    for item in library(workspace):
-        if item["status"] in {"WAITING", "NEEDS_REVIEW", "OUTDATED"}:
-            skipped.append({"recording_id": item["id"], "reason": item["status"]}); continue
-        if item["status"] == "COMPLETED" and item.get("storage_recording_id"):
+    for item in recordings:
+        state = item["transcription_status"]
+        if state != "COMPLETED" and not item["can_transcribe"]:
+            skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]}); continue
+        if state == "COMPLETED" and item.get("storage_recording_id"):
             from .capture_associations import validated_transcript
             existing = validated_transcript(workspace, item)
             if existing:
                 if not existing[0].with_suffix(".txt").exists():
                     write_transcript_text(existing[0].with_suffix(".txt"), existing[1])
                 continue
+        if state in {"FAILED", "INTERRUPTED"}:
+            with database(workspace) as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                previous = conn.execute("SELECT * FROM jobs WHERE recording_id=? ORDER BY created DESC LIMIT 1", (item["id"],)).fetchone()
+                if previous is None:
+                    previous = conn.execute("SELECT j.* FROM recording_aliases a JOIN jobs j ON j.id=a.job_id WHERE a.recording_id=?", (item["id"],)).fetchone()
+                if previous and (previous["status"] in {"FAILED", "INTERRUPTED"} or previous["status"] == "RUNNING" and not _alive(previous["pid"])):
+                    # Explicit retry retains the exact profile selected when this
+                    # job was first enqueued, even after course assignment.
+                    conn.execute("UPDATE jobs SET status='QUEUED',pid=NULL,error=NULL,updated=? WHERE id=?", (time.time(), previous["id"]))
+                    added += 1
+                    continue
         course = profile(workspace, item)
         sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
         transcript = asr_directory(workspace, item) / "transcript.json"
@@ -360,7 +481,7 @@ def run_job(workspace, identifier, *, engines=None):
     finally:
         with database(workspace) as conn:
             conn.execute("UPDATE jobs SET status=?, updated=?, error=?, result=?, pid=NULL WHERE id=?", (outcome, time.time(), error, json.dumps(result) if result else None, identifier))
-    return {"status": outcome, "job": identifier}
+    return {"status": outcome, "job": identifier, **(result or {}), **({"message": error} if error else {})}
 
 
 def run(workspace, *, tick=1):
@@ -427,7 +548,9 @@ def add_parser(subparsers):
         if action in {"enqueue", "configure"}:
             command.add_argument("--parallel", type=int, default=1)
         if action == "enqueue":
-            command.add_argument("--all-untranscribed", action="store_true", required=True)
+            target = command.add_mutually_exclusive_group(required=True)
+            target.add_argument("--all-untranscribed", action="store_true")
+            target.add_argument("--recording", help="enqueue only this recording ID")
         if action in {"heartbeat", "close"}:
             command.add_argument("--session", required=True)
         if action in {"worker", "retry", "remove"}:
@@ -445,7 +568,7 @@ def run_cli(args):
     if action == "library":
         value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course)}
     elif action == "enqueue":
-        value = enqueue(ws, args.parallel); launch_runner(ws)
+        value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
     elif action == "status":
         value = status(ws)
     elif action in {"pause", "resume", "configure"}:

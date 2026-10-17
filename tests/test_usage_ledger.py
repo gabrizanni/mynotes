@@ -207,3 +207,18 @@ def test_preflight_checks_exact_environment_used_for_the_process(provider,adapte
     monkeypatch.setattr('mynotes.providers._run_agy_worker' if provider == 'agy' else 'mynotes.providers.subprocess.run',run)
     with pytest.raises(ProviderError):adapter().generate(request(tmp_path,provider))
     assert calls==['environment']
+
+
+def test_cumulative_lecture_usage_and_legacy_result_streams_share_one_conversation(tmp_path):
+    workspace=Workspace.from_value(tmp_path/'private');run=workspace.runs_dir/'OPS7-L01'
+    for tokens in [10,18]:
+        path=save_attempt(run,None,provider='agy',error='local validation')
+        data=json.loads(path.read_text());data['reported_usage']=None
+        data['envelope']={'transport':'agy_parts_v1','status':'ERROR'}
+        data['stdout']=json.dumps({'event':'result','result':{'status':'SUCCESS','conversation_id':'one',
+            'usage':{'input_tokens':tokens,'thinking_tokens':3,'cache_read_tokens':50}}})
+        path.write_text(json.dumps(data))
+    result=lecture_usage(workspace,'OPS7-L01')['providers']['agy']
+    assert result['attempts']==2 and result['failed']==2
+    assert result['reported_totals']=={'input_tokens':18,'thinking_tokens':3,'cache_read_tokens':50}
+    assert result['expected_reporting_units']==1

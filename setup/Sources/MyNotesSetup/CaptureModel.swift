@@ -9,6 +9,7 @@ import Combine
     @Published var stopping = false
     @Published var error: String?
     @Published var notice: String?
+    @Published var refreshWarning: String?
     @Published var lastEventID: String?
     @Published var recordings: [CaptureRecording] = []
     @Published var queue: CaptureQueue?
@@ -18,6 +19,35 @@ import Combine
     let preview = ProcessInfo.processInfo.environment["MYNOTES_CAPTURE_PREVIEW"].map { URL(fileURLWithPath: $0) }
     var isPreview: Bool { preview != nil }
     private var pendingRequest: String?
+    private var readTask: Task<Void, Never>?
+    private var readIncludesLibrary = false
+    private var revision: UInt64 = 0
+    private var libraryDirty = false
+    private var lastPoll = Date.distantPast
+
+    var pollingInterval: TimeInterval {
+        if pendingRequest != nil || snapshot?.isRecording == true || snapshot?.isExporting == true
+            || queue?.jobs.contains(where: { ["QUEUED", "RUNNING"].contains($0.status) }) == true { return 5 }
+        return 15
+    }
+    // The polling clock is bookkeeping, not view state: advancing it must not
+    // invalidate the parent View or make SwiftUI recalculate List geometry.
+    func claimPoll(at date: Date = Date(), force: Bool = false) -> Bool {
+        guard force || date.timeIntervalSince(lastPoll) >= pollingInterval else { return false }
+        lastPoll = date
+        return true
+    }
+    private func invalidateReads() { revision &+= 1 }
+    private static func equal<Value: Encodable>(_ left: Value, _ right: Value) -> Bool {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard let a = try? encoder.encode(left), let b = try? encoder.encode(right) else { return false }
+        return a == b
+    }
+    private func publish(_ next: CaptureSnapshot, recordings nextRecordings: [CaptureRecording]?, queue nextQueue: CaptureQueue?) {
+        if let nextRecordings, !Self.equal(recordings, nextRecordings) { recordings = nextRecordings }
+        if !Self.equal(queue, nextQueue) { queue = nextQueue }
+        if !Self.equal(snapshot, Optional(next)) { snapshot = next }
+    }
 
     fileprivate nonisolated static func invoke(_ executable: URL, _ workspace: String, _ action: String, _ arguments: [String], _ payload: Data?, group: String = "capture") throws -> Data {
         var args = [group, action, "--workspace", workspace] + arguments
@@ -47,30 +77,125 @@ import Combine
         if process.terminationStatus != 0 {
             // JSON failure responses (e.g. quota-free sync failures) still have useful structure.
             if (try? JSONSerialization.jsonObject(with: output)) != nil { return output }
-            throw NSError(domain: "Capture", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: String(data: errorBox.data, encoding: .utf8) ?? "Comando Capture non riuscito."])
+            let diagnostic = String(data: errorBox.data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let fallback = diagnostic?.isEmpty == false ? diagnostic : String(data: output, encoding: .utf8)
+            // Queue CLI errors may be printed on stdout. Calendar diagnostics can
+            // contain private URLs, so only structured responses are shown there.
+            let message = group == "transcription-queue" ? Self.queueMessage(fallback) : nil
+            throw NSError(domain: "Capture", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: message ?? "Comando non riuscito. Controlla lo stato e riprova."])
         }
         return output
     }
 
+    nonisolated private static func queueMessage(_ value: String?) -> String? {
+        guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        let sensitive = #"(?i)https?://|webcal://|group\.calendar\.google\.com|token\s*[=:]|authorization\s*[=:]|password\s*[=:]|secret\s*[=:]|Traceback"#
+        guard text.range(of: sensitive, options: .regularExpression) == nil else { return nil }
+        return String(text.prefix(600))
+    }
     private func fetch() async throws -> CaptureSnapshot {
         if let preview { return try CaptureSnapshot.decode(Data(contentsOf: preview)) }
         let executable = context.launcher, workspace = context.workspace
         let data = try await Task.detached { try Self.invoke(executable, workspace, "dashboard", [], nil) }.value
         return try CaptureSnapshot.decode(data)
     }
-    func refresh(silent: Bool = false) async {
-        guard !busy else { return }
-        busy = true; defer { busy = false }
-        do {
-            snapshot = try await fetch(); error = nil; resolvePending()
-            if isPreview { recordings = snapshot?.recordings ?? []; queue = snapshot?.queue }
-            else { try await fetchLibrary() }
+    // A timer read never becomes an operation: controls and the current view stay usable.
+    // A foreground request can share an existing read; a library request waits for a
+    // lighter calendar read, then loads the archive before proposing a lesson number.
+    func refresh(silent: Bool = false, includeLibrary: Bool = false) async {
+        if let current = readTask {
+            let includesLibrary = readIncludesLibrary
+            await current.value
+            if includeLibrary && !includesLibrary { await refresh(silent: silent, includeLibrary: true) }
+            return
         }
-        catch { self.error = "Capture non disponibile: \(error.localizedDescription)" }
+        guard !busy, !queueBusy, !stopping else { return }
+        if !silent { busy = true }
+        let version = revision
+        readIncludesLibrary = includeLibrary
+        let task = Task { @MainActor in
+            defer { self.readTask = nil; self.readIncludesLibrary = false; if !silent { self.busy = false } }
+            do {
+                try await self.readAndPublish(version: version, includeLibrary: includeLibrary)
+                guard version == self.revision else { return }
+                if self.refreshWarning != nil { self.refreshWarning = nil }
+            } catch {
+                guard version == self.revision else { return }
+                let message = self.snapshot == nil
+                    ? "Impossibile leggere lo stato di Capture. Premi Aggiorna per riprovare."
+                    : "Aggiornamento dello stato non riuscito. I dati visualizzati restano disponibili; premi Aggiorna per riprovare."
+                if self.refreshWarning != message { self.refreshWarning = message }
+            }
+        }
+        readTask = task
+        await task.value
+    }
+    func prepareLesson() async -> Bool {
+        if isPreview { return true }
+        await refresh(includeLibrary: true)
+        return snapshot != nil && refreshWarning == nil && !busy && !queueBusy && !stopping
+    }
+    private func readAndPublish(version: UInt64, includeLibrary: Bool) async throws {
+        var next = try await fetch()
+        guard version == revision else { return }
+        if isPreview {
+            publish(next, recordings: next.recordings ?? [], queue: next.queue)
+            resolvePending(); return
+        }
+        let executable = context.launcher, workspace = context.workspace
+        let stateData = try await Task.detached { try Self.invoke(executable, workspace, "status", [], nil, group: "transcription-queue") }.value
+        let nextQueue = try JSONDecoder().decode(CaptureQueue.self, from: stateData)
+        guard version == revision else { return }
+        let priorFinished = Set((snapshot?.runtime.sessions ?? []).filter { ["COMPLETED", "PARTIAL"].contains($0.status) }.map(\.id))
+        let newFinished = Set((next.runtime.sessions ?? []).filter { ["COMPLETED", "PARTIAL"].contains($0.status) }.map(\.id))
+        let justSaved = snapshot?.isExporting == true && !next.isExporting
+            || snapshot?.isRecording == true && !next.isRecording && !next.isExporting
+            || !newFinished.subtracting(priorFinished).isEmpty
+        let nextRecordings: [CaptureRecording]?
+        if includeLibrary || justSaved || libraryDirty { nextRecordings = try await fetchLibrary() }
+        else { nextRecordings = nil }
+        guard version == revision else { return }
+        next.recordings = nextRecordings ?? recordings
+        next.queue = nextQueue
+        publish(next, recordings: nextRecordings, queue: nextQueue)
+        if nextRecordings != nil { libraryDirty = false }
+        resolvePending()
+    }
+    private func refreshAfterCommand() {
+        Task {
+            if let current = self.readTask { await current.value }
+            await self.refresh(silent: true)
+        }
+    }
+    private func reconcile(version: UInt64, includeLibrary: Bool = false) async throws {
+        if let current = readTask { await current.value }
+        guard version == revision else { return }
+        try await readAndPublish(version: version, includeLibrary: includeLibrary)
+    }
+    func calendarSource(_ id: String) async -> CaptureSubscription? {
+        guard !busy, !isPreview else { return nil }
+        invalidateReads()
+        busy = true; error = nil; defer { busy = false }
+        do {
+            let executable = context.launcher, workspace = context.workspace
+            let data = try await Task.detached { try Self.invoke(executable, workspace, "source", ["--source", id], nil) }.value
+            return try JSONDecoder().decode(CaptureSourceResponse.self, from: data).source
+        } catch {
+            self.error = "Impossibile caricare il collegamento del calendario. Riprova."
+            return nil
+        }
     }
     @discardableResult func perform(_ action: String, arguments: [String] = [], payload: [String: Any]? = nil) async -> Bool {
-        guard !busy, !isPreview else { return false }
-        busy = true; error = nil; notice = nil; defer { busy = false }
+        guard !busy, !queueBusy, !isPreview else { return false }
+        invalidateReads(); let version = revision
+        busy = true; error = nil; notice = nil
+        defer { busy = false; if version != revision { refreshAfterCommand() } }
+        if action == "connect" {
+            let parts = (payload?["url"] as? String).flatMap { URLComponents(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            notice = parts?.host == "calendar.google.com" && parts?.path == "/calendar/embed"
+                ? "Riconosciuto un link Google Calendar. Verifico il calendario iCal corrispondente…"
+                : "Verifico il calendario e le lezioni nel periodo selezionato…"
+        }
         do {
             let executable = context.launcher, workspace = context.workspace
             let input = try payload.map { try JSONSerialization.data(withJSONObject: $0) }
@@ -81,19 +206,26 @@ import Combine
             let response = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let status = response["status"] as? String ?? ""
             guard !status.isEmpty else { throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Risposta Capture non valida. Aggiorna MyNotes e riprova."]) }
+            guard version == revision else { return !["FAILED", "REJECTED", "SYNC_FAILED", "INTERRUPTED", "DEFERRED"].contains(status) }
             lastEventID = response["eventID"] as? String
             if ["FAILED", "REJECTED", "SYNC_FAILED", "INTERRUPTED", "DEFERRED"].contains(status) {
+                notice = nil
                 error = response["message"] as? String ?? "Operazione non completata. Controlla gli errori del calendario e lo stato di Capture."
-                snapshot = try await fetch(); return false
+                try await reconcile(version: version); return false
             }
-            notice = status == "PENDING" ? "Richiesta inviata, non ancora confermata dal registratore." : status == "RECORDING" ? "Il registratore ha confermato l’acquisizione del microfono." : "Operazione completata."
+            notice = response["message"] as? String ?? (status == "PENDING" ? "Richiesta inviata, non ancora confermata dal registratore." : status == "RECORDING" ? "Il registratore ha confermato l’acquisizione del microfono." : "Operazione completata.")
             pendingRequest = status == "PENDING" ? response["requestID"] as? String : nil
-            snapshot = try await fetch(); resolvePending(); return true
-        } catch { self.error = error.localizedDescription; return false }
+            try await reconcile(version: version); return true
+        } catch {
+            if version == revision { self.notice = nil; self.error = error.localizedDescription }
+            return false
+        }
     }
     func stopNow() async {
         guard !stopping, !isPreview else { return }
-        stopping = true; defer { stopping = false }
+        invalidateReads(); let version = revision
+        stopping = true; libraryDirty = true
+        defer { stopping = false; refreshAfterCommand() }
         do {
             let executable = context.launcher, workspace = context.workspace
             let data = try await Task.detached { try Self.invoke(executable, workspace, "stop", ["--wait-seconds", "10"], nil) }.value
@@ -109,9 +241,13 @@ import Combine
             // while a slow calendar download is in progress.
             let stateData = try await Task.detached { try Self.invoke(executable, workspace, "status", [], nil) }.value
             let state = try JSONDecoder().decode(CaptureStatus.self, from: stateData)
-            snapshot?.running = state.running; snapshot?.runtime = state.runtime
-            snapshot?.enabled = state.enabled; snapshot?.paused = state.paused
-        } catch { self.error = error.localizedDescription }
+            guard version == revision else { return }
+            if var next = snapshot {
+                next.running = state.running; next.runtime = state.runtime
+                next.enabled = state.enabled; next.paused = state.paused
+                publish(next, recordings: nil, queue: queue)
+            }
+        } catch { if version == revision { self.error = error.localizedDescription } }
     }
     private func resolvePending() {
         guard let id = pendingRequest, let response = snapshot?.responses?.first(where: { $0.requestID == id }) else { return }
@@ -122,37 +258,70 @@ import Combine
         } else { notice = "Il registratore ha confermato la richiesta." }
     }
 
-    private func fetchLibrary() async throws {
+    private func fetchLibrary() async throws -> [CaptureRecording] {
         let executable = context.launcher, workspace = context.workspace
         let library = try await Task.detached { try Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue") }.value
-        recordings = try JSONDecoder().decode(CaptureLibrary.self, from: library).recordings
-        snapshot?.recordings = recordings
-        let state = try await Task.detached { try Self.invoke(executable, workspace, "status", [], nil, group: "transcription-queue") }.value
-        queue = try JSONDecoder().decode(CaptureQueue.self, from: state)
+        return try JSONDecoder().decode(CaptureLibrary.self, from: library).recordings
     }
 
     func queueAction(_ action: String, arguments: [String] = []) async {
-        guard !queueBusy, !isPreview else { return }
-        queueBusy = true; defer { queueBusy = false }
+        guard !queueBusy, !busy, !isPreview else { return }
+        invalidateReads(); let version = revision
+        queueBusy = true; error = nil; notice = nil
+        defer { queueBusy = false; if version != revision { refreshAfterCommand() } }
         do {
             let executable = context.launcher, workspace = context.workspace
-            _ = try await Task.detached { try Self.invoke(executable, workspace, action, arguments, nil, group: "transcription-queue") }.value
-            try await fetchLibrary()
-        } catch { self.error = error.localizedDescription }
+            let data = try await Task.detached { try Self.invoke(executable, workspace, action, arguments, nil, group: "transcription-queue") }.value
+            let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            let status = result["status"] as? String ?? ""
+            guard !status.isEmpty else { throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Risposta della coda non valida. Aggiorna MyNotes e riprova."]) }
+            guard version == revision else { return }
+            if ["FAILED", "REJECTED", "NEEDS_REVIEW", "BUSY", "INTERRUPTED", "DEFERRED"].contains(status) {
+                error = Self.queueMessage(result["message"] as? String) ?? "Operazione non completata. Controlla la registrazione e riprova."
+            } else if status == "QUEUED", let added = result["added"] as? Int {
+                let skipped = result["skipped"] as? [[String: Any]] ?? []
+                var reasons: [String] = []
+                for item in skipped {
+                    let blockers = item["blocking_reasons"] as? [[String: Any]] ?? []
+                    for blocker in blockers {
+                        if let message = Self.queueMessage(blocker["message"] as? String), !reasons.contains(message) { reasons.append(message) }
+                    }
+                    if blockers.isEmpty && item["reason"] as? String == "EXISTING_TRANSCRIPT_NEEDS_REVIEW" {
+                        let message = "La trascrizione esistente richiede una verifica prima di riprovare."
+                        if !reasons.contains(message) { reasons.append(message) }
+                    }
+                }
+                let details = reasons.prefix(3).joined(separator: " ")
+                if added == 0 {
+                    if !details.isEmpty { error = "Nessuna nuova trascrizione aggiunta. " + details }
+                    else { notice = "Nessuna nuova trascrizione aggiunta alla coda." }
+                } else {
+                    notice = (added == 1 ? "1 registrazione aggiunta alla coda." : "\(added) registrazioni aggiunte alla coda.") + (details.isEmpty ? "" : " Registrazioni escluse: " + details)
+                }
+            } else if ["OK", "PAUSED", "RESUMED", "CANCELLED", "STOPPED", "RUNNING", "COMPLETED"].contains(status) {
+                notice = Self.queueMessage(result["message"] as? String) ?? "Operazione completata."
+            } else {
+                error = "Risposta della coda non riconosciuta. Aggiorna MyNotes e riprova."
+            }
+            try await reconcile(version: version, includeLibrary: true)
+        } catch { if version == revision { self.notice = nil; self.error = error.localizedDescription } }
     }
 
     func addCourse(_ name: String) async -> Bool {
-        guard !busy, !isPreview else { return false }
-        busy = true; defer { busy = false }
+        guard !busy, !queueBusy, !isPreview else { return false }
+        invalidateReads(); let version = revision
+        busy = true
+        defer { busy = false; if version != revision { refreshAfterCommand() } }
         do {
             let executable = context.launcher, workspace = context.workspace
             let data = try await Task.detached { try Self.invoke(executable, workspace, "add", ["--name", name, "--defer-context", "--json"], nil, group: "course") }.value
             let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard version == revision else { return false }
             createdCourse = (object?["course"] as? [String: Any])?["code"] as? String
-            snapshot = try await fetch()
+            try await reconcile(version: version)
             notice = object?["status"] as? String == "EXISTS" ? "Il corso esiste già ed è stato selezionato." : "Corso aggiunto. Puoi già registrare; completerai il contesto nella prossima chat."
             return createdCourse != nil
-        } catch { self.error = error.localizedDescription; return false }
+        } catch { if version == revision { self.error = error.localizedDescription }; return false }
     }
 }
 

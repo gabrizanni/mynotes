@@ -1,5 +1,7 @@
 # MyNotes + Capture
 
+Development candidate: **0.2.13**, with silent Capture updates and recording-based transcription from chat. See [update notes](docs/UPDATES.md).
+
 Record lectures and turn audio, slides and personal notes into Word study handouts with editable equations. Capture is included; you do not need a separate download.
 
 English | [Italiano](README.it.md)

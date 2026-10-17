@@ -1,8 +1,45 @@
 # Release validation status
 
 This document separates implemented safeguards from checks actually completed.
-Version 0.2.10 is a prerelease for continued acceptance testing. Its release
+Version 0.2.13 is a local candidate for continued acceptance testing. Its release
 notes identify local results, hosted CI and remaining end-to-end limitations.
+
+## Local 0.2.13 Capture validation (2026-10-17)
+
+- Native regressions cover silent refresh without loading-state changes, one
+  outstanding read, stale-result rejection after Stop, retained action messages,
+  inactive/active polling intervals and library reads separate from calendar ticks.
+- Deterministic ASR fixtures cover saved partial recordings, missing and active
+  audio, unassigned recordings, direct requests without a Capture window, frozen
+  profiles, assignment reuse and concurrent prepare/chat requests with one engine
+  execution. No personal audio was transcribed during these checks.
+- Material-routing regressions retain text, Markdown and Word sources as material
+  without an ASR call or invented transcript timestamps.
+- The actual native preview window was exercised with isolated synthetic data:
+  archive filters, search, selection, partial-coverage explanations and an existing
+  transcript remain visible across repeated refreshes without a loading spinner.
+- Final suite totals, fresh package hashes, isolated upgrade and personal install
+  verification are recorded with the release artifacts. Synthetic ASR is not proof
+  of personal microphone capture or a real-provider transcription. GitHub
+  publication is a separate step.
+
+## Local 0.2.12 pipeline validation (2026-10-17)
+
+- The pipeline revision passed 757 local tests before packaging metadata and
+  coordinator guidance were updated; the final package validation is recorded
+  separately with its artifacts.
+- Verified synthetic SUCCESS-stream recovery, altered-input rejection, UNKNOWN
+  speaker handling, preserved budgets, conversation counter deduplication and
+  a Word failure followed by resume with provider calls explicitly forbidden.
+- A synthetic provider with the real shared renderer/LibreOffice produced two
+  standalone documents and one fresh cumulative; all four rendered pages were
+  inspected. Reuse and resume made no additional provider calls.
+- Two existing real lesson source packs retained all evidence and transcript
+  metadata. One complete retained response was diagnosed read-only: reference
+  aliases are locally recoverable but two cross-lesson study answers still
+  require content review. No prose was rewritten to bypass the content check.
+- No new real-model generation, academic ASR, Microsoft Word acceptance or
+  academic publication is claimed. Tests do not guarantee model completion.
 
 ## Integrated 0.2.10 preview (2026-10-16)
 

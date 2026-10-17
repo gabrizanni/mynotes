@@ -3,13 +3,13 @@ import AppKit
 
 private func captureStateLabel(_ status: String) -> String {
     switch status {
-    case "COMPLETED": return "Pronta"
+    case "COMPLETED": return "Trascritta"
     case "QUEUED": return "In coda"
     case "RUNNING": return "In trascrizione"
-    case "FAILED": return "Non riuscita"
-    case "INTERRUPTED": return "Interrotta"
-    case "NEEDS_REVIEW": return "Da verificare"
-    case "OUTDATED": return "Da aggiornare"
+    case "FAILED": return "Trascrizione non riuscita"
+    case "INTERRUPTED": return "Trascrizione interrotta"
+    case "NEEDS_REVIEW": return "Trascrizione non completata"
+    case "OUTDATED": return "Audio modificato: trascrizione da aggiornare"
     case "WAITING": return "Audio non ancora disponibile"
     case "CANCELLED": return "Rimossa dalla coda"
     default: return "Da trascrivere"
@@ -42,10 +42,10 @@ struct CaptureRecordingsView: View {
         model.recordings.filter { item in
             (query.isEmpty || (item.title + " " + (item.courseCode ?? "")).localizedCaseInsensitiveContains(query))
                 && (course == "all" || (course == "none" ? item.courseCode == nil : item.courseCode == course))
-                && (statusFilter == "all" || item.status == statusFilter)
+                && (statusFilter == "all" || (statusFilter == "COMPLETED" ? item.isTranscribed : !item.isTranscribed))
         }
     }
-    private var pendingCount: Int { model.recordings.filter { item in item.status == "NOT_STARTED" && !(model.queue?.jobs.contains { $0.recordingID == item.id && $0.status != "CANCELLED" } ?? false) }.count }
+    private var pendingCount: Int { model.recordings.filter { item in item.transcriptionAllowed && !item.isTranscribed && !(model.queue?.jobs.contains { $0.recordingID == item.id && $0.status != "CANCELLED" } ?? false) }.count }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             controls
@@ -98,7 +98,7 @@ struct CaptureRecordingsView: View {
                     }.labelsHidden().frame(width: 165)
                 }
                 Picker("Stato", selection: $statusFilter) {
-                    Text("Tutte").tag("all"); Text("Da trascrivere").tag("NOT_STARTED"); Text("Pronte").tag("COMPLETED"); Text("Da verificare").tag("NEEDS_REVIEW")
+                    Text("Tutte").tag("all"); Text("Da trascrivere").tag("NOT_STARTED"); Text("Trascritte").tag("COMPLETED")
                 }.pickerStyle(.segmented).labelsHidden()
                 List(selection: $selected) {
                     ForEach(recordings) { item in
@@ -106,7 +106,7 @@ struct CaptureRecordingsView: View {
                             Text(item.title).font(.headline).lineLimit(2)
                             Text(item.lectureID ?? item.courseCode ?? "Corso da associare").font(.callout).foregroundStyle(.secondary)
                             Text(CaptureDates.label(item.createdAt)).font(.caption).foregroundStyle(.secondary)
-                            Text(captureStateLabel(model.queue?.jobs.last(where: { $0.recordingID == item.id && ["QUEUED", "RUNNING", "FAILED", "INTERRUPTED"].contains($0.status) })?.status ?? item.status)).font(.caption).foregroundStyle(.secondary)
+                            Text(captureStateLabel(displayState(item))).font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 5).tag(item.id)
                             .contextMenu { Button("Rinomina") { renameText = item.title; renaming = item }.disabled(model.isPreview) }
                     }
@@ -119,9 +119,26 @@ struct CaptureRecordingsView: View {
                         Text(item.lectureID ?? item.courseCode ?? "Corso da associare").foregroundStyle(.secondary)
                         if !item.createdAt.isEmpty { LabeledContent("Registrata", value: CaptureDates.label(item.createdAt)) }
                         if let duration = item.duration { LabeledContent("Durata", value: "\(Int(duration / 60)) min \(Int(duration) % 60) s") }
-                        Label(captureStateLabel(item.status), systemImage: item.status == "COMPLETED" ? "checkmark.circle" : "waveform")
+                        Label(captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
+                        ForEach(Array((item.warnings ?? []).enumerated()), id: \.offset) { _, warning in
+                            Label(warning.message, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        ForEach(Array((item.blockingReasons ?? []).enumerated()), id: \.offset) { _, reason in
+                            Label(reason.message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if !item.isTranscribed {
+                            Button(retryJob(item) == nil ? "Trascrivi" : "Riprova trascrizione", systemImage: "text.badge.plus") {
+                                Task {
+                                    if let job = retryJob(item) { await model.queueAction("retry", arguments: ["--job", job.id]) }
+                                    else { await model.queueAction("enqueue", arguments: ["--recording", item.id, "--parallel", String(model.queue?.parallel ?? 1)]) }
+                                }
+                            }.buttonStyle(.borderedProminent)
+                                .disabled(model.queueBusy || model.isPreview || !item.transcriptionAllowed)
+                        }
                         HStack {
-                            Button("Ascolta audio", systemImage: "play") { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) }
+                            Button("Ascolta audio", systemImage: "play") { NSWorkspace.shared.open(URL(fileURLWithPath: item.path)) }.disabled(item.audioAvailable == false)
                             Button("Mostra nel Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: item.path)]) }
                         }
                         if let path = item.transcriptText { Button("Apri trascrizione") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) } }
@@ -130,6 +147,15 @@ struct CaptureRecordingsView: View {
                 } else { ContentUnavailableView("Seleziona una registrazione", systemImage: "waveform", description: Text("Qui trovi audio e trascrizione.")) }
             }.frame(minWidth: 350, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+    }
+    private func retryJob(_ item: CaptureRecording) -> CaptureQueueJob? {
+        guard let job = model.queue?.jobs.last(where: { $0.recordingID == item.id }),
+              ["FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains(job.status) else { return nil }
+        return job
+    }
+    private func displayState(_ item: CaptureRecording) -> String {
+        if item.isTranscribed { return "COMPLETED" }
+        return model.queue?.jobs.last(where: { $0.recordingID == item.id && ["QUEUED", "RUNNING", "FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains($0.status) })?.status ?? item.transcriptionState
     }
     private var queueList: some View {
         VStack(alignment: .leading, spacing: 10) {

@@ -26,15 +26,21 @@ enum CaptureDates {
 }
 
 struct CaptureCourse: Codable, Identifiable { var code: String; var name: String; var contextPending: Bool?; var id: String { code } }
-struct CaptureMapping: Codable { var match: String; var courseCode: String; var firstLesson: Int }
+struct CaptureMapping: Codable { var match: String; var courseCode: String; var firstLesson: Int? }
 struct CaptureImportIssue: Codable { var title: String; var reason: String }
 struct CaptureImportSummary: Codable { var imported: Int; var recognizedCourses: Int; var pending: Int; var excluded: Int; var issues: [CaptureImportIssue]? }
 struct CaptureSource: Codable, Identifiable {
     var sourceID: String; var label: String; var host: String; var timezone: String
     var lastSuccess: String?; var nextAttempt: String?; var error: String?; var mappings: [CaptureMapping]
     var importMode: String?; var summary: CaptureImportSummary?
+    var code: String?; var message: String?; var retryable: Bool?; var suggestedAction: String?
     var id: String { sourceID }
 }
+struct CaptureSubscription: Decodable {
+    var sourceID: String; var label: String; var url: String; var timezone: String
+    var periodStart: String; var periodEnd: String; var importMode: String?; var mappings: [CaptureMapping]
+}
+struct CaptureSourceResponse: Decodable { var source: CaptureSubscription }
 struct CaptureEvent: Codable, Identifiable {
     var id: String; var sourceID: String; var courseCode: String?; var lessonNumber: Int?
     var title: String; var startsAt: String; var endsAt: String; var stopAt: String; var timezone: String
@@ -115,13 +121,26 @@ struct CaptureContext {
     }
 }
 
+struct CaptureRecordingMessage: Codable {
+    var code: String; var message: String
+}
 struct CaptureRecording: Codable, Identifiable {
     var id: String; var path: String; var title: String; var status: String
     var courseCode: String?; var lectureID: String?; var duration: Double?; var createdAt: String
     var transcriptText: String?
+    var transcriptionStatus: String?
+    var canTranscribe: Bool?
+    var audioAvailable: Bool?
+    var warnings: [CaptureRecordingMessage]?
+    var blockingReasons: [CaptureRecordingMessage]?
+    var transcriptionState: String { transcriptionStatus ?? status }
+    var isTranscribed: Bool { transcriptionState == "COMPLETED" }
+    var transcriptionAllowed: Bool { canTranscribe ?? (transcriptionState == "NOT_STARTED") }
     enum CodingKeys: String, CodingKey {
         case id, path, title, status, duration
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
+        case transcriptionStatus = "transcription_status", canTranscribe = "can_transcribe", audioAvailable = "audio_available"
+        case warnings, blockingReasons = "blocking_reasons"
     }
 }
 struct CaptureLibrary: Decodable { var recordings: [CaptureRecording] }

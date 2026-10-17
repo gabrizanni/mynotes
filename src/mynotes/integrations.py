@@ -205,6 +205,21 @@ a live job. Distinguish content-ready, Word-ready, retry wait and stopped states
 Resuming must reuse certified responses after local structural-source review.
 Never edit returned JSON, source citations or receipt hashes to satisfy coverage.
 Only the managed, separately recorded targeted correction may fix a real gap.
+Before resuming a stopped batch, consult `mynotes recover-batch BATCH_ID --json`.
+This is local diagnosis, not another model call. Apply --apply only for a verified
+LOCALLY_RECOVERABLE result; a process failure stays preserved in a separate record.
+NEEDS_CONTENT_REVIEW means show all reported defects and preserve the response;
+never rewrite prose, evidence or receipts to force success, and do not silently
+start another paid generation. Ordinary resume also checks saved compatible work.
+Use lecture content by default: UNKNOWN voices do not block transcript-supported
+insights and must never be relabeled as PROFESSOR. Use --speaker-focus professor
+only on an explicit user request, report inability to isolate the voice once and
+retain the uncertainty. A saved Word error requires local rebuilding, not ASR or AI.
+Use `mynotes build COURSE-LNN --mode standalone` for a document containing just
+that lesson. For separate and cumulative documents from a fully validated batch,
+use `mynotes build-batch BATCH_ID --mode both --json`; never concatenate historical
+cumulative Word files. Read the delivery index, render and review the actual files;
+these remain candidates and have not been academically published.
 After generation build and inspect each Word candidate in order. Building never
 publishes. Correct Word styling locally without another AI call when the saved
 content remains valid. Never run a batch publish automatically: each cumulative
@@ -213,18 +228,36 @@ publication approval. A rejected candidate is not completed or published.
 """
 
 TRANSCRIPTION_GUIDANCE = """
-For a request to transcribe one lesson, immediately use `mynotes transcribe
-COURSE-LNN --workspace PATH --json`, adding --audio only if a specific recording
-was supplied. This command performs the relevant ASR checks; do not first run
-general doctor/status checks, explore implementation code, invent Python imports,
-scan other course recordings, generate notes or browse the web. Use
-`mynotes transcription-status COURSE-LNN --workspace PATH --json` for progress.
-Report phase and elapsed time; percentages only if the engine reports them.
+For a request to transcribe Capture audio, resolve the selected recording with
+`mynotes transcription-queue library --query TEXT --date YYYY-MM-DD --json`
+(filters optional). Match title/date and ask only if several candidates remain.
+Use `mynotes transcribe --recording ID --workspace PATH --json`, even without a
+course/lesson number or an open Capture window. Read progress with
+`mynotes transcription-status --recording ID --workspace PATH --json`.
+A saved partial recording can be transcribed; preserve and report its coverage
+warning without inventing missing speech or claiming the full lesson was recorded.
+Do not treat a pending course association as damaged audio or require course
+creation just to transcribe Capture. Existing valid transcripts must be reused.
+For an external audio file belonging to a known lesson use `mynotes transcribe
+COURSE-LNN --audio PATH --workspace PATH --json`; without a supplied file, use
+`mynotes transcribe COURSE-LNN --workspace PATH --json`. The command resolves
+Capture identity before ASR so later assignment does not create a second pass.
+External PDFs, slides, documents and text use the existing material tools and
+`prepare --material PATH` when source-pack preparation is requested. An exported
+chat in TXT/MD/DOCX is text material, not audio. Only normalized transcript JSON
+with valid segments/timestamps belongs in `prepare --transcript PATH`; never
+invent timing for plain text. Unsupported inputs require a precise limitation,
+not a fabricated extraction or an unrelated transcription run.
+These direct commands perform the relevant ASR checks; do not first run general
+doctor/status checks, explore implementation code, invent Python imports, scan
+other course recordings, generate notes or browse the web. Progress goes to
+stderr and structured results to stdout. Percentages require engine evidence.
 BUSY means an existing operation owns the slot: do not retry in a loop, queue
-another job or terminate it. NEEDS_REVIEW preserves the raw results and requires
-review before downstream use. A transcription deliverable is the validated
-timestamped TXT and JSON, not a Word study guide. For source preparation reuse
-the compatible transcript through prepare, without another ASR invocation.
+another job or terminate it. NEEDS_REVIEW refers to a concrete transcription
+validation problem: report its cause/action and preserve raw results, rather than
+calling all recordings "Da verificare". A transcription deliverable is validated
+timestamped TXT and JSON, not a Word guide. Reuse it during prepare without ASR.
+A request or the Trascrivi button starts work; recording completion alone does not.
 Only diagnose implementation files if the direct command actually fails, and
 keep that diagnosis relevant to the returned error. Never interrupt personal
 transcriptions or conversations to install an update.

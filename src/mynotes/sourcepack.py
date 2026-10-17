@@ -303,6 +303,15 @@ def _build_source_pack_locked(
         recording = linked_recording(workspace, lecture_id)
         if recording and recording.get("storage_recording_id") and (audio is None or Path(audio).resolve() == Path(recording["path"]).resolve()):
             existing = validated_transcript(workspace, recording)
+            if not existing:
+                # Preparation already owns the lecture lock. Capture ASR owns
+                # its independent recording lock, shared with direct/queued
+                # requests, so it must never fall through to lecture ASR.
+                from .transcription import run_transcription
+                result = run_transcription(workspace, recording_id=recording["id"], engines=engines)
+                existing = validated_transcript(workspace, {**recording, "transcript_json": result["transcript_json"]})
+                if not existing:
+                    raise SourcePackError("Capture transcription completed without a validated transcript")
             if existing:
                 transcript_path = existing[0]
                 audio = Path(recording["path"])

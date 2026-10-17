@@ -330,11 +330,12 @@ def test_prior_source_manifest_ownership_corruption_is_not_trusted(tmp_path):
     assert plan["status"] == "NEEDS_SELECTION"
 
 
-def test_repeated_slide_can_add_teacher_insight_but_cannot_repeat_full_text(tmp_path):
+@pytest.mark.parametrize("speaker_role", ["Professor", "UNKNOWN"])
+def test_repeated_slide_can_add_teacher_insight_but_cannot_repeat_full_text(tmp_path, speaker_role):
     workspace, _, selection = workspace_and_deck(tmp_path)
     pack_path = workspace.runs_dir / "OPS-L02/source_pack.json"
     pack = json.loads(pack_path.read_text())
-    pack["evidence"].append({"id": "T001", "kind": "transcript", "text": "Additional source supported teacher insight.", "start_seconds": 0, "end_seconds": 5, "speaker_role": "Professor"})
+    pack["evidence"].append({"id": "T001", "kind": "transcript", "text": "Additional source supported teacher insight.", "start_seconds": 0, "end_seconds": 5, "speaker_role": speaker_role})
     atomic_json_write(pack_path, pack)
     def insight(response, request):
         if "OPS-L02" not in request.batch_context["lessons"]:

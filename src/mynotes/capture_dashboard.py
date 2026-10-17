@@ -156,6 +156,7 @@ def dashboard(store) -> dict:
                     "lastSuccess": sync_state.get(s["sourceID"], {}).get("lastSuccess"),
                     "nextAttempt": sync_state.get(s["sourceID"], {}).get("nextAttempt"),
                     "error": sync_state.get(s["sourceID"], {}).get("error"),
+                    **{key: sync_state.get(s["sourceID"], {}).get(key) for key in ("code", "message", "retryable", "suggestedAction")},
                     "mappings": s.get("mappings", []), "importMode": s.get("importMode", "mapped"),
                     "summary": sync_state.get(s["sourceID"], {}).get("summary")} for s in config["sources"]]
         for source in sources:

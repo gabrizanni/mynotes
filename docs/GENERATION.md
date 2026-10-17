@@ -283,3 +283,53 @@ An ERROR envelope can never become a ready candidate, even with recoverable JSON
 Historical batch candidates referencing failed transports cannot be built or
 published to Word. Never edit the runtime or weaken coverage checks to bypass a
 failure. Keep content, transport success and actual Word completion distinct.
+
+### Local recovery, speaker focus and independent Word candidates
+
+`recover-batch COURSE-0123456789ab --json` diagnoses saved writing portions
+without writes, ASR or provider calls. Add `--apply` only to certify a verified,
+complete SUCCESS stream that an older local reference check rejected. Recovery
+compares staged inputs, portion order, conversation, immutable attempt records
+and hashes before applying normal validation. A separate receipt records local
+recovery; the failed process remains failed. Missing portions, ERROR results,
+modified inputs and unproven provenance remain blocked. Content defects are
+reported for review; recovery never silently switches to paid rewriting.
+Ordinary batch resume checks compatible saved writing before invoking a model.
+
+A shared reference normalizer only resolves leading-zero differences in evidence
+fields when one canonical identifier exists in the same source context. Exact
+identifiers win; ambiguous or unknown references are rejected. Prose, numbers,
+raw provider responses and source packs are unchanged. Conversion reports retain
+the original reference, canonical reference and reason. Duplicate or contradictory
+coverage decisions still fail validation after normalization.
+
+The default speaker focus is `lecture`. UNKNOWN voices do not invalidate insight
+supported by the current lesson transcript, and they are never relabeled as the
+professor. Set `speaker_focus` to `professor` in a course, or pass
+`--speaker-focus professor` to `generate` / `generate-batch`, to record explicit
+professor focus. A warning explains when the transcript cannot isolate the voice;
+this option does not claim diarization that the sources cannot support.
+
+`batch-status` includes local recovery diagnostics, defects, preserved active time,
+speaker warnings and the next action. Shared writing preserves the twenty-minute
+active budget across compatible checkpoints and versions, reserving at least
+two minutes for local validation and Word work. The ten-minute notice is not a
+completion estimate. Exact repeated file requests do not reset the useful-progress
+deadline; evidence chunking and every source row are retained. Phase metrics and
+source-read audit keep local work separate from reported provider activity.
+`usage --batch` retains raw attempts and counts cumulative writing snapshots once
+per conversation using each counter's largest reported value. Thinking, cache,
+input and output counters stay separate. Missing reporting stays unknown; these
+reports do not infer billed cost or remaining quota.
+
+`build COURSE-L01 --mode standalone` starts a clean document containing only that
+lesson. The default `--mode update` preserves the existing cumulative workflow.
+Standalone documents cannot accidentally pass the update/publish gate.
+`build-batch COURSE-0123456789ab --mode both --json` requires validated candidates
+for every selected lesson, creates separate documents and a fresh cumulative
+through the shared renderer, and writes a hash-indexed delivery manifest. It does
+not concatenate existing cumulative Word files. Repeating an unchanged completed
+build reuses its verified files. A Word failure preserves validated content so
+resume can rebuild locally without another model call. All these outputs remain
+candidates: rendered-page and Microsoft Word QA are separate from automated
+structural checks, and building never publishes academic notes.
