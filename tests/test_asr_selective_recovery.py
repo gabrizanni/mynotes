@@ -43,11 +43,12 @@ def test_exact_pcm_clip_uses_actual_sample_offset(tmp_path):
         assert f.getnframes()==21 and f.readframes(21)==expected
 
 
-def test_primary_prompt_is_disabled_by_default(tmp_path,monkeypatch):
+def test_primary_prompt_is_disabled_by_default(tmp_path,monkeypatch,ready_argmax):
     calls=[]
     monkeypatch.setattr(asr,'_tool_version',lambda _:'fixture')
     monkeypatch.setattr(asr,'_run',lambda cmd:calls.append(cmd) or subprocess.CompletedProcess(cmd,0,'{"segments":[{"start":0,"end":1,"text":"Hello"}]}',''))
     engine=asr.ArgmaxEngine('/usr/bin/true',tmp_path/'models',tmp_path/'tokens')
+    ready_argmax(engine, 'fixture')
     engine.transcribe(tmp_path/'input.wav',tmp_path/'out',model='fixture',language='en',vocabulary=['private term'],prompt='accent')
     assert '--prompt' not in calls[0] and '--word-timestamps' not in calls[0]
 

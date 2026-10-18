@@ -34,6 +34,7 @@ def database(workspace, *, readonly=False):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, recording_id TEXT NOT NULL, cache_key TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, pid INTEGER, error TEXT, result TEXT, UNIQUE(recording_id, cache_key))")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS jobs_input_settings ON jobs(cache_key)")
+        conn.execute("CREATE TABLE IF NOT EXISTS queue_events (id INTEGER PRIMARY KEY, job_id TEXT, action TEXT, created REAL, detail TEXT)")
         conn.execute("CREATE TABLE IF NOT EXISTS recordings (id TEXT PRIMARY KEY, metadata TEXT NOT NULL)")
         conn.execute("CREATE TABLE IF NOT EXISTS recording_aliases (recording_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL)")
     conn.row_factory = sqlite3.Row
@@ -304,7 +305,7 @@ def settings(workspace):
 def status(workspace):
     from .recording_library import records
     catalogue = records(workspace)
-    jobs = []
+    jobs, history_events = [], []
     labels = _read(root(workspace) / "labels.json", {})
     from .capture_associations import registry
     from .capture import CaptureStore
@@ -328,8 +329,27 @@ def status(workspace):
                     detail = {}
                 if detail.get('review_path') and Path(detail['review_path']).is_file(): job['diagnostic_path'] = detail['review_path']
                 if job["status"] == "RUNNING":
+                    if detail.get('job_id') != job['id'] or detail.get('claim_id') != item.get('_claim'):
+                        detail = _read(root(workspace) / 'preparation' / job['id'] / 'status.json', {})
                     if not _alive(job["pid"]): job["status"] = "INTERRUPTED"
-                    job["phase"], job["elapsed_seconds"] = detail.get("phase"), detail.get("elapsed_seconds")
+                    from .asr_progress import continuous_time
+                    owned = (detail.get('job_id') == job['id'] and detail.get('claim_id') == item.get('_claim')
+                             and detail.get('pid') == job['pid'])
+                    if owned:
+                        for key in ('phase', 'elapsed_seconds', 'attempt_id', 'started_at', 'updated_at', 'finished_at',
+                                    'started_clock', 'updated_clock', 'engine_pid', 'engine_running', 'recovery_notice'):
+                            job[key] = detail.get(key)
+                        job['sampled_clock'] = continuous_time()
+                        age = max(0, job['sampled_clock'] - detail.get('updated_clock', 0))
+                        job['heartbeat_age_seconds'] = age
+                        job['state_fresh'] = age <= 15
+                        if job['state_fresh'] and not detail.get('finished_at'):
+                            job['elapsed_seconds'] = max(0, continuous_time() - detail['started_clock'])
+                    else:
+                        job.update(phase='preparing_context', state_fresh=False, elapsed_seconds=None)
+                    job['activity'] = ('stale' if not job.get('state_fresh') else
+                        'saving' if job.get('phase') == 'finalizing' else
+                        'processing' if job.get('engine_running') else 'preparing')
                 job['actions'] = ({'QUEUED': ['remove'], 'RUNNING': ['cancel'], 'FAILED': ['retry', 'restart'], 'INTERRUPTED': ['retry', 'restart'], 'NEEDS_REVIEW': ['restart'], 'COMPLETED': ['finish']}).get(job['status'], [])
                 if job['status'] in {'FAILED', 'INTERRUPTED', 'NEEDS_REVIEW'}:
                     from .asr_recovery import recovery_candidate
@@ -342,6 +362,12 @@ def status(workspace):
                 for key in ('export_text', 'archive_status', 'archive_error'):
                     if key in current_recording: job[key] = current_recording[key]
                 jobs.append(job)
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='queue_events'").fetchone():
+                for event in conn.execute("SELECT e.*,j.status AS current_status FROM queue_events e JOIN jobs j ON j.id=e.job_id WHERE e.action IN ('clear','remove') AND j.status!='CANCELLED' ORDER BY e.created DESC"):
+                    payload = json.loads(event['detail']); recording = payload['recording']
+                    history_events.append({'id':f"event-{event['id']}", 'recording_id':recording['id'],
+                        'title':recording['title'] + ' — rimozione precedente', 'course_code':recording.get('course_code'),
+                        'created_at':recording.get('created_at'), 'status':'CANCELLED', 'actions':[]})
     lease = _read(root(workspace) / "ui.json", {})
     closed = (root(workspace) / "closed" / str(lease.get("session", "none"))).is_file()
     for position, job in enumerate((j for j in jobs if j['status'] == 'QUEUED'), 1):
@@ -350,12 +376,15 @@ def status(workspace):
     ui_open = lease.get('expires_at', 0) > time.time() and not closed
     wait = _read(root(workspace) / 'wait.json', {}).get('reason')
     reason = ('In pausa' if current_settings['paused'] else 'In attesa dell’apertura di MyNotes' if not ui_open else 'Slot di trascrizione occupati' if any(j['status'] == 'QUEUED' and j.get('error') for j in jobs) else wait if wait in {'In attesa di memoria disponibile', 'Slot di trascrizione occupati'} else None)
-    return {'status': 'OK', **current_settings, 'ui_open': ui_open, 'jobs': jobs, 'wait_reason': reason}
+    counts = {name: sum(j.get('activity') == name and j['status'] == 'RUNNING' for j in jobs)
+              for name in ('processing', 'preparing', 'saving', 'stale')}
+    counts['queued'] = sum(j['status'] == 'QUEUED' for j in jobs)
+    return {'status': 'OK', **current_settings, 'ui_open': ui_open, 'jobs': jobs, 'wait_reason': reason, 'activity_counts': counts, 'history_events': history_events}
 
 
-def enqueue(workspace, parallel=1, *, recording_id=None):
+def enqueue(workspace, parallel=None, *, recording_id=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
-    if type(parallel) is not int or not 1 <= parallel <= 4:
+    if parallel is not None and (type(parallel) is not int or not 1 <= parallel <= 4):
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
     from .recording_library import sync
     recordings = library(workspace)
@@ -364,7 +393,8 @@ def enqueue(workspace, parallel=1, *, recording_id=None):
         if not recordings:
             raise ValueError("Registrazione non trovata")
     sync(workspace)
-    configure(workspace, parallel=parallel)
+    if parallel is not None:
+        configure(workspace, parallel=parallel)
     added, skipped, reuse_archives = 0, [], []
     for item in recordings:
         state = item["transcription_status"]
@@ -435,23 +465,41 @@ def configure(workspace, *, parallel=None, paused=None):
             value["paused"] = bool(paused)
         atomic_json_write(root(workspace) / "settings.json", value)
         atomic_json_write(workspace.state_dir / "asr-concurrency.json", {"parallel": value["parallel"]})
-    return {"status": "PAUSED" if value["paused"] else "RESUMED", **value}
+    return {"status": "PAUSED" if value["paused"] else "RESUMED", **value,
+            "message": "Coda in pausa: i lavori in attesa sono conservati; quelli già avviati termineranno." if value['paused']
+                       else "Coda attiva: i lavori partiranno nei limiti delle risorse disponibili."}
+
+
+def clear(workspace):
+    with database(workspace) as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        rows = conn.execute("SELECT id,payload FROM jobs WHERE status='QUEUED'").fetchall()
+        now = time.time()
+        for row in rows:
+            conn.execute("INSERT INTO queue_events(job_id,action,created,detail) VALUES (?,?,?,?)",
+                         (row['id'], 'clear', now, row['payload']))
+        conn.execute("UPDATE jobs SET status='CANCELLED',error=NULL,pid=NULL,updated=? WHERE status='QUEUED'", (now,))
+        running = conn.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('RUNNING','CANCELLING')").fetchone()[0]
+        paused = settings(workspace)['paused']
+    return {'status':'OK', 'removed':len(rows), 'running':running, 'paused':paused,
+            'message':(f'{len(rows)} lavori rimossi' if len(rows) != 1 else '1 lavoro rimosso') + '; ' + (f'{running} già avviati continuano.' if running != 1 else '1 già avviato continua.') + ' Audio conservato.'}
 
 
 def ui_lease(workspace, session, *, opened=True):
     session = str(uuid.UUID(session))
-    root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
-    current = _read(root(workspace) / "ui.json", {})
-    tombstone = root(workspace) / "closed" / session
-    if opened and tombstone.is_file():
-        return {"status": "CLOSED"}
-    if opened or current.get("session") == session:
-        if not opened:
-            tombstone.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            tombstone.touch(mode=0o600)
-        atomic_json_write(root(workspace) / "ui.json", {"session": session, "expires_at": time.time() + 15 if opened else 0, "closed": not opened})
-    return {"status": "OK"}
-
+    with database(workspace) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
+        current = _read(root(workspace) / "ui.json", {})
+        tombstone = root(workspace) / "closed" / session
+        if opened and tombstone.is_file():
+            return {"status": "CLOSED"}
+        if opened or current.get("session") == session:
+            if not opened:
+                tombstone.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                tombstone.touch(mode=0o600)
+            atomic_json_write(root(workspace) / "ui.json", {"session": session, "expires_at": time.time() + 15 if opened else 0, "closed": not opened})
+        return {"status": "OK"}
 
 def _worker_command(workspace, action, identifier=None):
     return [sys.executable, "-m", "mynotes", "transcription-queue", action, "--workspace", str(workspace.root)] + (["--job", identifier] if identifier else [])
@@ -475,6 +523,14 @@ def run_job(workspace, identifier, *, engines=None):
         if row is None or row["status"] != "RUNNING" or row["pid"] != os.getpid():
             raise ValueError("Queue worker does not own this job")
         payload = json.loads(row["payload"])
+    from .asr_progress import AttemptProgress, continuous_time
+    preparation_dir = root(workspace) / 'preparation' / identifier
+    preparation_attempt = preparation_dir / 'attempts' / (payload.get('_claim') or uuid.uuid4().hex)
+    preparation_attempt.mkdir(parents=True, exist_ok=True, mode=0o700)
+    prep = AttemptProgress(workspace, preparation_dir, preparation_attempt,
+        {'lecture_id':payload['recording'].get('lecture_id') or payload['recording']['id'],
+         'attempt_id':None, 'job_id':identifier, 'claim_id':payload.get('_claim'), 'pid':os.getpid(), 'status':'RUNNING',
+         'started_at':payload.get('started_at', time.time()), 'started_clock':payload.get('started_clock', continuous_time())}).start()
     item, outcome, result, error = payload["recording"], "FAILED", None, None
     from .recording_library import resolve_path
     item['path'] = str(resolve_path(workspace, item['path']))
@@ -498,9 +554,13 @@ def run_job(workspace, identifier, *, engines=None):
                     raise ValueError("Completa il setup della trascrizione locale")
                 if isinstance(engine, ArgmaxEngine) and not any((p / "AudioEncoder.mlmodelc").is_dir() for p in engine.model_dir.rglob("*" + course["transcription"][name.replace("engine", "model")])):
                     raise ValueError("Completa il download del modello nel setup prima di trascrivere")
+        prep.finish('HANDED_OFF')
         manifest = transcribe_audio(workspace, item.get('lecture_id') or item['id'], course, Path(item['path']),
             recording_id=item['id'] if item.get('storage_recording_id') or not item.get('lecture_id') else None,
-            engines=engines, force=payload.get('force', False), recover_from=payload.get('recover_from'))
+            engines=engines, force=payload.get('force', False), recover_from=payload.get('recover_from'),
+            queue_context={'job_id':identifier, 'claim_id':payload.get('_claim'),
+                           **({'recovery_notice':'Il risultato precedente non è riutilizzabile; trascrivo nuovamente l’audio.'} if payload.get('recovery_fallback') else {}),
+                           **({k:payload[k] for k in ('started_at','started_clock') if k in payload})})
         directory = asr_directory(workspace, item)
         result = {'status': manifest['status'], 'transcript_json': str(directory / 'transcript.json'),
             'transcript_text': str(directory / 'transcript.txt'), 'segments': len(manifest['segments']),
@@ -517,6 +577,8 @@ def run_job(workspace, identifier, *, engines=None):
     except (ValueError, OSError, ASRError) as e:
         outcome, error = "FAILED", str(e)
     finally:
+        if not prep.state.get('finished_at'):
+            prep.finish(outcome, error=error)
         with database(workspace) as conn:
             conn.execute("UPDATE jobs SET status=CASE WHEN status='CANCELLING' THEN 'CANCELLED' ELSE ? END, updated=?, error=?, result=?, pid=NULL WHERE id=? AND status IN ('RUNNING','CANCELLING') AND pid=? AND payload=?", (outcome, time.time(), error, json.dumps(result) if result else None, identifier, os.getpid(), row['payload']))
     if outcome == 'COMPLETED' and result:
@@ -575,13 +637,22 @@ def run(workspace, *, tick=1):
                 if pending:
                     with database(workspace) as conn:
                         conn.execute("BEGIN IMMEDIATE")
-                        owned = conn.execute("SELECT status FROM jobs WHERE id=?", (pending['id'],)).fetchone()
+                        controls = settings(workspace)
+                        ui = _read(root(workspace) / 'ui.json', {})
+                        closed = (root(workspace) / 'closed' / str(ui.get('session', 'none'))).is_file()
+                        admitted = conn.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('RUNNING','CANCELLING')").fetchone()[0]
+                        if controls['paused'] or closed or ui.get('expires_at', 0) <= time.time() or admitted >= controls['parallel']:
+                            continue
+                        owned = conn.execute("SELECT status,payload FROM jobs WHERE id=?", (pending['id'],)).fetchone()
                         if not owned or owned['status'] != 'QUEUED':
                             continue
                         # The child waits for the parent to commit its claim.
                         child = subprocess.Popen(_worker_command(workspace, "worker", pending["id"]), stdin=subprocess.DEVNULL,
                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                        conn.execute("UPDATE jobs SET status='RUNNING',pid=?,updated=? WHERE id=? AND status='QUEUED'", (child.pid, time.time(), pending["id"]))
+                        from .asr_progress import continuous_time
+                        payload = json.loads(owned['payload'])
+                        payload.update(_claim=uuid.uuid4().hex, started_at=time.time(), started_clock=continuous_time())
+                        conn.execute("UPDATE jobs SET status='RUNNING',pid=?,updated=?,payload=? WHERE id=? AND status='QUEUED'", (child.pid, time.time(), json.dumps(payload), pending["id"]))
                         children[pending["id"]] = child
                 elif not children:
                     return
@@ -601,6 +672,8 @@ def change_job(workspace, identifier, action):
         if row is None:
             raise ValueError('Lavoro non trovato')
         live = row['pid'] and _alive(row['pid'])
+        if action == 'remove' and row['status'] == 'CANCELLED':
+            return {'status':'OK', 'message':'Registrazione già rimossa dalla coda; audio conservato.'}
         if action == 'remove' and row['status'] != 'QUEUED':
             raise ValueError('Solo un lavoro in attesa può essere rimosso dalla coda')
         if action in {'retry', 'restart', 'recover'} and (live or row['status'] == 'QUEUED'):
@@ -618,17 +691,30 @@ def change_job(workspace, identifier, action):
             if current.get('tools', {}).get('fluidaudio'):
                 course['transcription']['tools']['fluidaudio'] = current['tools']['fluidaudio']
             sha, signature, key, _ = cache_identity(workspace, course, Path(item['path']))
-            if sha != payload['audio_sha256']:
-                raise ValueError('L’audio è cambiato: aggiungilo come nuova sorgente')
+            source_changed = sha != payload['audio_sha256']
+            if source_changed:
+                conn.execute("INSERT INTO queue_events(job_id,action,created,detail) VALUES (?,?,?,?)",
+                             (identifier, 'source_version', time.time(), row['payload']))
+                payload['audio_sha256'] = sha
+                payload['force'] = True
             payload.pop('recover_from', None)
             if action == 'recover':
                 from .asr_recovery import attest_recovery
-                payload['recover_from'] = attest_recovery(asr_directory(workspace, item), sha, course['transcription']['primary_model'])
-            payload.update(course_profile=course, settings_hash=signature, force=action == 'restart', _claim=uuid.uuid4().hex)
+                try:
+                    if source_changed:
+                        raise ValueError('La sorgente è una nuova versione')
+                    payload['recover_from'] = attest_recovery(asr_directory(workspace, item), sha, course['transcription']['primary_model'])
+                except (OSError, ValueError) as error:
+                    payload['recovery_fallback'] = str(error)
+                    payload['force'] = True
+            payload.update(course_profile=course, settings_hash=signature, force=action == 'restart' or source_changed or bool(payload.get('recovery_fallback')), _claim=uuid.uuid4().hex)
+            payload.pop('started_at', None); payload.pop('started_clock', None)
             conn.execute("UPDATE jobs SET status='QUEUED',payload=?,cache_key=?,error=NULL,pid=NULL,updated=? WHERE id=?", (json.dumps(payload), key, time.time(), identifier))
         else:
             pid = row['pid'] if action == 'cancel' and live else None
             state = 'CANCELLING' if pid else 'CANCELLED'
+            conn.execute("INSERT INTO queue_events(job_id,action,created,detail) VALUES (?,?,?,?)",
+                         (identifier, action, time.time(), row['payload']))
             conn.execute('UPDATE jobs SET status=?,error=NULL,updated=? WHERE id=?', (state, time.time(), identifier))
     if pid:
         # The worker's SIGTERM handler tears down only its own dedicated ASR group.
@@ -640,7 +726,7 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "enqueue", "status", "pause", "resume", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
+    for action in ("library", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
@@ -650,7 +736,7 @@ def add_parser(subparsers):
             command.add_argument("--date", help="event date in its calendar timezone, YYYY-MM-DD")
             command.add_argument("--course")
         if action in {"enqueue", "configure"}:
-            command.add_argument("--parallel", type=int, default=1)
+            command.add_argument("--parallel", type=int, default=None)
         if action == "enqueue":
             target = command.add_mutually_exclusive_group(required=True)
             target.add_argument("--all-untranscribed", action="store_true")
@@ -684,6 +770,8 @@ def run_cli(args):
         value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
     elif action == "status":
         value = status(ws)
+    elif action == "clear":
+        value = clear(ws)
     elif action in {"pause", "resume", "configure"}:
         value = configure(ws, **({"parallel": args.parallel} if action == "configure" else {"paused": action == "pause"}))
         if action == "resume":

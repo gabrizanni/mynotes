@@ -69,17 +69,21 @@ Before the first Capture recording, agree with the user on the folder for origin
 Save it with `mynotes transcription-queue folder --path PATH --json`. This moves previous
 originals only while recording and transcription are idle, after verified private backups.
 All supported audio names appear in the library; course assignment is optional. Valid
-transcripts export as TXT under Trascrizioni/COURSE and originals move unchanged to
+transcripts export as TXT under Trascrizioni/COURSE (Trascrizioni/Dubbi when unassigned) and originals move unchanged to
 processate. Technical files remain private. Use retry for failures, restart for a fresh
 ASR attempt, recover --job ID for hash-verified selective repair of saved reports,
-remove for queued jobs, cancel for active jobs, and finish to retry exports
+pause preserves queued jobs while active attempts finish; resume restarts admission.
+clear removes only queued jobs and preserves paused state, audio and history.
+Use remove for individual queued jobs, cancel for active jobs, and finish to retry exports
 without rerunning ASR. New Argmax passes use indicative segment timestamps and no
 decoder prompt. FluidAudio verifies only doubtful local windows (at most 30% of
 the audio). After that check, residual text disagreements are nonblocking warnings:
 the transcript is completed, exported and ready for notes with uncertainty markers
 and private alternatives retained. Completion is not human verification. Invalid
 timing, changed sources, missing reports or an incomplete independent pass remain
-blocking. Never silently guess disputed numbers or claims when preparing notes.
+blocking for reusing that result; a local recovery mismatch falls back once to a fresh
+local attempt, preserving evidence. An unknown course never blocks ASR.
+Never silently guess disputed numbers or claims when preparing notes.
 Never treat a queue removal as deleting an original.
 Configure Capture once, then import the complete normalized timetable or subscribe
 to an ICS/iCal feed using importMode=all_timed, teaching period and timezone. New complete calendars
@@ -91,7 +95,16 @@ title, event-local date or course. At the next relevant interaction, resolve pen
 associations with `capture assign --file PATH --json`; the JSON is an assignments array under
 `assignments`, each with recordingID (or eventID), courseCode and optional lessonNumber.
 An optional rule object with a match string saves a source-scoped association for future events.
-Never infer a course when multiple candidates remain; ask only for that ambiguity. Course creation
+Search all pending recordings, including manual/external audio and Trascrizioni/Dubbi,
+before deciding a transcript is missing. candidateCourses ranks local evidence but is not
+proof. Use title, course aliases, lesson number, calendar and relevant transcript text.
+The user authorizes choosing the most probable plausible course even among alternatives:
+assign with associationState="estimated", a short reason, and alternatives=[course codes].
+Show "Associazione stimata" when using it for notes. If no plausible candidate exists,
+leave it in Dubbi. Explicit later user information takes precedence; assign without
+associationState to resolve it. Never overwrite an occupied lesson: preserve the separate
+recording and explain the conflict. Never rewrite previously generated Word automatically
+because an association changed. Course creation
 uses the existing deferred-context flow. Missing lesson numbers do not block recording or ASR.
 Assignment never reruns ASR; it updates the course folder of the exported TXT copy. Use the bound transcript during prepare; retain its
 original ASR provenance. DEFERRED means an active recording/export/transcription must finish first.

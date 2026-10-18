@@ -357,6 +357,8 @@ def _build_source_pack_locked(
         transcript_manifest = _import_transcript(transcript_path, lecture_id, bound_recording_id=origin_id)
         if bound_recording_id:
             transcript_manifest["capture_recording_id"] = bound_recording_id
+            transcript_manifest['association'] = {key:recording.get(key) for key in
+                ('association_state', 'association_reason', 'association_alternatives', 'association_conflict')}
             transcript_manifest["original_asr"] = {key: original.get(key) for key in ("lecture_id", "settings_hash", "cache_key", "audio_sha256", "segments_sha256", "language") }
         descriptor = {**source_descriptor(transcript_path), "role": "imported_transcript"}
         descriptor["modified_since_last_prepare"] = bool(

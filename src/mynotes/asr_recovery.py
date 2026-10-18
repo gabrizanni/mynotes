@@ -303,6 +303,27 @@ def attest_recovery(directory, audio_sha256, model=None):
             'binding_sha256': file_sha256(binding_path) if binding else None, 'engine_reports': engine_reports}
 
 
+def reuse_attested_audio(receipt, audio_sha256, target):
+    """Only a bound original/report/PCM chain permits skipping normalization."""
+    from .asr import ASRError
+    import shutil
+    if not receipt.get('binding_sha256'):
+        return False
+    attempt = Path(receipt['directory'])
+    binding_path = attempt/'primary-binding.json'
+    if file_sha256(binding_path) != receipt['binding_sha256']:
+        raise ASRError('RECOVERY_BINDING_CHANGED: attestazione modificata')
+    binding = json.loads(binding_path.read_text())
+    if (audio_sha256 != receipt['audio_sha256'] or binding.get('audio_sha256') != audio_sha256
+        or binding.get('normalized_audio_sha256') != receipt['normalized_sha256']
+        or binding.get('primary_sha256') != receipt['report_sha256']):
+        raise ASRError('RECOVERY_IDENTITY_MISMATCH: attestazione non corrispondente')
+    # Validate all old evidence before using the old normalized waveform.
+    load_recovery(receipt, audio_sha256, attempt/'input.wav')
+    shutil.copy2(attempt/'input.wav', target)
+    return True
+
+
 def load_recovery(receipt, audio_sha256, normalized_audio):
     from .asr import ASRError, EngineResult, parse_asr_payload
     attempt = Path(receipt['directory'])
@@ -323,14 +344,16 @@ def load_recovery(receipt, audio_sha256, normalized_audio):
     # missing from old projections. Do not replace the saved emission order.
     reports = list((attempt/'primary').glob('*.json'))
     segments = raw['segments']
+    language = raw.get('language')
     for path in reports:
         payload = json.loads(path.read_text())
         parsed = parse_asr_payload(payload)
         projection = lambda rows: [(s.get('start'), s.get('end'), s.get('text')) for s in rows]
         if projection(parsed) == projection(segments):
             segments = parsed
+            language = payload.get('language', language)
             break
-    return EngineResult(raw['engine'], raw['model'], raw.get('version', 'saved-report'), segments, raw.get('timestamp_mode', 'segment'))
+    return EngineResult(raw['engine'], raw['model'], raw.get('version', 'saved-report'), segments, raw.get('timestamp_mode', 'segment'), language=language)
 
 
 def review_message(error):

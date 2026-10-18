@@ -197,7 +197,11 @@ def discover(ws):
             'timezone': event.get('timezone', (old or {}).get('timezone', 'UTC')), 'partial': session.get('partial', (old or {}).get('partial', False)),
             'capture_status': session.get('status', (old or {}).get('capture_status')), 'capture_reason': session.get('reason', (old or {}).get('capture_reason', '')),
             'collection': collection(ws, p), 'audio_available': bool(stat and local_audio(p)), 'stable': bool(stat and local_audio(p) and (not session or session.get('status') in {'COMPLETED', 'PARTIAL'}) and (session.get('_private_session') or is_stable(p, config['ingestion']['stable_seconds']))),
-            'unknown_course': code is not None and code not in codes}
+            'unknown_course': code is not None and code not in codes,
+            'association_state': links.get(identifier, {}).get('associationState', 'resolved' if code in codes else 'unresolved'),
+            'association_reason': links.get(identifier, {}).get('reason'),
+            'association_alternatives': links.get(identifier, {}).get('alternatives', []),
+            'association_conflict': links.get(identifier, {}).get('conflict')}
         if stat:
             item['file_identity'] = [stat.st_dev, stat.st_ino]
         if identifier not in found or item['audio_available'] or not found[identifier]['audio_available']:
@@ -277,12 +281,15 @@ def finish(ws, item, manifest_path):
         private_text = Path(manifest_path).with_suffix('.txt')
         if not private_text.is_file():
             write_transcript_text(private_text, saved)
-        course = current.get('course_code') or 'Senza corso'
-        if not re.fullmatch(r'[A-Z0-9]+|Senza corso', course):
+        codes = {c['code'] for c in ws.configuration_store().load()['courses']}
+        course = current.get('course_code') if current.get('course_code') in codes else 'Dubbi'
+        if not re.fullmatch(r'[A-Z0-9]+|Dubbi', course):
             raise ValueError('Corso non valido')
         target = folder(ws) / 'Trascrizioni' / course / (Path(current['original_path']).stem + '-' + item['id'][:8] + '.txt')
         target.parent.mkdir(parents=True, exist_ok=True)
         previous = current.get('export_text')
+        if previous and previous != str(target) and Path(previous).is_file() and current.get('export_sha256') and file_sha256(Path(previous)) != current['export_sha256']:
+            raise ValueError('La copia TXT precedente è stata modificata: conservata; ricollocazione da completare')
         if target.exists() and str(target) != previous and target.read_bytes() != private_text.read_bytes():
             raise ValueError('Esiste una copia TXT diversa: controllala prima di esportare')
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.mynotes-', delete=False) as out:

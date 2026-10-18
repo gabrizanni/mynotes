@@ -139,9 +139,10 @@ def test_active_job_defers_assignment_and_bad_batch_is_atomic(ws,monkeypatch):
     assert not (store.directory/'associations.json').exists()
 
 
-def test_pending_ignores_intentionally_free_manual_recordings(ws):
-    audio(ws,'Interview')
-    assert links.pending(capture.CaptureStore(ws))['items']==[]
+def test_pending_includes_free_manual_recordings_for_later_linking(ws):
+    _,identifier=audio(ws,'Interview')
+    items=links.pending(capture.CaptureStore(ws))['items']
+    assert len(items)==1 and items[0]['recordingID']==identifier and items[0]['associationState']=='unresolved'
 
 
 def test_saved_rule_survives_sync_and_invalidates_old_http_validators(store,monkeypatch):

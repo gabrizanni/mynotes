@@ -76,7 +76,7 @@ def test_valid_asr_exports_txt_and_moves_original_byte_identical(setup):
     assert not source.exists() and file_sha256(folder / 'processate' / source.name) == digest
     item = queue.library(ws)[0]
     assert item['id'] == identifier and item['transcription_status'] == 'COMPLETED'
-    assert Path(item['export_text']).parent == folder / 'Trascrizioni' / 'Senza corso'
+    assert Path(item['export_text']).parent == folder / 'Trascrizioni' / 'Dubbi'
     exported = Path(item['export_text']).read_text().splitlines()
     assert exported[0] == 'Timestamp indicativi. Trascrizione automatica.'
     assert exported[1].startswith('[00:00:00')
@@ -226,10 +226,11 @@ def test_recording_does_not_block_other_queued_audio(setup,monkeypatch):
     class Child:
         pid=99999999
         def poll(self):
+            queue.ui_lease(ws,json.loads((queue.root(ws)/'ui.json').read_text())['session'],opened=False)
             with queue.database(ws) as conn:conn.execute("UPDATE jobs SET status='COMPLETED',pid=NULL WHERE id=?",(launched[0],))
             return 0
     def start(command,**kw):
-        launched.append(command[-1]);queue.ui_lease(ws,json.loads((queue.root(ws)/'ui.json').read_text())['session'],opened=False)
+        launched.append(command[-1])
         return Child()
     monkeypatch.setattr(queue.subprocess,'Popen',start)
     monkeypatch.setattr(queue.subprocess,'run',lambda *a,**kw:type('Pressure',(),{'stdout':'free percentage: 80%'})())

@@ -140,6 +140,9 @@ struct CaptureRecording: Codable, Identifiable {
     var jobID: String?
     var queuePosition: Int?
     var waitReason: String?
+    var associationState: String?
+    var associationReason: String?
+    var associationConflict: String?
     var transcriptionStatus: String?
     var canTranscribe: Bool?
     var audioAvailable: Bool?
@@ -151,6 +154,7 @@ struct CaptureRecording: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, path, title, status, duration
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
+        case associationState = "association_state", associationReason = "association_reason", associationConflict = "association_conflict"
         case transcriptionStatus = "transcription_status", canTranscribe = "can_transcribe", audioAvailable = "audio_available"
         case warnings, blockingReasons = "blocking_reasons"
         case reviewSummary = "review_summary"
@@ -166,6 +170,8 @@ struct CaptureLibrary: Decodable { var recordings: [CaptureRecording]; var folde
 struct CaptureQueueJob: Codable, Identifiable {
     var id: String; var createdAt: String?; var recordingID: String; var title: String; var courseCode: String?
     var status: String; var error: String?; var phase: String?; var elapsedSeconds: Double?
+    var attemptID: String?; var updatedClock: Double?; var sampledClock: Double?
+    var stateFresh: Bool?; var activity: String?; var recoveryNotice: String?
     var actions: [String]?
     var queuePosition: Int?
     var reviewSummary: String?
@@ -176,7 +182,8 @@ struct CaptureQueueJob: Codable, Identifiable {
     var archiveStatus: String?
     var archiveError: String?
     enum CodingKeys: String, CodingKey {
-        case id, title, status, error, phase, actions, outputs
+        case id, title, status, error, phase, actions, outputs, activity
+        case attemptID = "attempt_id", updatedClock = "updated_clock", sampledClock = "sampled_clock", stateFresh = "state_fresh", recoveryNotice = "recovery_notice"
         case exportText = "export_text", archiveStatus = "archive_status", archiveError = "archive_error"
         case reviewSummary = "review_summary"
         case qualitySummary = "quality_summary"
@@ -187,7 +194,9 @@ struct CaptureQueueJob: Codable, Identifiable {
 struct CaptureQueue: Codable {
     var parallel: Int; var paused: Bool; var uiOpen: Bool; var jobs: [CaptureQueueJob]
     var waitReason: String?
-    enum CodingKeys: String, CodingKey { case parallel, paused, jobs; case uiOpen = "ui_open", waitReason = "wait_reason" }
+    var activityCounts: [String: Int]?
+    var historyEvents: [CaptureQueueJob]?
+    enum CodingKeys: String, CodingKey { case parallel, paused, jobs; case uiOpen = "ui_open", waitReason = "wait_reason", activityCounts = "activity_counts", historyEvents = "history_events" }
 }
 
 enum CaptureRecordingFilter: String, CaseIterable, Identifiable {
@@ -225,7 +234,7 @@ extension CaptureQueue {
     var reviewJobs: [CaptureQueueJob] { currentJobs.filter { ["FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains($0.status) || $0.archiveStatus == "PENDING" } }
     var historyJobs: [CaptureQueueJob] {
         let visible = Set((activeJobs + reviewJobs).map(\.id))
-        return jobs.reversed().filter { !visible.contains($0.id) }
+        return jobs.reversed().filter { !visible.contains($0.id) } + (historyEvents ?? [])
     }
 }
 

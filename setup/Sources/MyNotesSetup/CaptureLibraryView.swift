@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Darwin
 
 private func captureStateLabel(_ status: String) -> String {
     switch status {
@@ -19,6 +20,8 @@ private func captureStateLabel(_ status: String) -> String {
 
 private func capturePhaseLabel(_ phase: String) -> String {
     switch phase {
+    case "waiting_model": return "In attesa del modello"
+    case "finalizing": return "Salvataggio"
     case "preparing_context", "accepted": return "Preparazione"
     case "normalizing": return "Preparazione audio"
     case "primary", "primary_pass", "processing", "engine_started": return "Trascrizione audio"
@@ -112,11 +115,28 @@ struct CaptureRecordingsView: View {
         }
     }
 
+    private var queueSummary: String {
+        let counts = model.queue?.activityCounts ?? [:]
+        let parts = [(counts["processing", default: 0], "in elaborazione"),
+                     (counts["preparing", default: 0], "in preparazione"),
+                     (counts["saving", default: 0], "in salvataggio"),
+                     (model.queue?.activeJobs.filter { $0.status == "QUEUED" }.count ?? 0, "in attesa"),
+                     (counts["stale", default: 0], "da aggiornare")]
+            .filter { $0.0 > 0 }.map { "\($0.0) \($0.1)" }
+        return parts.isEmpty ? "Nessun lavoro attivo" : parts.joined(separator: " · ")
+    }
+    private var pausedMessage: String {
+        let waiting = model.queue?.activeJobs.filter { $0.status == "QUEUED" }.count ?? 0
+        let running = model.queue?.activeJobs.filter { $0.status != "QUEUED" }.count ?? 0
+        let pending = waiting == 0 ? "Nessun lavoro in attesa." : waiting == 1 ? "1 lavoro conservato in attesa." : "\(waiting) lavori conservati in attesa."
+        let active = running == 0 ? "" : running == 1 ? " Il lavoro già avviato terminerà." : " I \(running) già avviati termineranno."
+        return "Coda in pausa: " + pending + active
+    }
     private var controls: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(queueVisible ? "Coda trascrizioni" : "Registrazioni").font(.title3.bold())
-                Text(queueVisible ? "\(model.queue?.activeJobs.filter { $0.status == "RUNNING" }.count ?? 0) in corso · \(model.queue?.activeJobs.filter { $0.status == "QUEUED" }.count ?? 0) in attesa · \(model.queue?.currentJobs.filter { $0.status == "COMPLETED" }.count ?? 0) completate" : "\(model.recordings.count) audio · \(readyCount) pronti, di cui \(pendingCount) non archiviati")
+                Text(queueVisible ? queueSummary : "\(model.recordings.count) audio · \(readyCount) pronti, di cui \(pendingCount) non archiviati")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -126,7 +146,10 @@ struct CaptureRecordingsView: View {
             }.frame(width: 195).help("Numero massimo di trascrizioni contemporanee, condiviso con la chat.") }
             if queueVisible {
                 Button(model.queue?.paused == true ? "Riprendi coda" : "Pausa coda") { Task { await model.queueAction(model.queue?.paused == true ? "resume" : "pause") } }
-                    .help("La pausa lascia terminare le trascrizioni già avviate.")
+                    .help("Conserva i lavori in attesa e impedisce nuove partenze. Quelli già avviati terminano.")
+                Button("Svuota coda") { Task { await model.queueAction("clear") } }
+                    .disabled(model.queue?.activeJobs.contains { $0.status == "QUEUED" } != true)
+                    .help("Rimuove solo i lavori in attesa. Audio, storico e stato di pausa restano conservati.")
             }
             if !queueVisible {
                 Button(selected.count > 1 ? "Trascrivi selezionate (\(selectedReady.count))" : "Trascrivi pronte non archiviate (\(pendingCount))", systemImage: "text.badge.plus") {
@@ -179,10 +202,15 @@ struct CaptureRecordingsView: View {
                         Text(courseName(item.courseCode)).foregroundStyle(.secondary)
                         if !item.createdAt.isEmpty { LabeledContent("Registrata", value: CaptureDates.label(item.createdAt)) }
                         if let duration = item.duration { LabeledContent("Durata", value: "\(Int(duration / 60)) min \(Int(duration) % 60) s") }
-                        Label(captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
+                        Label(item.isTranscribed && (item.associationState == "unresolved" || item.courseCode == nil) ? "Trascritta — da collegare" : captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
                         if item.isTranscribed, let summary = item.qualitySummary {
                             Label(summary, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
+                        if item.associationState == "estimated" {
+                            Label("Associazione stimata", systemImage: "link").font(.callout).foregroundStyle(.secondary)
+                            if let reason = item.associationReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        if let conflict = item.associationConflict { Text(conflict).font(.caption).foregroundStyle(.orange) }
                         if item.hasProblem {
                             Label(item.reviewSummary ?? CaptureProblem.summary(status: item.transcriptionState), systemImage: "exclamationmark.triangle")
                                 .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -254,7 +282,11 @@ struct CaptureRecordingsView: View {
     private var queueList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if let reason = model.queue?.waitReason { Label(reason, systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary) }
+                if model.queue?.paused == true {
+                    Label(pausedMessage, systemImage: "pause.circle.fill")
+                        .font(.callout).padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+                } else if let reason = model.queue?.waitReason { Label(reason, systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary) }
                 if model.queue?.activeJobs.isEmpty != false {
                     Label("Nessun lavoro in attesa", systemImage: "checkmark.circle").font(.headline)
                     Text("Avvia una trascrizione dalla scheda Registrazioni.").foregroundStyle(.secondary)
@@ -283,16 +315,17 @@ struct CaptureRecordingsView: View {
                 }
                 Spacer(minLength: 8)
                 if job.status == "RUNNING" { ProgressView().controlSize(.small) }
-                Text(captureStateLabel(job.status)).font(.callout)
+                Text(job.status == "QUEUED" && model.queue?.paused == true ? "In attesa — coda in pausa" : job.status == "RUNNING" ? (job.stateFresh == true ? capturePhaseLabel(job.phase ?? "accepted") : "Stato non aggiornato") : captureStateLabel(job.status)).font(.callout)
                 if !historical {
                     FlowActions(actions: job.actions ?? [], archivePending: job.archiveStatus == "PENDING") { action in
                         Task { await model.queueAction(action, arguments: action == "finish" ? ["--recording", job.recordingID] : ["--job", job.id]) }
                     }.disabled(model.queueBusy || model.busy || model.isPreview)
                 }
             }
-            if let phase = job.phase, job.status == "RUNNING" {
-                Text("\(capturePhaseLabel(phase)) · \(Int(job.elapsedSeconds ?? 0)) s").font(.caption).foregroundStyle(.secondary)
+            if job.status == "RUNNING" {
+                CaptureElapsedView(job: job).id(job.attemptID ?? job.id)
             }
+            if let notice = job.recoveryNotice { Text(notice).font(.caption).foregroundStyle(.secondary) }
             if let position = job.queuePosition, job.status == "QUEUED" { Text("Posizione \(position)").font(.caption).foregroundStyle(.secondary) }
             if let path = job.exportText ?? job.outputs?["transcript_text"], job.status == "COMPLETED" {
                 Button("Apri trascrizione") { model.openFile(path) }
@@ -373,5 +406,30 @@ struct CaptureCourseForm: View {
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(24).frame(width: 440).onAppear { focused = true }.disabled(model.isPreview)
+    }
+}
+
+
+/// Only this small row ticks; backend polling remains five seconds.
+struct CaptureElapsedView: View {
+    var job: CaptureQueueJob
+    @CaptureViewState<ContinuousClock.Instant> private var anchor = ContinuousClock.now
+    @CaptureViewState<Double> private var elapsed: Double = 0
+    @CaptureViewState<Double> private var freshFor: Double = 0
+    private func synchronize() {
+        let raw = Double(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+        let age = max(0, raw - (job.updatedClock ?? 0))
+        anchor = .now
+        freshFor = job.stateFresh == true ? max(0, 15-age) : 0
+        elapsed = max(0, job.elapsedSeconds ?? 0) + (freshFor > 0 ? max(0, raw-(job.sampledClock ?? raw)) : 0)
+    }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+            let duration = anchor.duration(to: .now).components
+            let delta = Double(duration.seconds) + Double(duration.attoseconds)/1e18
+            let value = Int(elapsed + min(max(0, delta), freshFor))
+            Text("Tempo trascorso: \(value / 3600 > 0 ? String(format: "%d:%02d:%02d", value/3600, value/60%60, value%60) : String(format: "%d:%02d", value/60, value%60))" + (delta >= freshFor ? " · Stato non aggiornato" : ""))
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+        }.onAppear { synchronize() }.onChange(of: job.updatedClock) { _, _ in synchronize() }
     }
 }

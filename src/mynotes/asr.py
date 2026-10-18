@@ -168,6 +168,7 @@ class EngineResult:
     segments: list[dict[str, Any]]
     timestamp_mode: str | None = None
     verified_empty: bool = False
+    language: str | None = None
 
 
 class SpeechEngine(Protocol):
@@ -203,6 +204,8 @@ def _run(command: list[str], *, timeout: int = 7200) -> subprocess.CompletedProc
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     except OSError as error:
         raise ASRError(f"ENGINE_START: {Path(command[0]).name}: {error}") from error
+    is_engine = len(command) > 1 and command[1] == "transcribe"
+    update(None, subprocess_pid=process.pid, **({"engine_pid": process.pid, "engine_running": True, "engine_started_at": time.time()} if is_engine else {}))
     def drain(name, stream):
         with paths[name].open("wb") as handle:
             os.chmod(paths[name], 0o600)
@@ -239,6 +242,8 @@ def _run(command: list[str], *, timeout: int = 7200) -> subprocess.CompletedProc
             process.wait()
         raise
     finally:
+        if is_engine:
+            update(None, engine_running=False, engine_finished_at=time.time())
         for thread in threads:
             thread.join(timeout=5)
     stdout, stderr = (bytes(buffers[name]).decode("utf-8", errors="replace") for name in ("stdout", "stderr"))
@@ -281,6 +286,66 @@ def _latest_segments(directory: Path) -> list[dict[str, Any]]:
     return []
 
 
+def _progress(phase=None, **changes):
+    execution = _execution.get()
+    if execution:
+        execution[1](phase, **changes)
+
+
+def _ready_model(model_dir, tokenizer_dir, model):
+    candidates = [p for p in model_dir.rglob(f"*{model}") if p.is_dir() and ".cache" not in p.parts]
+    ready = []
+    for path in candidates:
+        if not all((path / (name + ".mlmodelc")).is_dir() and any((path / (name + ".mlmodelc")).iterdir())
+                   for name in ("AudioEncoder", "TextDecoder", "MelSpectrogram")):
+            continue
+        # WhisperKit searches bundled tokenizer assets as well as its Hub cache.
+        tokenizers = [path, tokenizer_dir, *[p.parent for p in tokenizer_dir.rglob("tokenizer.json")]]
+        for tokens in tokenizers:
+            try:
+                if not all((tokens / name).is_file() and (tokens / name).stat().st_size > 0
+                           for name in ("tokenizer.json", "tokenizer_config.json", "vocab.json", "merges.txt")):
+                    continue
+                for name in ("tokenizer.json", "tokenizer_config.json", "vocab.json"):
+                    if not isinstance(json.loads((tokens/name).read_text()), dict):
+                        raise ValueError("Invalid tokenizer")
+                ready.append(path)
+                break
+            except (OSError, ValueError):
+                continue
+    return ready[0] if len(ready) == 1 else None
+
+
+@contextmanager
+def _model_read_lease(model_dir, tokenizer_dir, model):
+    """Prepared components are immutable readers; never hold EX during ASR."""
+    lock = model_dir.parent / ".asr-model-preparation.lock"
+    with lock.open("a+") as lease:
+        _progress("waiting_model", engine_running=False)
+        # Nonblocking polling keeps cancellation and liveness responsive.
+        while True:
+            try:
+                fcntl.flock(lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(.1)
+        path = _ready_model(model_dir, tokenizer_dir, model)
+        if path is None:
+            fcntl.flock(lease, fcntl.LOCK_UN)
+            while True:
+                try:
+                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(.1)
+            # A setup process may have prepared the assets while we waited.
+            path = _ready_model(model_dir, tokenizer_dir, model)
+            if path is None:
+                raise ASRError("MODEL_NOT_READY: completa o ripara i componenti locali nel setup; nessun motore avviato")
+            fcntl.flock(lease, fcntl.LOCK_SH)
+        yield path
+
+
 class ArgmaxEngine:
     name = "argmax"
 
@@ -319,13 +384,8 @@ class ArgmaxEngine:
             return EngineResult(self.name, model, version, combined, self.timestamp_mode)
         self.model_dir.mkdir(parents=True, exist_ok=True)
         self.tokenizer_dir.mkdir(parents=True, exist_ok=True)
-        local_models = [
-            path for path in self.model_dir.rglob(f"*{model}")
-            if path.is_dir() and ".cache" not in path.parts and (path / "AudioEncoder.mlmodelc").is_dir()
-        ]
-        model_arguments = ["--model-path", str(local_models[0])] if len(local_models) == 1 else ["--model", model]
         command = [
-            self.executable, "transcribe", *model_arguments, "--audio-path", str(audio),
+            self.executable, "transcribe", "--audio-path", str(audio),
             "--report",
             "--report-path", str(output_dir), "--download-model-path", str(self.model_dir),
             "--download-tokenizer-path", str(self.tokenizer_dir), "--concurrent-worker-count", "1",
@@ -342,11 +402,9 @@ class ArgmaxEngine:
             combined_prompt = f"{prompt}. {combined_prompt}" if combined_prompt else prompt
         if combined_prompt and self.decoder_prompt == "provided":
             command.extend(["--prompt", combined_prompt])
-        # Existing compiled models are read concurrently; first-time model or
-        # tokenizer preparation is serialized across all CLI/queue callers.
-        with (self.model_dir.parent / ".asr-model-preparation.lock").open("a+") as model_lease:
-            warm = len(local_models) == 1 and any(self.tokenizer_dir.iterdir())
-            fcntl.flock(model_lease, fcntl.LOCK_SH if warm else fcntl.LOCK_EX)
+        with _model_read_lease(self.model_dir, self.tokenizer_dir, model) as local_model:
+            command.extend(["--model-path", str(local_model)])
+            _progress("primary_pass", engine_running=False)
             completed = _run(command)
         segments = _latest_segments(output_dir)
         if not segments and completed.stdout.strip().startswith(("{", "[")):
@@ -356,7 +414,15 @@ class ArgmaxEngine:
                 pass
         if not segments:
             raise ASRError("Argmax finished without a readable timestamped transcript")
-        return EngineResult(self.name, model, _tool_version(self.executable), segments, self.timestamp_mode)
+        detected = None
+        for report in sorted(output_dir.rglob('*.json'), key=lambda p:p.stat().st_mtime, reverse=True):
+            try:
+                value = json.loads(report.read_text()).get('language')
+                if isinstance(value, str) and re.fullmatch(r'[a-z]{2,3}', value):
+                    detected = value; break
+            except (OSError, ValueError, AttributeError):
+                pass
+        return EngineResult(self.name, model, _tool_version(self.executable), segments, self.timestamp_mode, language=detected)
 
 
 class FluidAudioEngine:
@@ -385,8 +451,10 @@ class FluidAudioEngine:
         vocabulary_path.write_text("\n".join(vocabulary) + ("\n" if vocabulary else ""), encoding="utf-8")
         command = [
             self.executable, "transcribe", str(audio), "--model-version", model,
-            "--language", language, "--metadata", "--word-timestamps", "--output-json", str(output),
+            "--metadata", "--word-timestamps", "--output-json", str(output),
         ]
+        if language != "auto":
+            command.extend(["--language", language])
         if vocabulary:
             command.extend(["--custom-vocab", str(vocabulary_path), "--vocab-short-term-taper-pivot", "5",
                             "--vocab-spotter-min-sim", "0.30", "--vocab-spotter-min-sim-multi", "0.50"])
@@ -755,9 +823,25 @@ def _transcribe_audio_locked(
         pass_root = manifest_path.parent / 'pass-cache' / cache_key
     run_dir = attempt_dir or run_dir / "attempts" / uuid.uuid4().hex
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    snapshot = run_dir / ("original" + audio.suffix.lower())
+    shutil.copy2(audio, snapshot)
+    if file_sha256(snapshot) != audio_hash or file_sha256(audio) != audio_hash:
+        raise ASRError("SOURCE_CHANGED: audio modificato durante la copia privata")
     normalized_audio = run_dir / "input.wav"
     update("normalizing")
-    normalize_audio(audio, normalized_audio, afconvert=settings.get("tools", {}).get("afconvert", "/usr/bin/afconvert"))
+    recovered_primary = None
+    if recover_from:
+        from .asr_recovery import reuse_attested_audio
+        try:
+            reuse_attested_audio(recover_from, audio_hash, normalized_audio)
+        except (ASRError, OSError, ValueError) as error:
+            atomic_json_write(run_dir / "recovery-fallback.json", {"reason": str(error), "from": recover_from, "fallback": "fresh_local_once"})
+            update("normalizing", recovery_notice="Il risultato precedente non è riutilizzabile; trascrivo nuovamente l’audio.")
+            recover_from = None
+            force = True
+            pass_root = run_dir / "fresh-pass-cache"
+    if not normalized_audio.is_file():
+        normalize_audio(snapshot, normalized_audio, afconvert=settings.get("tools", {}).get("afconvert", "/usr/bin/afconvert"))
     duration = audio_duration(normalized_audio)
     if duration is None and engines is None:
         raise ASRError("INVALID_AUDIO: normalized audio has no verifiable duration")
@@ -772,9 +856,18 @@ def _transcribe_audio_locked(
     update("primary_pass")
     if recover_from:
         from .asr_recovery import load_recovery
-        primary = load_recovery(recover_from, audio_hash, normalized_audio)
+        try:
+            recovered_primary = load_recovery(recover_from, audio_hash, normalized_audio)
+        except (ASRError, OSError, ValueError) as error:
+            atomic_json_write(run_dir / "recovery-fallback.json", {"reason": str(error), "from": recover_from, "fallback": "fresh_local_once"})
+            update("primary_pass", recovery_notice="Il risultato precedente non è riutilizzabile; trascrivo nuovamente l’audio.")
+            recover_from = None
+            force = True
+            pass_root = run_dir / "fresh-pass-cache"
+    if recovered_primary is not None:
+        primary = recovered_primary
         atomic_json_write(run_dir/'primary-result.json', {'engine': primary.engine, 'model': primary.model,
-            'version': primary.version, 'timestamp_mode': primary.timestamp_mode, 'segments': primary.segments,
+            'version': primary.version, 'timestamp_mode': primary.timestamp_mode, 'language': primary.language, 'segments': primary.segments,
             'segments_sha256': segments_digest(primary.segments), 'recovered_from': recover_from})
     else:
         primary = _engine_pass(registry[primary_name], pass_root / "primary.json", duration,
@@ -789,7 +882,7 @@ def _transcribe_audio_locked(
         from .asr_recovery import repair, PARSER_VERSION, POLICY_VERSION
         recovery_name = settings.get('recovery_engine', 'fluidaudio')
         primary, repair_report = repair(primary, audio=normalized_audio, duration=duration,
-            engine=registry.get(recovery_name), settings={**settings, '_force_fresh': force}, directory=run_dir, update=update)
+            engine=registry.get(recovery_name), settings={**settings, 'language':primary.language if settings['language'] == 'auto' and primary.language else settings['language'], '_force_fresh': force}, directory=run_dir, update=update)
     else:
         validate_engine_result(primary, run_dir / "primary-result.json", duration)
     passes.append(primary)
@@ -970,7 +1063,7 @@ def asr_workspace_lock(workspace: Workspace):
         yield
 
 
-def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None, force=False, recover_from=None):
+def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None, force=False, recover_from=None, queue_context=None):
     from contextlib import nullcontext
     from .workflow import _generation_lock, WorkflowError, parse_lecture_id
     course = recording_profile(course, audio)
@@ -988,20 +1081,10 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
             attempt_dir = directory / "attempts" / attempt_id
             attempt_dir.mkdir(parents=True, mode=0o700)
             state_path = directory / "status.json"
-            started = time.time()
-            state = {"schema_version": 1, "lecture_id": lecture_id, "attempt_id": attempt_id, "pid": os.getpid(), "started_at": started, "status": "RUNNING"}
-            def update(phase, **changes):
-                if phase == 'processing' and state.get('repair_window'):
-                    phase = 'repairing'
-                state.update(changes)
-                state.update(phase=phase, updated_at=time.time(), elapsed_seconds=round(time.time() - started, 2))
-                atomic_json_write(state_path, state)
-                atomic_json_write(workspace.state_dir / "asr-active.json", state)
-                atomic_json_write(attempt_dir / "status.json", state)
-                if progress:
-                    import sys
-                    print(f"Transcription {lecture_id}: {phase} ({state['elapsed_seconds']:.0f}s)", file=sys.stderr, flush=True)
-            update("accepted")
+            from .asr_progress import AttemptProgress, continuous_time
+            state = {"schema_version": 2, "lecture_id": lecture_id, "attempt_id": attempt_id, "pid": os.getpid(),
+                     "started_at": time.time(), "started_clock": continuous_time(), "status": "RUNNING", **(queue_context or {})}
+            update = AttemptProgress(workspace, directory, attempt_dir, state, progress=progress).start()
             token = _execution.set((attempt_dir / "logs", update))
             previous_handler = None
             if threading.current_thread() is threading.main_thread():
@@ -1017,11 +1100,13 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
                     if state.get("phase") != "completed":
                         update("completed", status="COMPLETED", transcript_text=str(text_path))
                 from .recording_library import finish_audio
+                update("finalizing", engine_running=False)
                 result.update(finish_audio(workspace, audio, directory / 'transcript.json'))
+                update.finish("COMPLETED", archive_status=result.get('archive_status'))
                 return result
             except BaseException as error:
                 status = "NEEDS_REVIEW" if isinstance(error, ASRReviewError) else "INTERRUPTED" if isinstance(error, (KeyboardInterrupt, SystemExit)) else "FAILED"
-                update("stopped", status=status, error=str(error), **({"issues": error.issues, "review_path": str(error.path)} if isinstance(error, ASRReviewError) else {}))
+                update.finish(status, error=str(error), **({"issues": error.issues, "review_path": str(error.path)} if isinstance(error, ASRReviewError) else {}))
                 raise
             finally:
                 if previous_handler is not None:
@@ -1043,7 +1128,7 @@ def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, lang
         saved = json.loads(cache_path.read_text())
         if saved.get("segments_sha256") != segments_digest(saved.get("segments")) or saved.get("model") != model or saved.get("engine") != engine.name or saved.get("timestamp_mode") != getattr(engine, "timestamp_mode", None) or saved.get("clips") != (list(map(list, clips)) if clips else None):
             raise ValueError("Pass cache mismatch")
-        result = EngineResult(saved["engine"], saved["model"], saved["version"], saved["segments"], saved.get("timestamp_mode"))
+        result = EngineResult(saved["engine"], saved["model"], saved["version"], saved["segments"], saved.get("timestamp_mode"), language=saved.get("language"))
         # Implicit retry may reuse valid work only. Invalid raw reports are
         # consumed exclusively by the explicitly attested recovery action.
         validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
@@ -1057,9 +1142,9 @@ def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, lang
         validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
     else:
         atomic_json_write(output_dir.parent/f'{output_dir.name}-result.json', {'engine': result.engine, 'model': result.model,
-            'version': result.version, 'segments': result.segments, 'timestamp_mode': result.timestamp_mode, 'segments_sha256': segments_digest(result.segments)})
+            'version': result.version, 'segments': result.segments, 'timestamp_mode': result.timestamp_mode, 'language': result.language, 'segments_sha256': segments_digest(result.segments)})
     atomic_json_write(cache_path, {"engine": result.engine, "model": result.model, "version": result.version,
-        "segments": result.segments, "segments_sha256": segments_digest(result.segments),
+        "segments": result.segments, "segments_sha256": segments_digest(result.segments), "language": result.language,
         **({"timestamp_mode": result.timestamp_mode} if result.timestamp_mode else {}),
         "clips": list(map(list, clips)) if clips else None})
     return result

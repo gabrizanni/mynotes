@@ -9,11 +9,12 @@ from test_transcription_reliability import setup,Fake
 
 
 @pytest.mark.parametrize('word_mode',[False,True])
-def test_argmax_retains_glossary_and_segment_timestamps(tmp_path,monkeypatch,word_mode):
+def test_argmax_retains_glossary_and_segment_timestamps(tmp_path,monkeypatch,word_mode,ready_argmax):
     calls=[]
     monkeypatch.setattr(asr,'_run',lambda cmd:calls.append(cmd) or subprocess.CompletedProcess(cmd,0,json.dumps({'segments':[{'start':1,'end':3,'text':'Transformer embeddings.','avgLogprob':-.4}]}),''))
     monkeypatch.setattr(asr,'_tool_version',lambda _: 'v1.1.0')
     engine=asr.ArgmaxEngine('/usr/bin/true',tmp_path/'models',tmp_path/'tokens',word_timestamps=word_mode,use_prompt=True)
+    ready_argmax(engine, 'test')
     result=engine.transcribe(tmp_path/'input.wav',tmp_path/'out',model='test',language='en',vocabulary=['Transformer','Embeddings'],prompt='')
     cmd=calls[0]
     assert ('--word-timestamps' in cmd)==word_mode

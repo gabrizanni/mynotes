@@ -201,3 +201,22 @@ moves into processate. Failed exports/moves show an incomplete-archive action
 that does not run ASR again. Course reassignment relocates the exported TXT.
 User-edited TXT copies are preserved and reported instead of silently overwritten.
 The folder's historical processed membership alone does not certify a transcript.
+
+
+## Queue behavior and time
+
+Pause preserves pending work; active attempts finish. Resume permits new starts.
+Clear removes only pending work, preserving audio, history and the pause setting.
+The persistent paused banner states how many jobs are waiting and finishing.
+Preparation, model waiting, engine execution and saving have separate labels.
+The stopwatch shows elapsed attempt time, including preparation and system sleep,
+not seconds of transcribed audio. It ticks locally each second; backend polling
+remains five seconds. A heartbeat is worker liveness, not evidence of ASR progress.
+After 15 seconds without a heartbeat the display reports stale state and stops
+extrapolating until reconciled.
+
+Unassigned completed transcripts export to Trascrizioni/Dubbi; audio originals
+still archive byte-identically to processate. A probable course link is explicitly
+marked estimated, with a reason and alternatives, and can be corrected without
+ASR. Explicit user assignments take precedence over estimates. Occupied lesson
+identities are never overwritten.

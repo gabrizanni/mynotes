@@ -17,13 +17,52 @@ def apply(event, links):
     link = links.get(item.get("recordingID")) or links.get(item.get("id"))
     if link:
         item.update({k: link.get(k) for k in ("courseCode", "lessonNumber")})
-        item["associationState"] = "resolved"
+        item["associationState"] = link.get("associationState", "resolved")
     return item
 
 
 def project_events(store, events):
     links = registry(store)["recordings"]
     return [apply(e, links) for e in events]
+
+
+def association_candidates(recording, courses):
+    """Rank local evidence for the agent; never treat a name score as identity."""
+    import re
+    from difflib import SequenceMatcher
+    def words(text):
+        return set(re.findall(r'[a-z0-9]+', str(text).casefold()))
+    title = str(recording.get('title', '')) + ' ' + Path(recording.get('original_path') or recording.get('path') or '').stem
+    tokens = words(title)
+    # Bounded academic text is data only, not executable guidance.
+    text_tokens = set()
+    transcript = recording.get('transcript_json')
+    if transcript:
+        try:
+            import json
+            saved = json.loads(Path(transcript).read_text())
+            text_tokens = words(' '.join(str(s.get('text', '')) for s in saved.get('segments', []))[:32000])
+        except (OSError, ValueError, TypeError):
+            pass
+    ranked = []
+    for course in courses:
+        names = [course['code'], course['name'], *course.get('aliases', [])]
+        reasons, score = [], 0.0
+        if course['code'].casefold() in tokens:
+            score += 10; reasons.append('Codice corso nel nome')
+        for name in names[1:]:
+            overlap = words(name) & tokens
+            if overlap:
+                score += 2*len(overlap)/max(1, len(words(name))); reasons.append('Nome o alias coerente')
+        if recording.get('course_code') == course['code']:
+            score += 8; reasons.append('Associazione o calendario esistente')
+        topic = words(course['name']) - {'and','of','the','in','to'}
+        overlap = topic & text_tokens
+        if overlap:
+            score += len(overlap)/max(1,len(topic)); reasons.append('Termini nel testo')
+        if score:
+            ranked.append({'courseCode':course['code'], 'name':course['name'], 'score':round(score,3), 'reasons':list(dict.fromkeys(reasons))})
+    return sorted(ranked, key=lambda r:(-r['score'],r['courseCode']))
 
 
 def pending(store):
@@ -39,9 +78,14 @@ def pending(store):
             items.append({**event, "recording": recording or None})
             known.add(identifier)
     for recording in recordings:
-        if recording.get('source_id') not in {None, 'manual', 'special', 'static'} and recording['id'] not in known and (not recording.get('course_code') or not recording.get('lecture_id')):
+        if recording['id'] not in known and (recording.get('association_state') in {'unresolved', 'estimated'} or not recording.get('lecture_id')):
             items.append({"recordingID": recording['id'], "title": recording['title'], "startsAt": recording['created_at'],
                           "courseCode": recording.get('course_code'), "recording": recording})
+    courses = store.workspace.configuration_store().load()['courses']
+    for item in items:
+        recording = item.get('recording') or item
+        item['candidateCourses'] = association_candidates(recording, courses)
+        item['associationState'] = recording.get('association_state', 'unresolved')
     return {"status": "OK", "items": items}
 
 
@@ -74,7 +118,7 @@ def assign(store, payload):
             running_ids = {r['recording_id'] for r in conn.execute("SELECT recording_id,pid FROM jobs WHERE status='RUNNING'") if queue._alive(r['pid'])}
             running_ids.update(r['recording_id'] for r in conn.execute("SELECT a.recording_id,j.pid FROM recording_aliases a JOIN jobs j ON j.id=a.job_id WHERE j.status='RUNNING'") if queue._alive(r['pid']))
             for row in rows:
-                if not isinstance(row,dict) or set(row)-{'recordingID','eventID','courseCode','lessonNumber','rule'}:
+                if not isinstance(row,dict) or set(row)-{'recordingID','eventID','courseCode','lessonNumber','rule','associationState','reason','alternatives'}:
                     raise capture.CaptureError('Invalid assignment fields')
                 identifier = row.get('recordingID') or row.get('eventID')
                 if not isinstance(identifier, str) or not identifier:
@@ -99,7 +143,32 @@ def assign(store, payload):
                     raise capture.CaptureError('Choose a configured course and an optional valid lesson number')
                 if not event.get('recordingID') and (code,number)!=(event.get('courseCode'),event.get('lessonNumber')):
                     raise capture.CaptureError('Legacy lesson destinations cannot be reassigned; use an independent recording')
-                links['recordings'][key]={'courseCode':code,'lessonNumber':number}
+                association_state = row.get('associationState', 'resolved')
+                if association_state not in {'resolved', 'estimated'}:
+                    raise capture.CaptureError('Choose resolved or estimated associationState')
+                reason, alternatives = row.get('reason'), row.get('alternatives', [])
+                if association_state == 'estimated' and (not isinstance(reason, str) or not reason.strip()):
+                    raise capture.CaptureError('An estimated association requires a reason')
+                if reason is not None and (not isinstance(reason, str) or len(reason)>1000):
+                    raise capture.CaptureError('Invalid association reason')
+                if not isinstance(alternatives, list) or any(not isinstance(x,str) or x not in courses for x in alternatives):
+                    raise capture.CaptureError('Alternatives must identify configured courses')
+                previous = links['recordings'].get(key, {})
+                if previous and previous.get('associationState', 'resolved') == 'resolved' and association_state == 'estimated':
+                    continue  # Explicit user choices always override estimates.
+                occupied = number is not None and (
+                    any(e.get('id') != event.get('id') and e.get('recordingID') != key and e.get('courseCode') == code and e.get('lessonNumber') == number
+                        for e in project_events(store, events)) or
+                    any(r['id'] != key and r.get('lecture_id') == f'{code}-L{number:02d}' for r in recordings))
+                link = {'courseCode':code,'lessonNumber':None if occupied else number,
+                        'associationState':association_state, 'reason':reason, 'alternatives':alternatives}
+                if occupied:
+                    link.update(proposedLessonNumber=number, conflict='La lezione ha già una sorgente: registrazione conservata separatamente.')
+                history = list(previous.get('history', []))
+                if previous:
+                    history.append({k:v for k,v in previous.items() if k != 'history'})
+                link['history'] = history
+                links['recordings'][key] = link
                 updated.append(key)
                 if row.get('rule'):
                     rule=row['rule']

@@ -2,6 +2,7 @@
 """Resumable, verified setup, runnable with only a private stdlib Python."""
 from __future__ import annotations
 
+import fcntl
 import argparse
 import hashlib
 import http.client
@@ -241,9 +242,12 @@ def install_components(root: Path, manifest: dict, home: Path, emit) -> dict:
                 atomic_json(receipt, {"sha256": component["sha256"]})
             tools["soffice"] = str(executable)
         elif "files" in component:
-            for file_number, spec in enumerate(component["files"], start=1):
-                emit("components", f"Checking model file {file_number}/{len(component["files"])}: {spec["path"]}", file_number, len(component["files"]), component=component_id, phase="verify")
-                component_download(spec, safe_relative(destination, spec["path"]), emit, component_id, f"speech model file {file_number}/{len(component["files"])}")
+            destination.mkdir(parents=True, exist_ok=True)
+            with (destination / '.asr-model-preparation.lock').open('a+') as model_lease:
+                fcntl.flock(model_lease, fcntl.LOCK_EX)
+                for file_number, spec in enumerate(component["files"], start=1):
+                    emit("components", f"Checking model file {file_number}/{len(component["files"])}: {spec["path"]}", file_number, len(component["files"]), component=component_id, phase="verify")
+                    component_download(spec, safe_relative(destination, spec["path"]), emit, component_id, f"speech model file {file_number}/{len(component["files"])}")
             tools["model_cache"] = str(destination)
         else:
             raise SetupError("Unknown component format")

@@ -398,3 +398,29 @@ The full-lecture run exposed a wrong integer Total row and a Word equation text
 rendering defect. The former now fails candidate validation and the latter is
 fixed in the native-equation writer. One real run does not establish that speaker
 labels alone caused quality gains; no speaker ablation was run.
+
+
+## 0.2.21 local queue and recovery validation
+
+The model preparation lease now distinguishes bundled tokenizer assets from an
+empty download cache and permits shared inference on prepared components. Three
+identical 60-second inputs were freshly transcribed at limits 1, 2 and 3 with the
+same pinned engine/model: observed totals were 14.93s, 14.13s and 15.59s, with
+1, 2 and 3 overlapping engine subprocesses respectively. All nine results passed
+the structural timestamp checks; text matched per input across limits. These
+short inputs demonstrate overlap, not proportional acceleration or a full-course
+accuracy guarantee. Per-process RSS is not total accelerator/model memory.
+
+A separate 301.32s stopwatch check observed at most 1.46s heartbeat lag. Native
+controls were exercised on an isolated synthetic queue: pause, clear pending
+while one worker continued, interrupt the selected worker, resume an empty queue,
+and retry while paused. No original was deleted. No audio was played. Human
+listening and natural-language transcription accuracy remain separate checks.
+
+A complete saved lecture report was recovered on a private copy with independent
+local repairs, exported under Dubbi and archived with the original SHA-256 intact.
+Its observed 3.22s was recovery time, not a new complete decoding time. An auto
+language hint rejected by the second engine was corrected by preserving detected
+primary language and omitting unsupported auto hints. Regression fixtures cover
+one fresh local fallback on legacy normalization mismatch without relaxing report
+or original identity checks.

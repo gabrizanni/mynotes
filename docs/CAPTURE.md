@@ -312,3 +312,21 @@ Configure an existing local FluidAudio CLI through the course transcription
 unavailable and a repair is required, the attempt stops with a recoverable
 explanation. Capture, direct chat transcription and lesson preparation all use
 the same pipeline, shared ASR slot and finalization.
+
+
+### Queue controls and unassigned transcripts
+
+`transcription-queue clear --json` removes pending jobs only and preserves pause,
+originals and previous attempts. `pause` preserves pending jobs for `resume`.
+A recovery integrity mismatch never authorizes reuse of a mismatching report:
+attested normalized audio is reused only with its intact source/report binding;
+otherwise one fresh local ASR attempt is allowed and recorded for that command.
+There is no recursive or paid automatic retry.
+
+`capture pending --json` includes external and manual recordings and ranked local
+course candidates. `capture assign --file PATH --json` accepts associationState
+(`resolved` by default, or `estimated`), a reason and alternative course codes.
+Estimates require a reason and cannot override resolved user choices. Conflicting
+lesson numbers are retained as proposals on the independent recording, without
+overwriting an occupied destination. Valid unassigned TXT exports are in
+`Trascrizioni/Dubbi`; originals still archive in `processate`.

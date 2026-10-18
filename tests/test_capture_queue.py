@@ -199,13 +199,14 @@ def test_active_job_finishes_after_window_close_without_next_dispatch(ws, monkey
         def poll(self):
             self.polls += 1
             if self.polls == 1:
+                q.ui_lease(ws, session, opened=False)
                 return None
             with q.database(ws) as conn:
                 conn.execute("UPDATE jobs SET status='COMPLETED',pid=NULL WHERE id=?", (launched[0],))
             return 0
     def launch(command, **kwargs):
         assert not launched, 'Closing the window must leave the second job queued'
-        launched.append(command[-1]); q.ui_lease(ws, session, opened=False)
+        launched.append(command[-1])
         return Child()
     monkeypatch.setattr(q.subprocess, 'Popen', launch)
     monkeypatch.setattr(q.subprocess, 'run', lambda *a, **kw: type('Pressure', (), {'stdout': 'free percentage: 80%'})())
