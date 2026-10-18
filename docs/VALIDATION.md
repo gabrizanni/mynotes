@@ -1,8 +1,34 @@
 # Release validation status
 
 This document separates implemented safeguards from checks actually completed.
-Version 0.2.13 is a local candidate for continued acceptance testing. Its release
-notes identify local results, hosted CI and remaining end-to-end limitations.
+
+## 0.2.20 local release validation (2026-10-18)
+
+- 900 integrated tests passed; 56 focused checks passed after the final warning
+  propagation adjustment. Counts overlap and are not additive.
+- Two complete private recordings were recovered from hash-verified saved
+  primary reports. All identified windows received a completed independent
+  check; both final transcripts passed structural timing and source integrity
+  checks and became usable with residual uncertainty disclosed.
+- Native recovery buttons were pressed for both recordings. Both rows/details
+  showed completed transcripts, and a resulting TXT opened from the app.
+- Completed results retained uncertainty metadata when imported for note
+  preparation and when passed to the writing provider. No new paid note
+  generation was part of this release validation.
+- Local update from 0.2.19, rollback and re-selection were tested in isolation.
+  A guarded personal update preserved preferences, notes and historical
+  attempts; originals archived with identical hashes. App and managed CLI used
+  the same runtime. A private backup and previous app/runtime were retained.
+- The local package manifest contained 210 verified files; application and
+  recorder signatures and DMG checksum passed. The unchanged pinned speech
+  executable was reused from a verified previous local package. The standard
+  GitHub workflow separately builds that pinned upstream source from scratch.
+
+No audio was played in these checks. Listening acceptance remains separate.
+Automatic completion does not certify error-free text or measured parity with
+another workflow. Hosted CI and public download checks are established by the
+run and release receipts linked from the release page, not by these local
+results. Historical evidence below retains its original version/scope.
 
 ## Local 0.2.13 Capture validation (2026-10-17)
 

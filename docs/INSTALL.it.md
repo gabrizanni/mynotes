@@ -1,10 +1,10 @@
 # Installa MyNotes + Capture
 
-Il setup DMG richiede **Apple Silicon e macOS 14+**. Include Capture. Il candidato di sviluppo non è ancora una release GitHub pubblicata; gli ZIP precedenti usano l’installer manuale descritto sotto.
+Il setup DMG richiede **Apple Silicon e macOS 14+**. Include Capture. La versione preliminare è disponibile su GitHub Releases; gli ZIP autonomi usano l’installer manuale descritto sotto.
 
 ## Dal DMG alla chat
 
-1. Scarica il DMG desiderato da [GitHub Releases](https://github.com/gabrizanni/mynotes/releases), quando sarà pubblicato.
+1. Scarica il DMG desiderato da [GitHub Releases](https://github.com/gabrizanni/mynotes/releases).
 2. Aprilo, trascina **MyNotes** in **Applicazioni** e apri **MyNotes** da lì.
 3. Segui la preparazione dei componenti, scegli l’agente e premi **Apri la chat**.
 

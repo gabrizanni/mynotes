@@ -1,5 +1,35 @@
 # Versioned updates and recovery
 
+## 0.2.20: usable transcripts with disclosed uncertainty
+
+Since the previous public 0.2.13 preview:
+
+- Capture reads supported audio from the chosen originals folder, including
+  externally added recordings. Technical files remain private. Completed
+  transcripts export as course-organized TXT and unchanged originals archive
+  under `processate`; the historical `processed` folder remains readable.
+- The recording library and queue share backend actions for removal, targeted
+  interruption, retry, fresh transcription, selective recovery and incomplete
+  archiving. Transcript work can run while another recording is being captured.
+- WhisperKit uses indicative segment timestamps without a decoder prompt.
+  FluidAudio checks doubtful local windows. After a completed independent check,
+  residual text disagreements become warnings rather than blocking the lesson.
+  The TXT and note writer retain uncertainty markers and private alternatives.
+  Structural timing errors, changed sources, unavailable tools and incomplete
+  checks still block publication. The selective 30% audio limit remains.
+- Stable personal notebooks and course handouts remain distinct. `prepare`,
+  `generate`, then `update` reuse saved preferences, publish with backups in
+  automatic mode and support `undo`. External Word changes still stop updates.
+- Operational agent requests take precedence over optional onboarding.
+  Single-call writing is the default; deliberate multi-part writing remains an
+  explicit choice. No automatic paid retry is introduced.
+
+Completion means usable automatic transcription, not human verification or a
+measured accuracy guarantee. This preview remains ad-hoc signed and is not
+Apple-notarized. Existing recordings are not automatically retranscribed on
+update. Keep the previous runtime and a private backup; update only when the
+recorder and transcription workers are idle.
+
 Download the intended new DMG, replace the MyNotes setup app in Applications, and reopen it. Component setup prepares a versioned runtime and switches the `current` launcher target only after its checks pass. Completed setup/download work is reused on retry. Earlier runtime versions remain available for rollback. The update is explicit; no unattended GitHub publication or automatic legacy migration is performed.
 
 Capture holds an exclusive lease during recording and export. Both update and rollback defer while it is held. For an active, idle Capture workspace, the installer stops and restarts the LaunchAgent around the update and refreshes its Python runtime path. Rolling back to a version without Capture requires disabling the recorder first. Failed dependency installation preserves the previous selection and removes the incomplete installation.
