@@ -235,8 +235,12 @@ originals only while recording and transcription are idle, after verified privat
 All supported audio names appear in the library; course assignment is optional. Valid
 transcripts export as TXT under Trascrizioni/COURSE and originals move unchanged to
 processate. Technical files remain private. Use retry for failures, restart for a fresh
-ASR attempt, remove for queued jobs, cancel for active jobs, and finish to retry exports
-without rerunning ASR. Never treat a queue removal as deleting an original.
+ASR attempt, recover --job ID for hash-verified selective repair of saved reports,
+remove for queued jobs, cancel for active jobs, and finish to retry exports
+without rerunning ASR. New Argmax passes use indicative segment timestamps and no
+decoder prompt. FluidAudio verifies only doubtful local windows (at most 30% of
+the audio); unresolved disagreements keep the result private and uncompleted.
+Never treat a queue removal as deleting an original.
 Configure Capture once, then import the complete normalized timetable or subscribe
 to an ICS/iCal feed using importMode=all_timed, teaching period and timezone. New complete calendars
 need no course mappings or first lesson number. Existing mapped sources keep their mode unless

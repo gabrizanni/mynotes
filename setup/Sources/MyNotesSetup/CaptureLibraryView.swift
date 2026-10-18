@@ -24,6 +24,7 @@ private func capturePhaseLabel(_ phase: String) -> String {
     case "primary", "primary_pass", "processing", "engine_started": return "Trascrizione audio"
     case "secondary", "secondary_pass": return "Confronto delle trascrizioni"
     case "extra", "extra_pass": return "Verifica dei passaggi incerti"
+    case "repairing": return "Verifica dei passaggi dubbi"
     case "validating": return "Verifica dei timestamp"
     case "completed": return "Completata"
     default: return "Elaborazione in corso"
@@ -319,6 +320,7 @@ private struct FlowActions: View {
         switch action {
         case "enqueue": return "Trascrivi"
         case "retry": return "Riprova"
+        case "recover": return "Ripara passaggi dubbi"
         case "restart": return "Trascrivi da zero"
         case "remove": return "Rimuovi dalla coda"
         case "cancel": return "Interrompi trascrizione"
@@ -330,7 +332,7 @@ private struct FlowActions: View {
         }
     }
     private var primary: String? {
-        ["cancel", "remove", "enqueue", "retry", "restart", "relink", "download"].first { actions.contains($0) }
+        ["cancel", "remove", "enqueue", "recover", "retry", "restart", "relink", "download"].first { actions.contains($0) }
             ?? (archivePending && actions.contains("finish") ? "finish" : nil)
     }
     var body: some View {

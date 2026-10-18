@@ -119,6 +119,9 @@ def course_template() -> dict[str, Any]:
             "extra_pass_engine": None,
             "extra_pass_model": "mlx-community/whisper-large-v3-mlx",
             "agreement_threshold": 0.72,
+            "verification_mode": "selective",
+            "recovery_engine": "fluidaudio",
+            "recovery_model": "v2",
             "diarization_engine": None,
             "professor_reference": "",
             "tools": {}
@@ -286,6 +289,12 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
     for field in ("secondary_engine", "extra_pass_engine", "diarization_engine"):
         if transcription.get(field) is not None and not isinstance(transcription[field], str):
             raise ConfigurationError(f"Course transcription {field} must be text or null")
+    for field, default in (("verification_mode", "selective"), ("recovery_engine", "fluidaudio"), ("recovery_model", "v2")):
+        transcription.setdefault(field, default)
+        if not isinstance(transcription[field], str):
+            raise ConfigurationError(f"Course transcription {field} must be text")
+    if transcription["verification_mode"] not in {"selective", "legacy"}:
+        raise ConfigurationError("Course transcription verification_mode must be selective or legacy")
     threshold = transcription.get("agreement_threshold")
     if not isinstance(threshold, (int, float)) or not 0 <= float(threshold) <= 1:
         raise ConfigurationError("Course transcription agreement_threshold must be between 0 and 1")

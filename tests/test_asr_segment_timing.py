@@ -13,7 +13,7 @@ def test_argmax_retains_glossary_and_segment_timestamps(tmp_path,monkeypatch,wor
     calls=[]
     monkeypatch.setattr(asr,'_run',lambda cmd:calls.append(cmd) or subprocess.CompletedProcess(cmd,0,json.dumps({'segments':[{'start':1,'end':3,'text':'Transformer embeddings.','avgLogprob':-.4}]}),''))
     monkeypatch.setattr(asr,'_tool_version',lambda _: 'v1.1.0')
-    engine=asr.ArgmaxEngine('/usr/bin/true',tmp_path/'models',tmp_path/'tokens',word_timestamps=word_mode)
+    engine=asr.ArgmaxEngine('/usr/bin/true',tmp_path/'models',tmp_path/'tokens',word_timestamps=word_mode,use_prompt=True)
     result=engine.transcribe(tmp_path/'input.wav',tmp_path/'out',model='test',language='en',vocabulary=['Transformer','Embeddings'],prompt='')
     cmd=calls[0]
     assert ('--word-timestamps' in cmd)==word_mode
@@ -70,8 +70,8 @@ def test_valid_legacy_transcript_is_preserved_without_asr(setup):
         timestamp_mode='segment'
     engine=Engine();course['transcription']['primary_engine']='argmax';registry={'argmax':engine}
     asr.transcribe_audio(ws,'DEMO-L01',course,audio,engines=registry)
-    path=ws.runs_dir/'DEMO-L01/asr/transcript.json';saved=json.loads(path.read_text());saved.pop('timestamp_mode')
-    _,saved['settings_hash'],saved['cache_key'],_=asr.cache_identity(ws,course,audio,engines=registry,legacy_timing=True)
+    path=ws.runs_dir/'DEMO-L01/asr/transcript.json';saved=json.loads(path.read_text());saved.pop('timestamp_mode');saved.pop('repair_policy_version',None)
+    _,saved['settings_hash'],saved['cache_key'],_=asr.cache_identity(ws,course,audio,engines=registry,legacy_timing=True,legacy_policy=True)
     atomic_json_write(path,saved);sha=file_sha256(path)
     result=asr.transcribe_audio(ws,'DEMO-L01',course,audio,engines=registry)
     assert result['cache_reused'] and engine.calls==1 and file_sha256(path)==sha

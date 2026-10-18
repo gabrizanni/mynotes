@@ -244,6 +244,7 @@ def library(workspace, *, query=None, date=None, course=None):
         actions = []
         if usable and state == 'NOT_STARTED': actions.append('enqueue')
         if usable and state in {'FAILED', 'INTERRUPTED'}: actions.append('retry')
+        if usable and job and 'recover' in job.get('actions', []): actions.append('recover')
         if usable and state in {'NEEDS_REVIEW', 'OUTDATED'}: actions.append('restart')
         if item.get('job_id') and state == 'QUEUED': actions.append('remove')
         if item.get('job_id') and state == 'RUNNING': actions.append('cancel')
@@ -326,6 +327,10 @@ def status(workspace):
                     if not _alive(job["pid"]): job["status"] = "INTERRUPTED"
                     job["phase"], job["elapsed_seconds"] = detail.get("phase"), detail.get("elapsed_seconds")
                 job['actions'] = ({'QUEUED': ['remove'], 'RUNNING': ['cancel'], 'FAILED': ['retry', 'restart'], 'INTERRUPTED': ['retry', 'restart'], 'NEEDS_REVIEW': ['restart'], 'COMPLETED': ['finish']}).get(job['status'], [])
+                if job['status'] in {'FAILED', 'INTERRUPTED', 'NEEDS_REVIEW'}:
+                    from .asr_recovery import recovery_candidate
+                    if recovery_candidate(asr_directory(workspace, item['recording'])):
+                        job['actions'].insert(0, 'recover')
                 current_recording = catalogue.get(job['recording_id'], {})
                 for key in ('export_text', 'archive_status', 'archive_error'):
                     if key in current_recording: job[key] = current_recording[key]
@@ -473,8 +478,10 @@ def run_job(workspace, identifier, *, engines=None):
         if sha == payload["audio_sha256"] and signature != payload["settings_hash"] and getattr(registry.get("argmax"), "timestamp_mode", None) == "segment":
             # An admitted 0.2.15 job keeps its frozen source/model/glossary.
             # Accept only the exact prior signature, before timing policy existed.
-            legacy_signature = cache_identity(workspace, course, Path(item["path"]), engines=engines, legacy_timing=True)[1]
-            timing_upgrade = legacy_signature == payload["settings_hash"]
+            previous_signatures = [cache_identity(workspace, course, Path(item["path"]), engines=engines,
+                legacy_timing=timing, legacy_policy=policy)[1]
+                for policy, timing in ((False, True), (True, False), (True, True))]
+            timing_upgrade = payload["settings_hash"] in previous_signatures
         if sha != payload["audio_sha256"] or (signature != payload["settings_hash"] and not timing_upgrade):
             raise ValueError("Sorgente o impostazioni cambiate: aggiungi nuovamente la registrazione alla coda")
         if engines is None:
@@ -486,17 +493,18 @@ def run_job(workspace, identifier, *, engines=None):
                     raise ValueError("Completa il download del modello nel setup prima di trascrivere")
         manifest = transcribe_audio(workspace, item.get('lecture_id') or item['id'], course, Path(item['path']),
             recording_id=item['id'] if item.get('storage_recording_id') or not item.get('lecture_id') else None,
-            engines=engines, force=payload.get('force', False))
+            engines=engines, force=payload.get('force', False), recover_from=payload.get('recover_from'))
         directory = asr_directory(workspace, item)
         result = {'status': manifest['status'], 'transcript_json': str(directory / 'transcript.json'),
             'transcript_text': str(directory / 'transcript.txt'), 'segments': len(manifest['segments']),
-            **({'timing_policy_upgrade': {'from': 'legacy_word', 'to': 'segment'}} if timing_upgrade else {}),
+            **({'timing_policy_upgrade': {'to': 'segment'}, 'asr_policy_upgrade': 'selective'} if timing_upgrade else {}),
             **{k: manifest[k] for k in ('archive_status', 'archive_error', 'current_audio_path', 'export_text') if k in manifest}}
         outcome = "COMPLETED"
     except ASRBusyError as e:
         outcome, error = "QUEUED", str(e)
     except ASRReviewError as e:
-        outcome, error = "NEEDS_REVIEW", str(e)
+        from .asr_recovery import review_message
+        outcome, error = "NEEDS_REVIEW", review_message(e)
     except (KeyboardInterrupt, SystemExit) as e:
         outcome, error = "INTERRUPTED", str(e)
     except (ValueError, OSError, ASRError) as e:
@@ -578,6 +586,8 @@ def change_job(workspace, identifier, action):
     import signal
     from .recording_library import resolve_path
     pid = None
+    if action not in {'retry', 'restart', 'recover', 'remove', 'cancel'}:
+        raise ValueError('Azione di coda non riconosciuta')
     with database(workspace) as conn:
         conn.execute('BEGIN IMMEDIATE')
         row = conn.execute('SELECT * FROM jobs WHERE id=?', (identifier,)).fetchone()
@@ -586,20 +596,27 @@ def change_job(workspace, identifier, action):
         live = row['pid'] and _alive(row['pid'])
         if action == 'remove' and row['status'] != 'QUEUED':
             raise ValueError('Solo un lavoro in attesa può essere rimosso dalla coda')
-        if action in {'retry', 'restart'} and live:
+        if action in {'retry', 'restart', 'recover'} and (live or row['status'] == 'QUEUED'):
             raise ValueError('Attendi che la trascrizione attiva termini')
         payload = json.loads(row['payload'])
-        if action in {'retry', 'restart'}:
+        if action in {'retry', 'restart', 'recover'}:
             item = payload['recording']
             item['path'] = str(resolve_path(workspace, item['path']))
             from .ingestion import is_stable
             if not Path(item['path']).is_file() or not is_stable(Path(item['path']), workspace.configuration_store().load()['ingestion']['stable_seconds']):
                 raise ValueError('Audio mancante o ancora in aggiornamento')
             from .asr import cache_identity
-            course = payload.get('course_profile') or profile(workspace, item)
+            course = deepcopy(payload.get('course_profile') or profile(workspace, item))
+            current = profile(workspace, item)['transcription']
+            if current.get('tools', {}).get('fluidaudio'):
+                course['transcription']['tools']['fluidaudio'] = current['tools']['fluidaudio']
             sha, signature, key, _ = cache_identity(workspace, course, Path(item['path']))
             if sha != payload['audio_sha256']:
                 raise ValueError('L’audio è cambiato: aggiungilo come nuova sorgente')
+            payload.pop('recover_from', None)
+            if action == 'recover':
+                from .asr_recovery import attest_recovery
+                payload['recover_from'] = attest_recovery(asr_directory(workspace, item), sha, course['transcription']['primary_model'])
             payload.update(course_profile=course, settings_hash=signature, force=action == 'restart', _claim=uuid.uuid4().hex)
             conn.execute("UPDATE jobs SET status='QUEUED',payload=?,cache_key=?,error=NULL,pid=NULL,updated=? WHERE id=?", (json.dumps(payload), key, time.time(), identifier))
         else:
@@ -616,7 +633,7 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "enqueue", "status", "pause", "resume", "configure", "heartbeat", "close", "retry", "restart", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
+    for action in ("library", "enqueue", "status", "pause", "resume", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
@@ -633,7 +650,7 @@ def add_parser(subparsers):
             target.add_argument("--recording", help="enqueue only this recording ID")
         if action in {"heartbeat", "close"}:
             command.add_argument("--session", required=True)
-        if action in {"worker", "retry", "restart", "remove", "cancel"}:
+        if action in {"worker", "retry", "restart", "recover", "remove", "cancel"}:
             command.add_argument("--job", required=True)
         if action in {'folder', 'relink'}:
             command.add_argument('--path', required=True)
@@ -680,9 +697,9 @@ def run_cli(args):
             labels[args.recording] = title
             atomic_json_write(root(ws) / "labels.json", labels)
         value = {"status": "OK"}
-    elif action in {'retry', 'restart', 'remove', 'cancel'}:
+    elif action in {'retry', 'restart', 'recover', 'remove', 'cancel'}:
         value = change_job(ws, args.job, action)
-        if action in {'retry', 'restart'}: launch_runner(ws)
+        if action in {'retry', 'restart', 'recover'}: launch_runner(ws)
     elif action == 'folder':
         from .recording_library import set_folder
         value = set_folder(ws, args.path)

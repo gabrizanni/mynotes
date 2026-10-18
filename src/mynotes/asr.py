@@ -72,6 +72,22 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
     elif isinstance(payload, dict):
         nested = payload.get("result") if isinstance(payload.get("result"), dict) else {}
         raw = payload.get("segments") or payload.get("chunks") or nested.get("segments") or []
+        timings = payload.get("wordTimings") or payload.get("word_timings")
+        if not raw and isinstance(timings, list):
+            raw, buffer = [], []
+            for word in timings:
+                if not isinstance(word, dict):
+                    continue
+                buffer.append(word)
+                start = _number(buffer[0].get("startTime", buffer[0].get("start")), float("nan"))
+                end = _number(word.get("endTime", word.get("end")), float("nan"))
+                token = str(word.get("word", word.get("text", "")))
+                if end - start >= 18 or token.rstrip().endswith((".", "?", "!")):
+                    raw.append({"start": start, "end": end, "words": buffer})
+                    buffer = []
+            if buffer:
+                raw.append({"start": buffer[0].get("startTime", buffer[0].get("start")),
+                            "end": buffer[-1].get("endTime", buffer[-1].get("end")), "words": buffer})
         if not raw and payload.get("text"):
             raw = [payload]
     else:
@@ -103,6 +119,7 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
                     "start": word_start,
                     "end": word_end,
                     "confidence": _confidence(word.get("probability", word.get("confidence"))),
+                    "confidence_source": "engine" if word.get("probability", word.get("confidence")) is not None else "unavailable",
                 }
             )
         text = str(item.get("text") or item.get("transcript") or "").strip()
@@ -115,8 +132,9 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
         confidence = _number(item.get("confidence", item.get("score")), float("nan"))
         confidence_source = "engine"
         if words:
-            confidence = sum(word["confidence"] for word in words) / len(words)
-            confidence_source = "word_average"
+            known = [word["confidence"] for word in words if word["confidence_source"] != "unavailable"]
+            confidence = sum(known) / len(known) if known else 0.0
+            confidence_source = "word_average" if len(known) == len(words) else "partial_word_average" if known else "unavailable"
         elif not math.isfinite(confidence):
             logprob = _number(item.get("avgLogprob", item.get("avg_logprob")), float("nan"))
             if math.isfinite(logprob) and logprob <= 0:
@@ -127,6 +145,12 @@ def parse_asr_payload(payload: Any) -> list[dict[str, Any]]:
                 confidence_source = "unavailable"
         normalized = {"start": start_f, "end": end_f, "text": text, "confidence": _confidence(confidence)}
         normalized["confidence_source"] = confidence_source
+        for target, aliases in {"avg_logprob": ("avgLogprob", "avg_logprob"),
+                                "compression_ratio": ("compressionRatio", "compression_ratio"),
+                                "no_speech_prob": ("noSpeechProb", "no_speech_prob")}.items():
+            value = next((item[key] for key in aliases if key in item), None)
+            if value is not None:
+                normalized[target] = _number(value, float("nan"))
         if words:
             normalized["words"] = words
         if item.get("speaker") or item.get("speakerId"):
@@ -236,9 +260,13 @@ def _run_legacy(command: list[str], *, timeout: int = 7200) -> subprocess.Comple
 def _tool_version(executable: str) -> str:
     try:
         output = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=10)
-        return (output.stdout or output.stderr).strip().splitlines()[0] or "unknown"
+        line = (output.stdout or output.stderr).strip().splitlines()[0]
+        if output.returncode == 0 and re.search(r"\d+\.\d+", line) and 'Unknown command' not in line:
+            return line
     except (OSError, subprocess.TimeoutExpired, IndexError):
-        return "unknown"
+        pass
+    path = Path(executable)
+    return 'sha256:' + file_sha256(path) if path.is_file() else "unknown"
 
 
 def _latest_segments(directory: Path) -> list[dict[str, Any]]:
@@ -255,8 +283,9 @@ def _latest_segments(directory: Path) -> list[dict[str, Any]]:
 class ArgmaxEngine:
     name = "argmax"
 
-    def __init__(self, executable: str, model_dir: Path, tokenizer_dir: Path, *, word_timestamps: bool = False) -> None:
+    def __init__(self, executable: str, model_dir: Path, tokenizer_dir: Path, *, word_timestamps: bool = False, use_prompt: bool = False) -> None:
         self.timestamp_mode = "word" if word_timestamps else "segment"
+        self.decoder_prompt = "provided" if use_prompt else "none"
         self.executable = executable
         self.model_dir = model_dir
         self.tokenizer_dir = tokenizer_dir
@@ -270,7 +299,7 @@ class ArgmaxEngine:
             version = _tool_version(self.executable)
             for number, (start, end) in enumerate(clips, start=1):
                 clip = output_dir / "clips" / f"clip-{number:03d}.wav"
-                extract_audio_clip(audio, clip, start=start, duration=max(0.1, end - start))
+                offset = extract_audio_clip(audio, clip, start=start, duration=max(0.1, end - start))
                 result = self.transcribe(
                     clip, output_dir / f"clip-{number:03d}", model=model, language=language,
                     vocabulary=vocabulary, prompt=prompt, clips=None,
@@ -278,11 +307,11 @@ class ArgmaxEngine:
                 version = result.version
                 for segment in result.segments:
                     shifted = dict(segment)
-                    shifted["start"] = _number(segment.get("start")) + start
-                    shifted["end"] = _number(segment.get("end")) + start
+                    shifted["start"] = _number(segment.get("start")) + offset
+                    shifted["end"] = _number(segment.get("end")) + offset
                     if segment.get("words"):
                         shifted["words"] = [
-                            {**word, "start": _number(word.get("start")) + start, "end": _number(word.get("end")) + start}
+                            {**word, "start": _number(word.get("start")) + offset, "end": _number(word.get("end")) + offset}
                             for word in segment["words"]
                         ]
                     combined.append(shifted)
@@ -301,7 +330,7 @@ class ArgmaxEngine:
             "--download-tokenizer-path", str(self.tokenizer_dir), "--concurrent-worker-count", "1",
         ]
         # WhisperKit 1.1.0 promptTokens + word alignment corrupts timings (#542).
-        # Segment timestamps remain enabled; retain the technical prompt.
+        # Primary decoding is unprompted; vocabulary is reserved for local verification.
         if self.timestamp_mode == "word":
             command.append("--word-timestamps")
         command.append("--incremental-loading")
@@ -310,7 +339,7 @@ class ArgmaxEngine:
         combined_prompt = ", ".join(vocabulary)
         if prompt:
             combined_prompt = f"{prompt}. {combined_prompt}" if combined_prompt else prompt
-        if combined_prompt:
+        if combined_prompt and self.decoder_prompt == "provided":
             command.extend(["--prompt", combined_prompt])
         # Existing compiled models are read concurrently; first-time model or
         # tokenizer preparation is serialized across all CLI/queue callers.
@@ -337,7 +366,18 @@ class FluidAudioEngine:
 
     def transcribe(self, audio: Path, output_dir: Path, *, model: str, language: str, vocabulary: list[str], prompt: str, clips: list[tuple[float, float]] | None = None) -> EngineResult:
         if clips:
-            raise ASRError("FluidAudio selective clip transcription is not supported by this adapter")
+            combined = []
+            version = _tool_version(self.executable)
+            for number, (start, end) in enumerate(clips, 1):
+                clip = output_dir / f"clip-{number:03d}.wav"
+                offset = extract_audio_clip(audio, clip, start=start, duration=end-start)
+                result = self.transcribe(clip, output_dir / f"clip-{number:03d}", model=model,
+                                        language=language, vocabulary=vocabulary, prompt=prompt)
+                version = result.version
+                for segment in result.segments:
+                    combined.append({**segment, "start": segment["start"]+offset, "end": segment["end"]+offset,
+                        "words": [{**word, "start": word["start"]+offset, "end": word["end"]+offset} for word in segment.get("words", [])]})
+            return EngineResult(self.name, model, version, combined, "word")
         output_dir.mkdir(parents=True, exist_ok=True)
         output = output_dir / "transcription.json"
         vocabulary_path = output_dir / "vocabulary.txt"
@@ -347,14 +387,15 @@ class FluidAudioEngine:
             "--language", language, "--metadata", "--word-timestamps", "--output-json", str(output),
         ]
         if vocabulary:
-            command.extend(["--custom-vocab", str(vocabulary_path)])
+            command.extend(["--custom-vocab", str(vocabulary_path), "--vocab-short-term-taper-pivot", "5",
+                            "--vocab-spotter-min-sim", "0.30", "--vocab-spotter-min-sim-multi", "0.50"])
         _run(command)
         if not output.is_file():
             raise ASRError("FluidAudio finished without its requested JSON output")
         segments = parse_asr_payload(json.loads(output.read_text(encoding="utf-8")))
         if not segments:
             raise ASRError("FluidAudio produced no readable transcript segments")
-        return EngineResult(self.name, model, _tool_version(self.executable), segments)
+        return EngineResult(self.name, model, _tool_version(self.executable), segments, "word")
 
 
 def normalize_audio(source: Path, destination: Path, *, afconvert: str = "/usr/bin/afconvert") -> Path:
@@ -390,38 +431,32 @@ def normalize_audio(source: Path, destination: Path, *, afconvert: str = "/usr/b
     return destination
 
 
-def extract_audio_clip(source: Path, destination: Path, *, start: float, duration: float) -> Path:
+def extract_audio_clip(source: Path, destination: Path, *, start: float, duration: float) -> float:
     """Write an exact local WAV excerpt without relying on fragile container seeking."""
+    if source.suffix.casefold() == ".wav":
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(source), "rb") as original:
+            rate = original.getframerate()
+            first = max(0, math.floor(start * rate))
+            last = min(original.getnframes(), math.ceil((start+duration) * rate))
+            if last <= first:
+                raise ASRError("Selective ASR clip is empty")
+            original.setpos(first)
+            with wave.open(str(destination), "wb") as target:
+                target.setparams(original.getparams())
+                remaining = last-first
+                while remaining:
+                    count = min(remaining, 65536)
+                    target.writeframesraw(original.readframes(count))
+                    remaining -= count
+        return first / rate
+    # All selective passes operate on normalized PCM, including external callers.
+    normalized = destination.with_name(destination.stem + "-normalized.wav")
     try:
-        import av
-    except ImportError as error:
-        raise ASRError("PyAV is required for selective local ASR passes") from error
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with av.open(str(source)) as input_container, av.open(str(destination), mode="w") as output_container:
-            input_stream = input_container.streams.audio[0]
-            input_container.seek(int(start / float(input_stream.time_base)), stream=input_stream)
-            output_stream = output_container.add_stream("pcm_s16le", rate=16000)
-            output_stream.layout = "mono"
-            resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
-            written = 0
-            maximum = int(duration * 16000)
-            for frame in input_container.decode(input_stream):
-                for converted in resampler.resample(frame):
-                    if written >= maximum:
-                        break
-                    written += converted.samples
-                    for packet in output_stream.encode(converted):
-                        output_container.mux(packet)
-                if written >= maximum:
-                    break
-            for packet in output_stream.encode(None):
-                output_container.mux(packet)
-    except Exception as error:
-        raise ASRError(f"Could not extract local ASR clip: {error}") from error
-    if not destination.is_file() or destination.stat().st_size == 0:
-        raise ASRError("Selective ASR clip is empty")
-    return destination
+        normalize_audio(source, normalized)
+        return extract_audio_clip(normalized, destination, start=start, duration=duration)
+    finally:
+        normalized.unlink(missing_ok=True)
 
 
 def _similarity(left: str, right: str) -> float:
@@ -595,7 +630,7 @@ def recording_profile(course, audio):
     return course
 
 
-def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=False):
+def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=False, legacy_policy=False):
     course = recording_profile(course, audio)
     settings = course["transcription"]
     audio_hash = file_sha256(audio)
@@ -607,6 +642,13 @@ def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=Fals
             "agreement_threshold", "diarization_engine", "professor_reference",
         )
     }
+    if not legacy_policy:
+        from .asr_recovery import PARSER_VERSION, POLICY_VERSION
+        relevant.update(verification_mode=settings.get('verification_mode', 'selective'),
+                        recovery_engine=settings.get('recovery_engine', 'fluidaudio'),
+                        recovery_model=settings.get('recovery_model', 'v2'), parser_version=PARSER_VERSION, repair_policy_version=POLICY_VERSION,
+                        logprob_threshold=settings.get('logprob_threshold', -1.0),
+                        compression_ratio_threshold=settings.get('compression_ratio_threshold', 2.4))
     registry = engines if engines is not None else default_engines(workspace, settings)
     identities = {}
     for name, engine in registry.items():
@@ -628,6 +670,8 @@ def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=Fals
         for name, engine in registry.items():
             if getattr(engine, "timestamp_mode", None):
                 identities[name]["timestamp_mode"] = engine.timestamp_mode
+            if not legacy_policy and hasattr(engine, 'decoder_prompt'):
+                identities[name]['decoder_prompt'] = engine.decoder_prompt
     relevant["cache_schema"] = 2
     relevant["engine_identity"] = identities
     relevant["configured_tools"] = settings.get("tools", {})
@@ -648,6 +692,7 @@ def _transcribe_audio_locked(
     update=None,
     attempt_dir: Path | None = None,
     force: bool = False,
+    recover_from: dict | None = None,
 ) -> dict[str, Any]:
     """Transcribe with configured passes and reuse an exact cache match."""
     update = update or (lambda *args, **kwargs: None)
@@ -659,7 +704,7 @@ def _transcribe_audio_locked(
         if settings.get(key) and settings[key] not in registry:
             raise ASRError(f"CONFIGURATION: requested ASR engine is unavailable: {settings[key]}")
     manifest_path = run_dir / "transcript.json"
-    if manifest_path.is_file() and not force:
+    if manifest_path.is_file() and not force and not recover_from:
         try:
             cached = json.loads(manifest_path.read_text(encoding="utf-8"))
             issues = validate_transcript(cached, cached.get("audio_duration_seconds"))
@@ -669,10 +714,18 @@ def _transcribe_audio_locked(
             compatible = cached.get("cache_key") == cache_key
             # Preserve already validated legacy transcripts. Only fresh passes
             # change timing policy; a new explicit retry never consumes old passes.
-            if (not compatible and not issues and cached.get("status") == "COMPLETED"
-                    and "timestamp_mode" not in cached and settings["primary_engine"] == "argmax"):
-                legacy_key = cache_identity(workspace, course, audio, engines=engines, legacy_timing=True)[2]
-                compatible = cached.get("cache_key") == legacy_key
+            if not compatible and not issues and cached.get('status') == 'COMPLETED' and not cached.get('repair_policy_version'):
+                from copy import deepcopy
+                candidates = [(course, registry)]
+                # Adding a repair tool cannot invalidate an already validated
+                # final transcript from a single-primary legacy configuration.
+                if not settings.get('secondary_engine') and not settings.get('extra_pass_engine'):
+                    previous = deepcopy(course)
+                    previous['transcription']['tools'].pop('fluidaudio', None)
+                    candidates.append((previous, {k: v for k, v in registry.items() if k != 'fluidaudio'}))
+                compatible = any(cached.get('cache_key') == cache_identity(workspace, previous, audio,
+                    engines=old_registry, legacy_policy=True, legacy_timing=timing)[2]
+                    for previous, old_registry in candidates for timing in (False, True))
             if compatible and not issues and cached.get("status") == "COMPLETED":
                 cached["cache_reused"] = True
                 update("completed", status="COMPLETED", cache_reused=True, transcript_json=str(manifest_path))
@@ -703,16 +756,34 @@ def _transcribe_audio_locked(
     if primary_name not in registry:
         raise ASRError(f"Requested primary ASR engine is unavailable: {primary_name}")
     prompt = f"Spoken with {settings['accent']} accent" if settings.get("accent") else ""
+    selective = primary_name == 'argmax' and settings.get('verification_mode', 'selective') == 'selective'
     passes: list[EngineResult] = []
     update("primary_pass")
-    primary = _engine_pass(registry[primary_name], pass_root / "primary.json", duration,
-        normalized_audio, run_dir / "primary", model=settings["primary_model"], language=settings["language"],
-        vocabulary=settings["vocabulary"], prompt=prompt,
-    )
-    validate_engine_result(primary, run_dir / "primary-result.json", duration)
+    if recover_from:
+        from .asr_recovery import load_recovery
+        primary = load_recovery(recover_from, audio_hash, normalized_audio)
+        atomic_json_write(run_dir/'primary-result.json', {'engine': primary.engine, 'model': primary.model,
+            'version': primary.version, 'timestamp_mode': primary.timestamp_mode, 'segments': primary.segments,
+            'segments_sha256': segments_digest(primary.segments), 'recovered_from': recover_from})
+    else:
+        primary = _engine_pass(registry[primary_name], pass_root / "primary.json", duration,
+            normalized_audio, run_dir / "primary", model=settings["primary_model"], language=settings["language"],
+            vocabulary=settings["vocabulary"], prompt=prompt, validate_result=not selective)
+    atomic_json_write(run_dir/'primary-binding.json', {'audio_sha256': audio_hash,
+        'normalized_audio_sha256': file_sha256(normalized_audio), 'primary_sha256': file_sha256(run_dir/'primary-result.json'),
+        'settings_hash': settings_hash, 'engine': primary.engine, 'model': primary.model, 'parser_version': 3,
+        'engine_reports': {str(p.relative_to(run_dir)): file_sha256(p) for p in (run_dir/'primary').glob('*.json')}})
+    repair_report = None
+    if selective:
+        from .asr_recovery import repair, PARSER_VERSION, POLICY_VERSION
+        recovery_name = settings.get('recovery_engine', 'fluidaudio')
+        primary, repair_report = repair(primary, audio=normalized_audio, duration=duration,
+            engine=registry.get(recovery_name), settings={**settings, '_force_fresh': force}, directory=run_dir, update=update)
+    else:
+        validate_engine_result(primary, run_dir / "primary-result.json", duration)
     passes.append(primary)
     secondary_segments: list[dict[str, Any]] = []
-    if settings.get("secondary_engine"):
+    if settings.get("secondary_engine") and not selective:
         name = settings["secondary_engine"]
         if name not in registry:
             raise ASRError(f"Requested secondary ASR engine is unavailable: {name}")
@@ -725,7 +796,13 @@ def _transcribe_audio_locked(
         passes.append(secondary)
         secondary_segments = secondary.segments
     merged, review_windows = merge_passes(primary.segments, secondary_segments, threshold=settings["agreement_threshold"])
-    if settings.get("extra_pass_engine") and review_windows:
+    if selective:
+        for source, segment in zip(primary.segments, merged):
+            segment.update(needs_review=False, agreement=None, agreement_source='selective_check' if source.get('recovery_window') else 'not_independently_measured')
+            for key in ('source_engine', 'recovery_window', 'avg_logprob', 'compression_ratio', 'no_speech_prob'):
+                if key in source: segment[key] = source[key]
+        review_windows = []
+    if settings.get("extra_pass_engine") and review_windows and not selective:
         name = settings["extra_pass_engine"]
         if name not in registry:
             raise ASRError(f"Requested extra-pass ASR engine is unavailable: {name}")
@@ -751,6 +828,13 @@ def _transcribe_audio_locked(
         "passes": [{"engine": item.engine, "model": item.model, "version": item.version, **({"timestamp_mode": item.timestamp_mode} if item.timestamp_mode else {})} for item in passes],
         "diarization": diarization, "segments": merged,
     }
+    if selective:
+        manifest.update(parser_version=PARSER_VERSION, repair_policy_version=POLICY_VERSION, timestamp_quality='indicative',
+                        verification_mode='selective', repair=repair_report,
+                        primary_decoder_prompt='recovered_legacy_report' if recover_from else 'none',
+                        recovered_from= recover_from)
+        for receipt in (repair_report or {}).get('attempted_clips', []):
+            manifest['passes'].append({k: receipt[k] for k in ('engine', 'model', 'version', 'window', 'clip', 'core', 'audio_sha256')})
     update("validating")
     issues = validate_transcript(manifest, duration)
     if file_sha256(audio) != audio_hash:
@@ -866,7 +950,7 @@ def asr_workspace_lock(workspace: Workspace):
         yield
 
 
-def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None, force=False):
+def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, progress=False, _lecture_locked=False, recording_id=None, force=False, recover_from=None):
     from contextlib import nullcontext
     from .workflow import _generation_lock, WorkflowError, parse_lecture_id
     course = recording_profile(course, audio)
@@ -887,6 +971,8 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
             started = time.time()
             state = {"schema_version": 1, "lecture_id": lecture_id, "attempt_id": attempt_id, "pid": os.getpid(), "started_at": started, "status": "RUNNING"}
             def update(phase, **changes):
+                if phase == 'processing' and state.get('repair_window'):
+                    phase = 'repairing'
                 state.update(changes)
                 state.update(phase=phase, updated_at=time.time(), elapsed_seconds=round(time.time() - started, 2))
                 atomic_json_write(state_path, state)
@@ -904,7 +990,7 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
                     raise SystemExit("Transcription interrupted by SIGTERM")
                 signal.signal(signal.SIGTERM, interrupted)
             try:
-                result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir, force=force)
+                result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir, force=force, recover_from=recover_from)
                 if result.get("cache_reused"):
                     text_path = directory / "transcript.txt"
                     write_transcript_text(text_path, result)
@@ -931,19 +1017,27 @@ def segments_digest(segments) -> str:
 
 
 
-def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, language, vocabulary, prompt, clips=None):
+def _engine_pass(engine, cache_path, duration, audio, output_dir, *, model, language, vocabulary, prompt, clips=None, validate_result=True):
     """Reuse only an explicitly verified pass bound to the complete request key."""
     try:
         saved = json.loads(cache_path.read_text())
         if saved.get("segments_sha256") != segments_digest(saved.get("segments")) or saved.get("model") != model or saved.get("engine") != engine.name or saved.get("timestamp_mode") != getattr(engine, "timestamp_mode", None) or saved.get("clips") != (list(map(list, clips)) if clips else None):
             raise ValueError("Pass cache mismatch")
         result = EngineResult(saved["engine"], saved["model"], saved["version"], saved["segments"], saved.get("timestamp_mode"))
-        validate_engine_result(result, output_dir.parent / f"{output_dir.name}-reused.json", duration, ordered=not bool(clips))
+        # Implicit retry may reuse valid work only. Invalid raw reports are
+        # consumed exclusively by the explicitly attested recovery action.
+        validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
+        if not validate_result:
+            atomic_json_write(output_dir.parent/f'{output_dir.name}-result.json', saved)
         return result
     except (OSError, ValueError, TypeError, KeyError, ASRReviewError):
         pass
     result = engine.transcribe(audio, output_dir, model=model, language=language, vocabulary=vocabulary, prompt=prompt, clips=clips)
-    validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
+    if validate_result:
+        validate_engine_result(result, output_dir.parent / f"{output_dir.name}-result.json", duration, ordered=not bool(clips))
+    else:
+        atomic_json_write(output_dir.parent/f'{output_dir.name}-result.json', {'engine': result.engine, 'model': result.model,
+            'version': result.version, 'segments': result.segments, 'timestamp_mode': result.timestamp_mode, 'segments_sha256': segments_digest(result.segments)})
     atomic_json_write(cache_path, {"engine": result.engine, "model": result.model, "version": result.version,
         "segments": result.segments, "segments_sha256": segments_digest(result.segments),
         **({"timestamp_mode": result.timestamp_mode} if result.timestamp_mode else {}),

@@ -224,7 +224,7 @@ extension CaptureQueue {
 enum CaptureProblem {
     static func summary(status: String) -> String {
         switch status {
-        case "NEEDS_REVIEW": return "Il risultato non supera i controlli. L’audio è conservato; puoi avviare una nuova trascrizione da zero."
+        case "NEEDS_REVIEW": return "Il risultato richiede una verifica. Audio e diagnosi sono conservati; usa l’azione disponibile per procedere."
         case "INTERRUPTED", "CANCELLED": return "La trascrizione è stata interrotta. Audio e tentativi precedenti sono conservati."
         case "OUTDATED": return "L’audio è cambiato rispetto alla trascrizione salvata. Verifica la sorgente prima di riprovare."
         case "WAITING": return "L’audio non è ancora pronto: potrebbe essere in salvataggio, assente o disponibile soltanto nel cloud."
@@ -243,7 +243,7 @@ extension CaptureRecording {
     }
     func arguments(for action: String, parallel: Int) -> [String]? {
         switch action {
-        case "remove", "cancel", "retry", "restart":
+        case "remove", "cancel", "retry", "restart", "recover":
             guard let jobID, !jobID.isEmpty else { return nil }
             return ["--job", jobID]
         case "download", "finish": return ["--recording", id]

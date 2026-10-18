@@ -275,3 +275,34 @@ label can name the file before course association; this does not assign a course
 Free recordings without a lesson retain their title-based unique filenames.
 The recording collection is chosen by the user; an existing `registration agent`
 folder can be selected. Existing originals are never overwritten.
+
+
+## Selective local verification
+
+New Argmax passes use segment timestamps without a decoder prompt. Timestamps
+are indicative navigation aids; word timing precision is not promised. The
+saved language override and course language remain authoritative. Unknown or
+model-derived confidence is not treated as measured agreement.
+
+Timing defects, abnormal repetition and decoder quality warnings identify local
+windows. The configured FluidAudio v2 tool verifies only those windows, with
+five seconds of context and at most ninety seconds per clip. Clips use exact
+PCM sample indices. Overlapping windows are merged, and verification stops
+before calling FluidAudio if it would cover more than 30% of the recording.
+Each window receives at most one automatic pass. Engine disagreements, different
+numbers or unmatched boundary words leave the attempt **Da verificare**.
+
+**Ripara passaggi dubbi** (`transcription-queue recover --job ID`) reuses a saved
+primary report only after verifying the original hash, attempt identity, report
+integrity and normalized audio. Valid clip results can be reused across recovery
+attempts. **Trascrivi da zero** always bypasses old pass and clip results. Both
+paths retain raw reports, previous text, alternatives and provenance privately.
+No final TXT or original-file move occurs until validation succeeds. Already
+validated legacy final results remain reusable with the same source/settings;
+legacy filenames or matching durations alone never establish source identity.
+
+Configure an existing local FluidAudio CLI through the course transcription
+`tools.fluidaudio` path. No engine/model upgrade is needed. If that tool is
+unavailable and a repair is required, the attempt stops with a recoverable
+explanation. Capture, direct chat transcription and lesson preparation all use
+the same pipeline, shared ASR slot and finalization.
