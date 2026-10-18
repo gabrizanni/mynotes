@@ -167,6 +167,7 @@ class EngineResult:
     version: str
     segments: list[dict[str, Any]]
     timestamp_mode: str | None = None
+    verified_empty: bool = False
 
 
 class SpeechEngine(Protocol):
@@ -392,10 +393,17 @@ class FluidAudioEngine:
         _run(command)
         if not output.is_file():
             raise ASRError("FluidAudio finished without its requested JSON output")
-        segments = parse_asr_payload(json.loads(output.read_text(encoding="utf-8")))
-        if not segments:
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        segments = parse_asr_payload(payload)
+        # A successful no-speech report is evidence of a completed comparison,
+        # distinct from a missing or malformed engine report.
+        verified_empty = (isinstance(payload, dict) and payload.get('text') == ''
+                          and payload.get('wordTimings') == [] and payload.get('audioFile') == str(audio)
+                          and math.isfinite(_number(payload.get('durationSeconds'), float('nan')))
+                          and _number(payload.get('durationSeconds')) > 0)
+        if not segments and not verified_empty:
             raise ASRError("FluidAudio produced no readable transcript segments")
-        return EngineResult(self.name, model, _tool_version(self.executable), segments, "word")
+        return EngineResult(self.name, model, _tool_version(self.executable), segments, "word", verified_empty)
 
 
 def normalize_audio(source: Path, destination: Path, *, afconvert: str = "/usr/bin/afconvert") -> Path:
@@ -630,7 +638,7 @@ def recording_profile(course, audio):
     return course
 
 
-def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=False, legacy_policy=False):
+def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=False, legacy_policy=False, repair_policy_version=None):
     course = recording_profile(course, audio)
     settings = course["transcription"]
     audio_hash = file_sha256(audio)
@@ -646,7 +654,7 @@ def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=Fals
         from .asr_recovery import PARSER_VERSION, POLICY_VERSION
         relevant.update(verification_mode=settings.get('verification_mode', 'selective'),
                         recovery_engine=settings.get('recovery_engine', 'fluidaudio'),
-                        recovery_model=settings.get('recovery_model', 'v2'), parser_version=PARSER_VERSION, repair_policy_version=POLICY_VERSION,
+                        recovery_model=settings.get('recovery_model', 'v2'), parser_version=PARSER_VERSION, repair_policy_version=repair_policy_version or POLICY_VERSION,
                         logprob_threshold=settings.get('logprob_threshold', -1.0),
                         compression_ratio_threshold=settings.get('compression_ratio_threshold', 2.4))
     registry = engines if engines is not None else default_engines(workspace, settings)
@@ -712,6 +720,9 @@ def _transcribe_audio_locked(
             if not normalized.is_file() or file_sha256(normalized) != cached.get("normalized_audio_sha256") or cached.get("segments_sha256") != segments_digest(cached.get("segments")):
                 issues.append({"reason": "Cache integrity mismatch"})
             compatible = cached.get("cache_key") == cache_key
+            if not compatible and not issues and cached.get('status') == 'COMPLETED' and cached.get('repair_policy_version') == 2:
+                compatible = cached.get('cache_key') == cache_identity(workspace, course, audio,
+                    engines=registry, repair_policy_version=2)[2]
             # Preserve already validated legacy transcripts. Only fresh passes
             # change timing policy; a new explicit retry never consumes old passes.
             if not compatible and not issues and cached.get('status') == 'COMPLETED' and not cached.get('repair_policy_version'):
@@ -798,8 +809,8 @@ def _transcribe_audio_locked(
     merged, review_windows = merge_passes(primary.segments, secondary_segments, threshold=settings["agreement_threshold"])
     if selective:
         for source, segment in zip(primary.segments, merged):
-            segment.update(needs_review=False, agreement=None, agreement_source='selective_check' if source.get('recovery_window') else 'not_independently_measured')
-            for key in ('source_engine', 'recovery_window', 'avg_logprob', 'compression_ratio', 'no_speech_prob'):
+            segment.update(needs_review=bool(source.get('uncertainty_codes')), agreement=None, agreement_source='selective_check' if source.get('recovery_window') else 'not_independently_measured')
+            for key in ('source_engine', 'recovery_window', 'avg_logprob', 'compression_ratio', 'no_speech_prob', 'uncertainty_codes', 'asr_alternative', 'checked_by'):
                 if key in source: segment[key] = source[key]
         review_windows = []
     if settings.get("extra_pass_engine") and review_windows and not selective:
@@ -831,6 +842,10 @@ def _transcribe_audio_locked(
     if selective:
         manifest.update(parser_version=PARSER_VERSION, repair_policy_version=POLICY_VERSION, timestamp_quality='indicative',
                         verification_mode='selective', repair=repair_report,
+                        completion_policy='checked_with_warnings', human_verified=False,
+                        quality_warnings=(repair_report or {}).get('warnings', []),
+                        quality_summary=('Pronta per gli appunti. I passaggi dubbi sono stati confrontati con un secondo motore; alcune incertezze restano segnalate.'
+                                         if (repair_report or {}).get('warnings') else None),
                         primary_decoder_prompt='recovered_legacy_report' if recover_from else 'none',
                         recovered_from= recover_from)
         for receipt in (repair_report or {}).get('attempted_clips', []):
@@ -937,8 +952,13 @@ def validate_engine_result(result: EngineResult, path: Path, duration: float | N
 def write_transcript_text(path: Path, manifest: dict) -> None:
     from tempfile import NamedTemporaryFile
     with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
+        if manifest.get('timestamp_quality') == 'indicative':
+            handle.write('Timestamp indicativi. Trascrizione automatica.\n')
+        if manifest.get('quality_summary'):
+            handle.write(manifest['quality_summary'] + '\nI passaggi incerti sono indicati con [passaggio incerto].\n')
         for segment in manifest["segments"]:
-            handle.write(f"[{segment['start']}–{segment['end']}] {segment.get('speaker', 'UNKNOWN')}: {segment['text']}\n")
+            marker = ' [passaggio incerto]' if segment.get('uncertainty_codes') else ''
+            handle.write(f"[{segment['start']}–{segment['end']}] {segment.get('speaker', 'UNKNOWN')}{marker}: {segment['text']}\n")
         temporary = handle.name
     os.replace(temporary, path)
 

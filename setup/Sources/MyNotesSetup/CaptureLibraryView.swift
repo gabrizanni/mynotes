@@ -180,6 +180,9 @@ struct CaptureRecordingsView: View {
                         if !item.createdAt.isEmpty { LabeledContent("Registrata", value: CaptureDates.label(item.createdAt)) }
                         if let duration = item.duration { LabeledContent("Durata", value: "\(Int(duration / 60)) min \(Int(duration) % 60) s") }
                         Label(captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
+                        if item.isTranscribed, let summary = item.qualitySummary {
+                            Label(summary, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
                         if item.hasProblem {
                             Label(item.reviewSummary ?? CaptureProblem.summary(status: item.transcriptionState), systemImage: "exclamationmark.triangle")
                                 .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
@@ -296,6 +299,7 @@ struct CaptureRecordingsView: View {
             }
             if job.archiveStatus == "PENDING" { Label("Trascritta — archiviazione da completare", systemImage: "folder.badge.questionmark").foregroundStyle(.orange) }
             if let summary = job.reviewSummary { Text(summary).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+            if job.status == "COMPLETED", let summary = job.qualitySummary { Text(summary).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let error = job.error, !error.isEmpty {
                 DisclosureGroup("Problema e diagnosi") {
                     Text(CaptureProblem.summary(status: job.status)).font(.callout)

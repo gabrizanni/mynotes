@@ -112,13 +112,16 @@ def test_extensive_repairs_never_start_second_engine(tmp_path):
     assert engine.calls==0 and not (directory/'transcript.txt').exists()
 
 
-def test_disagreement_keeps_diagnosis_and_never_publishes(tmp_path):
+def test_disagreement_completes_with_alternatives_and_real_replacement_timing(tmp_path):
     data=rows();data[5]['end']-=1.02;directory=tmp_path/'a';directory.mkdir()
-    with pytest.raises(asr.ASRReviewError,match='disagree'):
-        repair(asr.EngineResult('argmax','x','x',data),audio=wav(tmp_path/'input.wav'),duration=100,
-               engine=Local(rows(),9,bad=True),settings={'language':'en','vocabulary':[]},directory=directory,update=lambda *a,**k:None)
-    assert json.loads((directory/'repair-plan.json').read_text())['issues'][-1]['code']=='MATERIAL_DISAGREEMENT'
-    assert not (directory/'transcript.txt').exists()
+    fixed, report = repair(asr.EngineResult('argmax','x','x',data),audio=wav(tmp_path/'input.wav'),duration=100,
+        engine=Local(rows(),9,bad=True),settings={'language':'en','vocabulary':[]},directory=directory,update=lambda *a,**k:None)
+    assert 'MATERIAL_DISAGREEMENT' in {w['code'] for w in report['warnings']}
+    assert fixed.segments[5]['text']=='Completely different 12345.'
+    assert fixed.segments[5]['asr_alternative']=='foxtrot.'
+    assert fixed.segments[5]['source_engine']=='fluidaudio'
+    assert report['comparisons'][0]['original_text']=='foxtrot.'
+    assert report['attempted_clips'] and report['completion_policy']=='checked_with_warnings'
 
 
 def test_recovery_checks_attempt_original_normalized_and_report(tmp_path):
@@ -159,18 +162,22 @@ def test_queue_recovery_is_explicit_and_single_admission(tmp_path,monkeypatch):
     assert file_sha256(Path(result['current_audio_path']))==file_sha256(source) if source.exists() else True
 
 
-def test_boundary_loss_is_never_silently_accepted(tmp_path):
-    original=rows();broken=[dict(s) for s in original];broken[5]['end']-=1.02
+def test_uncertain_boundary_retains_valid_primary_after_second_check(tmp_path):
+    original=rows();original[5]['avg_logprob']=-1.2
     class MissingBoundary(Local):
         def transcribe(self,*a,**kw):
             result=super().transcribe(*a,**kw)
             result.segments[5]['text']='Lost boundary.'
             return result
-    directory=tmp_path/'a';directory.mkdir()
-    with pytest.raises(asr.ASRReviewError):
-        repair(asr.EngineResult('argmax','x','x',broken),audio=wav(tmp_path/'input.wav'),duration=100,
-               engine=MissingBoundary(original,9),settings={'language':'en','vocabulary':[]},directory=directory,update=lambda *a,**k:None)
-    assert not (directory/'transcript.txt').exists()
+    directory=tmp_path/'a';directory.mkdir();engine=MissingBoundary(rows(),9)
+    fixed,report=repair(asr.EngineResult('argmax','x','x',original),audio=wav(tmp_path/'input.wav'),duration=100,
+        engine=engine,settings={'language':'en','vocabulary':[]},directory=directory,update=lambda *a,**k:None)
+    assert engine.calls==1 and fixed.segments[5]['text']=='foxtrot.'
+    assert fixed.segments[5]['asr_alternative']=='Lost boundary.'
+    assert fixed.segments[5]['checked_by']=='fluidaudio'
+    assert fixed.segments[5]['source_engine']=='argmax'
+    assert 'REPAIR_BOUNDARY_MISMATCH' in fixed.segments[5]['uncertainty_codes']
+    assert any(w['code']=='RESIDUAL_ENGINE_QUALITY_WARNING' for w in report['warnings'])
 
 
 def test_configured_quality_thresholds_are_reused():
@@ -224,3 +231,99 @@ def test_free_recordings_find_existing_managed_fluid_without_course_setup(tmp_pa
     monkeypatch.setattr(asr.shutil,'which',lambda _:None)
     registry=asr.default_engines(Workspace(tmp_path),{'tools':{}})
     assert registry['fluidaudio'].executable=='/usr/bin/true'
+
+
+def test_independent_pass_continues_after_disagreement_and_final_timing_still_blocks(tmp_path):
+    original=rows(); original += [{**s,'start':s['start']+40,'end':s['end']+40} for s in rows()]
+    original[5]['avg_logprob']=-1.2;original[25]['avg_logprob']=-1.2
+    engine=Local(rows()+[{**s,'start':s['start']+40,'end':s['end']+40} for s in rows()],0,bad=True)
+    d=tmp_path/'attempt';d.mkdir()
+    fixed,plan=repair(asr.EngineResult('argmax','x','x',original),audio=wav(tmp_path/'a.wav',seconds=150),duration=150,
+        engine=engine,settings={'language':'en','vocabulary':[],'_force_fresh':True},directory=d,update=lambda *a,**k:None)
+    assert engine.calls==2 and len(plan['attempted_clips'])==2
+    assert fixed.segments[5]['text']==original[5]['text'] and fixed.segments[25]['text']==original[25]['text']
+    class Invalid(Local):
+        def transcribe(self,*a,**kw):
+            result=super().transcribe(*a,**kw);result.segments[0]['end']=result.segments[0]['start'];return result
+    other=tmp_path/'invalid';other.mkdir()
+    with pytest.raises(asr.ASRReviewError):
+        repair(asr.EngineResult('argmax','x','x',original),audio=tmp_path/'a.wav',duration=150,
+            engine=Invalid(rows(),0),settings={'language':'en','vocabulary':[],'_force_fresh':True},directory=other,update=lambda *a,**k:None)
+
+
+def test_completed_uncertain_transcript_exports_archives_and_prepares_without_asr(tmp_path,monkeypatch):
+    from mynotes.workspace import Workspace
+    from mynotes import transcription_queue as q, recording_library as lib
+    from mynotes.sourcepack import _import_transcript
+    monkeypatch.setenv('MYNOTES_CAPTURE_HOME',str(tmp_path/'native'))
+    monkeypatch.setattr('mynotes.onboarding.managed_tools',lambda:{})
+    ws=Workspace(tmp_path/'private');ws.initialize();cfg=ws.configuration_store().load();cfg['ingestion']['stable_seconds']=0;ws.configuration_store().save(cfg)
+    folder=tmp_path/'Originals';lib.set_folder(ws,folder);audio=wav(folder/'External.wav');digest=file_sha256(audio)
+    class Primary:
+        name='argmax'
+        def transcribe(self,*a,**kw):
+            data=rows();data[5]['avg_logprob']=-1.2
+            return asr.EngineResult('argmax',kw['model'],'fixture',data,'segment')
+    engine=Local(rows(),0,bad=True);registry={'argmax':Primary(),'fluidaudio':engine}
+    monkeypatch.setattr(asr,'default_engines',lambda *a:registry)
+    item=q.library(ws)[0];q.enqueue(ws,recording_id=item['id']);job=q.status(ws)['jobs'][0]
+    import os
+    with q.database(ws) as c:c.execute("UPDATE jobs SET status='RUNNING',pid=? WHERE id=?",(os.getpid(),job['id']))
+    result=q.run_job(ws,job['id'],engines=registry)
+    assert result['status']=='COMPLETED' and result['quality_summary'] and result['archive_status']=='COMPLETED'
+    assert file_sha256(Path(result['current_audio_path']))==digest and engine.calls==1
+    text=Path(result['export_text']).read_text()
+    assert '[passaggio incerto]' in text and 'Timestamp indicativi' in text
+    saved=json.loads(Path(result['transcript_json']).read_text())
+    assert saved['status']=='COMPLETED' and saved['human_verified'] is False and saved['quality_warnings']
+    assert saved['segments'][5]['text']=='foxtrot.' and saved['segments'][5]['needs_review']
+    imported=_import_transcript(Path(result['transcript_json']),'QA-L01',bound_recording_id=item['id'])
+    assert imported['quality_warnings']==saved['quality_warnings'] and imported['segments'][5]['asr_alternative']
+    item=q.library(ws)[0]
+    assert item['transcription_status']=='COMPLETED' and item['quality_summary'] and 'restart' not in item['actions']
+    assert q.status(ws)['jobs'][0]['quality_summary']
+
+
+def test_previous_valid_policy_two_cache_does_not_repeat_asr(tmp_path,monkeypatch):
+    from mynotes.workspace import Workspace
+    from mynotes.configuration import course_template
+    from test_transcription_reliability import Fake
+    monkeypatch.setattr('mynotes.onboarding.managed_tools',lambda:{})
+    ws=Workspace(tmp_path/'private');ws.initialize();course=course_template();course.update(code='QA',name='QA')
+    engine=Fake();engine.name='argmax';registry={'argmax':engine};audio=wav(tmp_path/'original.wav')
+    asr.transcribe_audio(ws,'QA-L01',course,audio,engines=registry)
+    path=ws.runs_dir/'QA-L01/asr/transcript.json';payload=json.loads(path.read_text());payload['repair_policy_version']=2
+    _,payload['settings_hash'],payload['cache_key'],_=asr.cache_identity(ws,course,audio,engines=registry,repair_policy_version=2)
+    atomic_json_write(path,payload)
+    result=asr.transcribe_audio(ws,'QA-L01',course,audio,engines=registry)
+    assert result['cache_reused'] and engine.calls==1
+
+
+def test_verified_empty_secondary_keeps_primary_with_warning_but_not_empty_primary(tmp_path):
+    data=rows();data[5]['avg_logprob']=-1.2
+    class Silent:
+        name='fluidaudio'
+        def transcribe(self,*a,**kw):return asr.EngineResult('fluidaudio','v2','fixture',[],'word',True)
+    d=tmp_path/'asr/attempts/a';d.mkdir(parents=True)
+    result,plan=repair(asr.EngineResult('argmax','x','x',data),audio=wav(tmp_path/'a.wav'),duration=100,
+        engine=Silent(),settings={'language':'en','vocabulary':[]},directory=d,update=lambda *a,**k:None)
+    assert result.segments[5]['text']=='foxtrot.'
+    assert 'EMPTY_REPAIR' in result.segments[5]['uncertainty_codes'] and plan['attempted_clips'][0]['verified_empty']
+    with pytest.raises(asr.ASRReviewError):asr.validate_engine_result(asr.EngineResult('argmax','x','x',[]),d/'empty-primary.json',100)
+
+
+@pytest.mark.parametrize('valid',[False,True])
+def test_fluid_distinguishes_no_speech_from_malformed_output(tmp_path,monkeypatch,valid):
+    source=wav(tmp_path/'source.wav')
+    def run(cmd):
+        output=Path(cmd[cmd.index('--output-json')+1])
+        payload={'text':'','wordTimings':[],'durationSeconds':100,'audioFile':str(source)} if valid else {}
+        atomic_json_write(output,payload)
+        return subprocess.CompletedProcess(cmd,0,'','')
+    monkeypatch.setattr(asr,'_run',run);monkeypatch.setattr(asr,'_tool_version',lambda _:'fixture')
+    engine=asr.FluidAudioEngine('/usr/bin/true')
+    if valid:
+        result=engine.transcribe(source,tmp_path/'out',model='v2',language='en',vocabulary=[],prompt='')
+        assert result.verified_empty and result.segments==[]
+    else:
+        with pytest.raises(asr.ASRError,match='no readable'):engine.transcribe(source,tmp_path/'out',model='v2',language='en',vocabulary=[],prompt='')

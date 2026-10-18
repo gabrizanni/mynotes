@@ -77,7 +77,9 @@ def test_valid_asr_exports_txt_and_moves_original_byte_identical(setup):
     item = queue.library(ws)[0]
     assert item['id'] == identifier and item['transcription_status'] == 'COMPLETED'
     assert Path(item['export_text']).parent == folder / 'Trascrizioni' / 'Senza corso'
-    assert Path(item['export_text']).read_text().startswith('[00:00:00')
+    exported = Path(item['export_text']).read_text().splitlines()
+    assert exported[0] == 'Timestamp indicativi. Trascrizione automatica.'
+    assert exported[1].startswith('[00:00:00')
     assert Path(result['transcript_json']).is_relative_to(ws.runs_dir)
     assert all(p.suffix not in {'.json', '.log'} for p in folder.rglob('*') if p.is_file())
     assert engine.calls == 1

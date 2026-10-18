@@ -289,8 +289,14 @@ windows. The configured FluidAudio v2 tool verifies only those windows, with
 five seconds of context and at most ninety seconds per clip. Clips use exact
 PCM sample indices. Overlapping windows are merged, and verification stops
 before calling FluidAudio if it would cover more than 30% of the recording.
-Each window receives at most one automatic pass. Engine disagreements, different
-numbers or unmatched boundary words leave the attempt **Da verificare**.
+Each window receives at most one automatic pass. After the independent pass,
+text disagreements, different numbers and uncertain boundaries are nonblocking
+warnings. The result becomes **Trascritta**, ready for notes; doubtful passages
+are marked in the TXT and alternatives remain in private reports. Where alignment
+is uncertain, usable primary text is retained; invalid primary intervals still
+require genuine, validated secondary timing. Residual quality warnings never
+mean human verification. Changed sources, invalid final timing, missing engines,
+incomplete independent passes and the 30% scope limit still block completion.
 
 **Ripara passaggi dubbi** (`transcription-queue recover --job ID`) reuses a saved
 primary report only after verifying the original hash, attempt identity, report

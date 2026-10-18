@@ -145,6 +145,7 @@ def library(workspace, *, query=None, date=None, course=None):
                             if path.with_suffix(".txt").is_file():
                                 item["transcript_text"] = str(path.with_suffix(".txt"))
                             item["transcript_json"] = str(path)
+                            item['quality_summary'] = saved.get('quality_summary')
                         else:
                             item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio è cambiato dopo la trascrizione. Verifica la sorgente prima di ritrascrivere."})
                 else:
@@ -218,6 +219,7 @@ def library(workspace, *, query=None, date=None, course=None):
                         if result.get("transcript_text") and Path(result["transcript_text"]).is_file():
                             item["transcript_text"] = result["transcript_text"]
                         item["transcript_json"] = str(candidate)
+                        item['quality_summary'] = saved.get('quality_summary')
                     else:
                         job_state = "NEEDS_REVIEW"
                         item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione collegata non supera i controlli di integrità."})
@@ -317,6 +319,7 @@ def status(workspace):
                 if raw_result:
                     result = json.loads(raw_result)
                     job["outputs"] = {key: result[key] for key in ("transcript_json", "transcript_text") if key in result}
+                    job['quality_summary'] = result.get('quality_summary')
                 if job['status'] == 'CANCELLING' and not _alive(job['pid']):
                     job['status'] = 'CANCELLED'
                 try:
@@ -502,7 +505,7 @@ def run_job(workspace, identifier, *, engines=None):
         result = {'status': manifest['status'], 'transcript_json': str(directory / 'transcript.json'),
             'transcript_text': str(directory / 'transcript.txt'), 'segments': len(manifest['segments']),
             **({'timing_policy_upgrade': {'to': 'segment'}, 'asr_policy_upgrade': 'selective'} if timing_upgrade else {}),
-            **{k: manifest[k] for k in ('archive_status', 'archive_error', 'current_audio_path', 'export_text') if k in manifest}}
+            **{k: manifest[k] for k in ('archive_status', 'archive_error', 'current_audio_path', 'export_text', 'quality_summary') if k in manifest}}
         outcome = "COMPLETED"
     except ASRBusyError as e:
         outcome, error = "QUEUED", str(e)

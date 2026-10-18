@@ -239,7 +239,11 @@ ASR attempt, recover --job ID for hash-verified selective repair of saved report
 remove for queued jobs, cancel for active jobs, and finish to retry exports
 without rerunning ASR. New Argmax passes use indicative segment timestamps and no
 decoder prompt. FluidAudio verifies only doubtful local windows (at most 30% of
-the audio); unresolved disagreements keep the result private and uncompleted.
+the audio). After that check, residual text disagreements are nonblocking warnings:
+the transcript is completed, exported and ready for notes with uncertainty markers
+and private alternatives retained. Completion is not human verification. Invalid
+timing, changed sources, missing reports or an incomplete independent pass remain
+blocking. Never silently guess disputed numbers or claims when preparing notes.
 Never treat a queue removal as deleting an original.
 Configure Capture once, then import the complete normalized timetable or subscribe
 to an ICS/iCal feed using importMode=all_timed, teaching period and timezone. New complete calendars

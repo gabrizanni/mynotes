@@ -10,8 +10,10 @@ import re
 
 from .utils import atomic_json_write, file_sha256
 
-POLICY_VERSION = 2
+POLICY_VERSION = 3
 PARSER_VERSION = 3
+# Completion policy changed; the bounded audio/decoder request did not.
+CLIP_POLICY_VERSION = 2
 
 
 def _finite(value):
@@ -111,7 +113,9 @@ def repair(primary, *, audio, duration, engine, settings, directory, update):
     from .asr import ASRReviewError, EngineResult, validate_engine_result, extract_audio_clip, parse_asr_payload
     issues, groups = assessment(primary.segments, duration, settings)
     report = directory/'repair-plan.json'
-    plan = {'policy_version': POLICY_VERSION, 'parser_version': PARSER_VERSION, 'issues': issues, 'windows': groups, 'attempted_clips': []}
+    plan = {'policy_version': POLICY_VERSION, 'parser_version': PARSER_VERSION,
+            'completion_policy': 'checked_with_warnings', 'issues': issues,
+            'warnings': [], 'windows': groups, 'attempted_clips': []}
     atomic_json_write(report, plan)
     def reject(code, reason):
         plan['issues'].append({'code': code, 'reason': reason})
@@ -145,7 +149,7 @@ def repair(primary, *, audio, duration, engine, settings, directory, update):
             request = {'engine': engine.name, 'executable_sha256': file_sha256(executable) if executable.is_file() else None,
                        'clip_sha256': receipt['audio_sha256'], 'language': settings['language'],
                        'model': settings.get('recovery_model', settings.get('secondary_model', 'v2')),
-                       'vocabulary': settings['vocabulary'], 'policy_version': POLICY_VERSION, 'parser_version': PARSER_VERSION}
+                       'vocabulary': settings['vocabulary'], 'policy_version': CLIP_POLICY_VERSION, 'parser_version': PARSER_VERSION}
             import hashlib
             shared = directory.parent.parent/'repair-cache'/hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()/'result.json'
             result = None
@@ -156,14 +160,16 @@ def repair(primary, *, audio, duration, engine, settings, directory, update):
                     saved = json.loads(cache.read_text())
                     from .asr import segments_digest
                     if saved.get('request') == request and saved.get('segments_sha256') == segments_digest(saved.get('segments')):
-                        result = EngineResult(engine.name, request['model'], saved['version'], saved['segments'], 'word')
+                        result = EngineResult(engine.name, request['model'], saved['version'], saved['segments'], 'word', saved.get('verified_empty', False))
                 except (OSError, ValueError, KeyError, TypeError):
                     pass
             if result is None:
                 result = engine.transcribe(clip, target/'engine', model=request['model'], language=request['language'], vocabulary=request['vocabulary'], prompt='')
-            validate_engine_result(result, target/'checked-result.json', end-offset)
+            if result.segments or not result.verified_empty:
+                validate_engine_result(result, target/'checked-result.json', end-offset)
             from .asr import segments_digest
-            saved = {'request': request, 'version': result.version, 'segments': result.segments, 'segments_sha256': segments_digest(result.segments)}
+            saved = {'request': request, 'version': result.version, 'segments': result.segments,
+                     'verified_empty': result.verified_empty, 'segments_sha256': segments_digest(result.segments)}
             atomic_json_write(target/'result.json', saved)
             if not settings.get('_force_fresh'):
                 atomic_json_write(shared, saved)
@@ -176,28 +182,53 @@ def repair(primary, *, audio, duration, engine, settings, directory, update):
             selected = _word_segments(selected_words) if selected_words else [
                 {**s, 'start': s['start']+offset, 'end': s['end']+offset}
                 for s in result.segments if low <= s['start']+offset < s['end']+offset <= high]
-            if not selected:
-                reject('EMPTY_REPAIR', 'The independent engine returned no usable text inside a passage that needs verification')
             pieces.extend(selected)
-            receipt.update(engine=engine.name, model=result.model, version=result.version, selected_segments=len(selected))
+            receipt.update(engine=engine.name, model=result.model, version=result.version,
+                           selected_segments=len(selected), verified_empty=result.verified_empty)
             plan['attempted_clips'].append(receipt)
+            atomic_json_write(report, plan)
             low = high
-        original = ' '.join(s['text'] for s in primary.segments[group['first']:group['last']+1])
+        original_rows = deepcopy(primary.segments[group['first']:group['last']+1])
+        original = ' '.join(s['text'] for s in original_rows)
         replacement = ' '.join(s['text'] for s in pieces)
         clean = lambda text: ' '.join(re.findall(r"\w+", text.casefold()))
         numbers = lambda text: set(re.findall(r'\b\d+(?:[.,]\d+)?\b', text))
         agreement = SequenceMatcher(None, clean(original), clean(replacement), autojunk=False).ratio()
         evidence = {**group, 'original_text': original, 'replacement_text': replacement, 'agreement': agreement}
         plan.setdefault('comparisons', []).append(evidence)
-        if agreement < settings.get('agreement_threshold', .72) or numbers(original) != numbers(replacement):
-            reject('MATERIAL_DISAGREEMENT', 'The engines disagree on a repaired passage; no final transcript or TXT was published')
+        warnings = []
+        if any(c['window'] == number and c['selected_segments'] == 0 for c in plan['attempted_clips']):
+            warnings.append('NO_SECONDARY_TEXT_IN_CORE')
+        if not pieces:
+            warnings.append('EMPTY_REPAIR')
+        elif agreement < settings.get('agreement_threshold', .72) or numbers(original) != numbers(replacement):
+            warnings.append('MATERIAL_DISAGREEMENT')
         original_tokens, replacement_tokens = clean(original).split(), clean(replacement).split()
         if original_tokens[:2] != replacement_tokens[:2] or original_tokens[-2:] != replacement_tokens[-2:]:
-            reject('REPAIR_BOUNDARY_MISMATCH', 'The repair does not preserve its boundary anchors; no words were silently removed or duplicated')
-        for s in pieces:
-            s['source_engine'] = engine.name
+            warnings.append('REPAIR_BOUNDARY_MISMATCH')
+        # When text alignment is uncertain, retain usable primary text instead
+        # of guessing that the secondary wording is better. Invalid primary
+        # timing must still be replaced by genuine, validated secondary timing.
+        from .asr import validate_transcript
+        original_valid = not validate_transcript({'segments': [
+            {**s, 'start_seconds': s['start'], 'end_seconds': s['end']} for s in original_rows]}, duration)
+        use_primary = bool(warnings and original_valid)
+        chosen = original_rows if use_primary else pieces
+        if not chosen:
+            reject('EMPTY_REPAIR', 'Neither engine provides a usable passage; original audio and alternatives are preserved')
+        evidence.update(selected_engine=primary.engine if use_primary else engine.name, warning_codes=warnings)
+        for code in warnings:
+            plan['warnings'].append({'code': code, 'window': number, 'start': group['start'], 'end': group['end'],
+                                     'selected_engine': evidence['selected_engine']})
+        for s in chosen:
+            s['source_engine'] = evidence['selected_engine']
             s['recovery_window'] = number
-        replacements.append((group, pieces))
+            s['checked_by'] = engine.name
+            if warnings:
+                s['uncertainty_codes'] = warnings.copy()
+                s['asr_alternative'] = replacement if use_primary else original
+        replacements.append((group, chosen))
+        atomic_json_write(report, plan)
     combined, cursor = [], 0
     for group, pieces in replacements:
         combined.extend(deepcopy(primary.segments[cursor:group['first']]))
@@ -207,8 +238,13 @@ def repair(primary, *, audio, duration, engine, settings, directory, update):
     repaired = EngineResult(primary.engine, primary.model, primary.version, combined, primary.timestamp_mode)
     validate_engine_result(repaired, directory/'repaired-result.json', duration)
     remaining, _ = assessment(repaired.segments, duration, settings)
-    if remaining:
-        reject('UNRESOLVED_REPAIR', 'Quality issues remain after the single permitted repair pass')
+    # Structural errors were checked above. Residual linguistic uncertainty is
+    # disclosed, but does not prevent notes after the independent local pass.
+    for issue in remaining:
+        plan['warnings'].append({**issue, 'code': 'RESIDUAL_' + issue.get('code', 'QUALITY_WARNING')})
+        if issue.get('segment'):
+            row = repaired.segments[issue['segment']-1]
+            row.setdefault('uncertainty_codes', []).append(issue.get('code', 'QUALITY_WARNING'))
     atomic_json_write(report, plan)
     return repaired, plan
 

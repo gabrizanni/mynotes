@@ -227,6 +227,7 @@ def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str |
         "source_path": str(path),
         "source_sha256": descriptor["sha256"],
         "segments": segments,
+        **{key: payload[key] for key in ('quality_summary', 'quality_warnings', 'completion_policy', 'human_verified', 'timestamp_quality') if key in payload},
     }
 
 

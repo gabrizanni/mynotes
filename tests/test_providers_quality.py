@@ -703,3 +703,12 @@ def test_numeric_table_can_use_inspected_raster_source_without_inserting_picture
     pack['visuals'][0]['page']=3;path.unlink()
     with pytest.raises(WorkflowError,match='lacks numeric values'):
         _validate_numeric_table_support(block,evidence,source_pack=pack,decisions=decision,source_root=tmp_path)
+
+
+def test_uncertain_asr_evidence_and_alternative_reach_writer_even_in_reduced_mode():
+    request=ProviderRequest('QA-L01',{'name':'QA'},{},RequestedModel('agy','fixture','high','standard'),context_mode='reduced',
+        source_pack={'evidence':[{'id':'T001','kind':'transcript','text':'The value is 2.', 'confidence':0,
+            'uncertainty_codes':['MATERIAL_DISAGREEMENT'],'asr_alternative':'The value is 3.','checked_by':'fluidaudio'}]})
+    context=_context(request)
+    assert 'The value is 2.' in context and 'The value is 3.' in context and 'MATERIAL_DISAGREEMENT' in context
+    assert 'do not silently guess disputed numbers' in _prompt(request)
