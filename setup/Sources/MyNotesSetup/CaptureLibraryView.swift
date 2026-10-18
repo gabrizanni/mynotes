@@ -181,7 +181,7 @@ struct CaptureRecordingsView: View {
                         if let duration = item.duration { LabeledContent("Durata", value: "\(Int(duration / 60)) min \(Int(duration) % 60) s") }
                         Label(captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
                         if item.hasProblem {
-                            Label(CaptureProblem.summary(status: item.transcriptionState), systemImage: "exclamationmark.triangle")
+                            Label(item.reviewSummary ?? CaptureProblem.summary(status: item.transcriptionState), systemImage: "exclamationmark.triangle")
                                 .font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                         }
                         if !item.detailMessages.isEmpty || item.diagnosticPath != nil {
@@ -295,6 +295,7 @@ struct CaptureRecordingsView: View {
                 Button("Apri trascrizione") { model.openFile(path) }
             }
             if job.archiveStatus == "PENDING" { Label("Trascritta — archiviazione da completare", systemImage: "folder.badge.questionmark").foregroundStyle(.orange) }
+            if let summary = job.reviewSummary { Text(summary).font(.callout).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
             if let error = job.error, !error.isEmpty {
                 DisclosureGroup("Problema e diagnosi") {
                     Text(CaptureProblem.summary(status: job.status)).font(.callout)

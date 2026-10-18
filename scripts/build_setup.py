@@ -27,7 +27,8 @@ def build(payload: Path) -> Path:
         shutil.copy2(binary_root / 'MyNotesSetup', app / 'Contents/MacOS/MyNotesSetup')
         info = plistlib.loads((ROOT / 'setup/Resources/Info.plist').read_bytes())
         info['CFBundleShortVersionString'] = tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']
-        info['CFBundleVersion'] = info['CFBundleShortVersionString']
+        major, minor, patch = map(int, info['CFBundleShortVersionString'].split('.'))
+        info['CFBundleVersion'] = str(major * 1000000 + minor * 10000 + patch * 100)
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
         subprocess.run(['ditto', str(payload), str(app / 'Contents/Resources/release')], check=True)
         for name in ('MyNotes.icns', 'MyNotesLogo.png'):

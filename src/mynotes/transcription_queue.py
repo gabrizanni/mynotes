@@ -253,6 +253,7 @@ def library(workspace, *, query=None, date=None, course=None):
         if usable and state not in {'QUEUED', 'RUNNING', 'CANCELLING'} and item.get('storage_recording_id'):
             actions.append('associate')
         item['actions'] = actions
+        item['review_summary'] = job.get('review_summary') if job and state == 'NEEDS_REVIEW' else None
         item['queue_position'] = job.get('queue_position') if job else None
         item['wait_reason'] = queue_state.get('wait_reason') if state == 'QUEUED' else None
         item['status'] = state if state != 'NOT_STARTED' else item['status']
@@ -331,6 +332,9 @@ def status(workspace):
                     from .asr_recovery import recovery_candidate
                     if recovery_candidate(asr_directory(workspace, item['recording'])):
                         job['actions'].insert(0, 'recover')
+                if job['status'] == 'NEEDS_REVIEW':
+                    from .asr_recovery import review_summary
+                    job['review_summary'] = review_summary(detail.get('issues', []))
                 current_recording = catalogue.get(job['recording_id'], {})
                 for key in ('export_text', 'archive_status', 'archive_error'):
                     if key in current_recording: job[key] = current_recording[key]

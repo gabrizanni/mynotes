@@ -310,3 +310,18 @@ def review_message(error):
         'UNRESOLVED_REPAIR': 'Restano problemi dopo l’unico passaggio automatico di riparazione.',
     }
     return messages[code] + ' Audio e diagnosi sono conservati; nessuna trascrizione finale è stata pubblicata.' if code in messages else str(error)
+
+
+
+def review_summary(issues):
+    """A failed check has already run; describe its actual result to the user."""
+    codes = {issue.get('code') for issue in issues if isinstance(issue, dict)}
+    if codes & {'MATERIAL_DISAGREEMENT', 'REPAIR_BOUNDARY_MISMATCH', 'UNRESOLVED_REPAIR'}:
+        return 'Confronto del testo non conclusivo. Alcuni passaggi restano dubbi; audio e diagnosi sono conservati.'
+    if codes & {'INVALID_SEGMENT_INTERVAL', 'SEGMENTS_OUT_OF_ORDER', 'NON_FINITE_TIMESTAMP', 'WORD_OUTSIDE_SEGMENT', 'TIMESTAMP_BEYOND_AUDIO', 'EMPTY_INTERVAL_AFTER_ROUNDING'}:
+        return 'Trascrizione bloccata: timestamp incoerenti. L’audio è conservato; il controllo non indica che tutta la trascrizione sia sbagliata.'
+    if 'REPAIR_TOO_EXTENSIVE' in codes:
+        return 'Troppi passaggi dubbi per una riparazione locale. Audio e diagnosi sono conservati.'
+    if 'REPAIR_ENGINE_UNAVAILABLE' in codes:
+        return 'Riparazione in attesa del motore locale FluidAudio. Audio e risultati già elaborati sono conservati.'
+    return None

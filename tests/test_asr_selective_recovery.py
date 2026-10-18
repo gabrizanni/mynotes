@@ -207,3 +207,20 @@ def test_repetition_across_segment_boundaries_is_verified_without_deleting_words
     issues,windows=assessment(data,100)
     assert sum(i['code']=='REPETITIVE_SEGMENTS' for i in issues)==3 and windows
     assert data==before
+
+
+def test_review_summary_distinguishes_completed_checks_from_pending_verification():
+    from mynotes.asr_recovery import review_summary
+    assert 'timestamp incoerenti' in review_summary([{'code':'INVALID_SEGMENT_INTERVAL'}])
+    assert 'timestamp incoerenti' in review_summary([{'code':'SEGMENTS_OUT_OF_ORDER'}])
+    assert 'Confronto del testo' in review_summary([{'code':'REPAIR_BOUNDARY_MISMATCH'}])
+    assert review_summary([]) is None
+
+
+def test_free_recordings_find_existing_managed_fluid_without_course_setup(tmp_path,monkeypatch):
+    from mynotes.workspace import Workspace
+    monkeypatch.setattr('mynotes.onboarding.managed_tools',lambda:{})
+    monkeypatch.setattr('mynotes.onboarding.managed_tool',lambda name:'/usr/bin/true' if name=='fluidaudio' else None)
+    monkeypatch.setattr(asr.shutil,'which',lambda _:None)
+    registry=asr.default_engines(Workspace(tmp_path),{'tools':{}})
+    assert registry['fluidaudio'].executable=='/usr/bin/true'

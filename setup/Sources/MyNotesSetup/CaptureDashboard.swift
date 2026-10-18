@@ -130,6 +130,7 @@ struct CaptureRecording: Codable, Identifiable {
     var courseCode: String?; var lectureID: String?; var duration: Double?; var createdAt: String
     var transcriptText: String?
     var exportText: String?
+    var reviewSummary: String?
     var diagnosticPath: String?
     var collection: String?
     var archiveStatus: String?
@@ -151,6 +152,7 @@ struct CaptureRecording: Codable, Identifiable {
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
         case transcriptionStatus = "transcription_status", canTranscribe = "can_transcribe", audioAvailable = "audio_available"
         case warnings, blockingReasons = "blocking_reasons"
+        case reviewSummary = "review_summary"
         case diagnosticPath = "diagnostic_path"
         case actions, collection, exportText = "export_text", archiveStatus = "archive_status", archiveError = "archive_error"
         case jobID = "job_id", queuePosition = "queue_position", waitReason = "wait_reason"
@@ -164,6 +166,7 @@ struct CaptureQueueJob: Codable, Identifiable {
     var status: String; var error: String?; var phase: String?; var elapsedSeconds: Double?
     var actions: [String]?
     var queuePosition: Int?
+    var reviewSummary: String?
     var diagnosticPath: String?
     var outputs: [String: String]?
     var exportText: String?
@@ -172,6 +175,7 @@ struct CaptureQueueJob: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, title, status, error, phase, actions, outputs
         case exportText = "export_text", archiveStatus = "archive_status", archiveError = "archive_error"
+        case reviewSummary = "review_summary"
         case queuePosition = "queue_position", diagnosticPath = "diagnostic_path"
         case recordingID = "recording_id", courseCode = "course_code", elapsedSeconds = "elapsed_seconds", createdAt = "created_at"
     }

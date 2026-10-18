@@ -607,7 +607,7 @@ def default_engines(workspace: Workspace, settings: dict[str, Any]) -> dict[str,
     argmax = tools.get("argmax") or managed_tool("argmax") or shutil.which("argmax-cli")
     if argmax:
         result["argmax"] = ArgmaxEngine(argmax, data_root / "whisperkit", data_root / "tokenizers")
-    fluid = tools.get("fluidaudio") or shutil.which("fluidaudio") or shutil.which("fluidaudiocli")
+    fluid = tools.get("fluidaudio") or managed_tool("fluidaudio") or shutil.which("fluidaudio") or shutil.which("fluidaudiocli")
     if fluid:
         result["fluidaudio"] = FluidAudioEngine(fluid)
     return result
