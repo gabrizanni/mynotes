@@ -53,3 +53,12 @@ def test_native_unknown_process_and_active_lesson_are_not_reported_as_off(store,
 def test_native_invalid_dates_fail_instead_of_inventing_order(store,native):
     capture.import_schedule(store,[event()]);value=capture_dashboard.dashboard(store);value['events'][0]['startsAt']='invalid'
     assert native(value).returncode==2
+
+
+def test_future_calendar_problem_is_not_a_failed_transcription(store,native):
+    capture.import_schedule(store,[event()])
+    value=capture_dashboard.dashboard(store)
+    value['events'][0]['eligibility']='NEEDS_REVIEW'
+    result=native(value)
+    assert result.returncode==0,result.stderr
+    assert json.loads(result.stdout)['statuses']==['Programmazione da completare']

@@ -53,7 +53,7 @@ struct CaptureEvent: Codable, Identifiable {
         switch eligibility {
         case "SCHEDULED": return "Programmata"
         case "CONFLICT": return "Conflitto"
-        case "NEEDS_REVIEW": return "Trascrizione non riuscita"
+        case "NEEDS_REVIEW": return "Programmazione da completare"
         case "CANCELLED": return recordingEnabled ? "Annullata" : "Esclusa localmente"
         default: return "Stato non riconosciuto"
         }
