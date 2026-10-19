@@ -33,7 +33,8 @@ print("PASS")
     assert run.returncode==0,run.stderr
 
 
-def test_native_bulk_ignores_errors_and_repeated_clicks(tmp_path):
+@pytest.mark.parametrize('fail_first', [False, True])
+def test_native_bulk_ignores_errors_and_repeated_clicks(tmp_path, fail_first):
     rows=[{'id':str(i),'path':'/synthetic.wav','title':f'Audio {i}','status':state,'created_at':'2026-01-01T00:00:00Z','actions':actions} for i,state,actions in [(1,'NOT_STARTED',['enqueue']),(2,'NOT_STARTED',['enqueue']),(3,'FAILED',['retry'])]]
     (tmp_path/'rows.json').write_text(json.dumps(rows))
     prefix=tmp_path/'prefix';(prefix/'bin').mkdir(parents=True)
@@ -42,7 +43,10 @@ def test_native_bulk_ignores_errors_and_repeated_clicks(tmp_path):
 r=pathlib.Path(os.environ['UI_TEST_ROOT']);a=sys.argv[2]
 if a=='enqueue':
  with (r/'calls').open('a') as f:f.write(sys.argv[sys.argv.index('--recording')+1]+'\\n')
- time.sleep(.15);out={'status':'QUEUED','added':1}
+ time.sleep(.15)
+ if os.environ.get('UI_FAIL_FIRST')=='1' and sys.argv[sys.argv.index('--recording')+1]=='1':
+  print('mynotes: Lecture id must use COURSE-LNN with an alphanumeric course code');raise SystemExit(1)
+ out={'status':'QUEUED','added':1,'notices':[{'message':'Contesto della lezione non disponibile: trascrivo con il profilo del corso.'}]}
 elif a=='dashboard':out={'schemaVersion':1,'configured':True,'enabled':True,'paused':False,'running':True,'runtime':{'recording':False,'exporting':False,'sessions':[]},'sources':[],'events':[],'courses':[],'refreshHours':6}
 elif a=='status':out={'parallel':1,'paused':False,'ui_open':True,'jobs':[]}
 elif a=='library':out={'recordings':json.loads((r/'rows.json').read_text())}
@@ -63,8 +67,14 @@ print(json.dumps(out))
   precondition(model.queueBusy)
   await model.enqueueSelection(rows, selectedCount: 3)
   await first.value
-  precondition(model.error == nil && !model.queueBusy)
-  precondition(model.notice?.contains("2 registrazioni aggiunte") == true)
+  precondition(!model.queueBusy)
+  if ProcessInfo.processInfo.environment["UI_FAIL_FIRST"] == "1" {
+   precondition(model.error?.contains("Associazione della lezione non valida") == true)
+   precondition(model.notice?.contains("1 registrazione aggiunta") == true)
+  } else {
+   precondition(model.error == nil && model.notice?.contains("2 registrazioni aggiunte") == true)
+  }
+  precondition(model.notice?.contains("Contesto della lezione non disponibile") == true)
   precondition(model.notice?.contains("1 escluse") == true)
   print("PASS")
  }
@@ -73,7 +83,7 @@ print(json.dumps(out))
     source=Path(__file__).parents[1]/'setup/Sources/MyNotesSetup';binary=tmp_path/'bulk-test'
     built=subprocess.run(['swiftc','-parse-as-library','-swift-version','5','-target','arm64-apple-macosx14.0','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'CaptureModel.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
     assert built.returncode==0,built.stderr
-    env={**os.environ,'MYNOTES_PREFIX':str(prefix),'MYNOTES_WORKSPACE':str(tmp_path/'workspace'),'MYNOTES_HOME':str(tmp_path/'home'),'UI_TEST_ROOT':str(tmp_path)}
+    env={**os.environ,'MYNOTES_PREFIX':str(prefix),'MYNOTES_WORKSPACE':str(tmp_path/'workspace'),'MYNOTES_HOME':str(tmp_path/'home'),'UI_TEST_ROOT':str(tmp_path), 'UI_FAIL_FIRST':'1' if fail_first else '0'}
     env.pop('MYNOTES_CAPTURE_PREVIEW',None)
     run=subprocess.run([str(binary)],env=env,cwd=tmp_path,capture_output=True,text=True,timeout=30)
     assert run.returncode==0,run.stderr

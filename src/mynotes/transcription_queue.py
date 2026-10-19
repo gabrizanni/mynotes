@@ -56,19 +56,30 @@ def asr_directory(workspace, recording):
 
 
 def profile(workspace, recording):
+    """Lesson context enriches ASR; missing context cannot prevent transcription."""
     from .configuration import course_template
-    from .sourcepack import transcription_course_context
-    if recording.get("course_code") in {c["code"] for c in workspace.configuration_store().load()["courses"]}:
-        if recording.get("lecture_id"):
-            course = transcription_course_context(workspace, recording["lecture_id"])
-        else:
-            course = deepcopy(next(c for c in workspace.configuration_store().load()["courses"] if c["code"] == recording["course_code"]))
+    from .sourcepack import transcription_course_context, SourcePackError
+    from .extraction import ExtractionError
+    from .workflow import parse_lecture_id, WorkflowError
+    courses = {c['code']: c for c in workspace.configuration_store().load()['courses']}
+    recording.pop('context_warning', None)
+    code = recording.get('course_code')
+    if code in courses:
+        course = deepcopy(courses[code])
+        if recording.get('lecture_id'):
+            try:
+                parsed_code, _ = parse_lecture_id(recording['lecture_id'])
+                if parsed_code != code:
+                    raise WorkflowError('Il codice della lezione non corrisponde al corso')
+                course = transcription_course_context(workspace, recording['lecture_id'])
+            except (WorkflowError, SourcePackError, ExtractionError, OSError):
+                recording['context_warning'] = 'Contesto della lezione non disponibile: trascrivo con il profilo del corso.'
     else:
         course = course_template()
-        course.update(name=recording["title"])
-        course["transcription"]["language"] = "auto"
-    if recording.get("language"):
-        course["transcription"]["language"] = recording["language"]
+        course.update(name=recording['title'])
+        course['transcription']['language'] = 'auto'
+    if recording.get('language'):
+        course['transcription']['language'] = recording['language']
     return course
 
 
@@ -398,16 +409,18 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
     if parallel is not None and (type(parallel) is not int or not 1 <= parallel <= 4):
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
-    from .recording_library import sync
+    from .recording_library import sync, discover
+    if recording_id is not None and not any(item['id'] == recording_id for item in discover(workspace)):
+        raise ValueError("Registrazione non trovata")
+    sync(workspace)
     recordings = library(workspace)
     if recording_id is not None:
         recordings = [item for item in recordings if item["id"] == recording_id]
         if not recordings:
             raise ValueError("Registrazione non trovata")
-    sync(workspace)
     if parallel is not None:
         configure(workspace, parallel=parallel)
-    added, skipped, reuse_archives = 0, [], []
+    added, skipped, reuse_archives, notices = 0, [], [], []
     for item in recordings:
         state = item["transcription_status"]
         if recording_id is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
@@ -428,6 +441,8 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
                 added += 1
                 continue
         course = profile(workspace, item)
+        if item.get('context_warning'):
+            notices.append({'recording_id': item['id'], 'message': item['context_warning']})
         sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
         transcript = asr_directory(workspace, item) / "transcript.json"
         if transcript.is_file():
@@ -462,7 +477,57 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
     from .recording_library import finish
     for item, path in reuse_archives:
         finish(workspace, item, path)
-    return {"status": "QUEUED", "added": added, "completed_reused": len(reuse_archives), "skipped": skipped, "queue": status(workspace)}
+    return {"status": "QUEUED", "added": added, "completed_reused": len(reuse_archives), "skipped": skipped, "notices": notices, "queue": status(workspace)}
+
+
+def refresh_queued_association(workspace, identifier):
+    """Reconcile inference before admission; never touch an active/frozen worker."""
+    from .asr import cache_identity
+    from .recording_library import save
+    with database(workspace, readonly=True) as conn:
+        row = conn.execute("SELECT * FROM jobs WHERE id=? AND status='QUEUED'", (identifier,)).fetchone()
+    if row is None:
+        return False
+    payload = json.loads(row['payload'])
+    old = payload['recording']
+    current = next((r for r in library(workspace) if r['id'] == old['id']), None)
+    if current is None:
+        with database(workspace) as conn:
+            conn.execute("UPDATE jobs SET status='CANCELLED',error='Audio rimosso dalla raccolta',updated=? WHERE id=? AND status='QUEUED' AND payload=?", (time.time(), identifier, row['payload']))
+        return False
+    fields = ('path', 'title', 'course_code', 'lecture_id', 'association_source', 'association_filename', 'association_state')
+    if all(old.get(k) == current.get(k) for k in fields):
+        return True
+    if not current['audio_available'] or not current['stable']:
+        with database(workspace) as conn:
+            conn.execute("UPDATE jobs SET error='Audio non ancora disponibile sul Mac o in aggiornamento',updated=? WHERE id=? AND status='QUEUED' AND payload=?", (time.time(), identifier, row['payload']))
+        return False
+    association_changed = current.get('association_source') == 'filename' and (old.get('course_code'), old.get('lecture_id')) != (current.get('course_code'), current.get('lecture_id'))
+    course = profile(workspace, current) if association_changed else payload.get('course_profile') or profile(workspace, current)
+    sha, signature, key, _ = cache_identity(workspace, course, Path(current['path']))
+    if sha != payload['audio_sha256']:
+        # A rename never authorizes transcription of different source bytes.
+        with database(workspace) as conn:
+            conn.execute("UPDATE jobs SET status='FAILED',error='Il contenuto audio è cambiato: scegli Riprova per elaborare la nuova sorgente.',updated=? WHERE id=? AND status='QUEUED' AND payload=?", (time.time(), identifier, row['payload']))
+        return False
+    payload.update(recording=current, course_profile=course, settings_hash=signature)
+    with database(workspace) as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        owned = conn.execute("SELECT 1 FROM jobs WHERE id=? AND status='QUEUED' AND payload=?", (identifier, row['payload'])).fetchone()
+        if owned is None:
+            return False
+        duplicate = conn.execute('SELECT id FROM jobs WHERE cache_key=? AND id!=?', (key, identifier)).fetchone()
+        if duplicate:
+            # Keep the source job and its complete history; no duplicate ASR.
+            # The user can explicitly requeue if that source job was cancelled.
+            stat = Path(current['path']).stat()
+            conn.execute('INSERT OR REPLACE INTO recording_aliases VALUES (?,?,?,?)', (current['id'], duplicate['id'], stat.st_mtime_ns, stat.st_size))
+            conn.execute("UPDATE jobs SET status='CANCELLED',error='Sorgente già presente nella coda con le stesse impostazioni',updated=? WHERE id=?", (time.time(), identifier))
+            return False
+        conn.execute('INSERT INTO queue_events(job_id,action,created,detail) VALUES (?,?,?,?)', (identifier, 'association_refresh', time.time(), row['payload']))
+        conn.execute("UPDATE jobs SET payload=?,cache_key=?,updated=?,error=NULL WHERE id=?", (json.dumps(payload), key, time.time(), identifier))
+    save(workspace, current)
+    return True
 
 
 def configure(workspace, *, parallel=None, paused=None):
@@ -545,7 +610,7 @@ def run_job(workspace, identifier, *, engines=None):
          'started_at':payload.get('started_at', time.time()), 'started_clock':payload.get('started_clock', continuous_time())}).start()
     item, outcome, result, error = payload["recording"], "FAILED", None, None
     from .recording_library import resolve_path
-    item['path'] = str(resolve_path(workspace, item['path']))
+    item['path'] = str(resolve_path(workspace, item['path'], recording_id=item['id']))
     try:
         course = payload.get("course_profile") or profile(workspace, item)
         sha, signature, key, registry = cache_identity(workspace, course, Path(item["path"]), engines=engines)
@@ -608,6 +673,7 @@ def run_job(workspace, identifier, *, engines=None):
 
 
 def run(workspace, *, tick=1):
+    from .asr import ASRError
     from .capture import CaptureStore, capture_status
     directory = root(workspace)
     directory.mkdir(parents=True, exist_ok=True)
@@ -649,6 +715,13 @@ def run(workspace, *, tick=1):
             if ready and not blocked and len(children) < snapshot["parallel"]:
                 pending = next((j for j in snapshot["jobs"] if j["status"] == "QUEUED" and (not j.get("error") or time.time() - j["updated"] >= 10)), None)
                 if pending:
+                    try:
+                        if not refresh_queued_association(workspace, pending['id']):
+                            continue
+                    except (OSError, ValueError, ASRError) as error:
+                        with database(workspace) as conn:
+                            conn.execute("UPDATE jobs SET status='FAILED',error=?,updated=? WHERE id=? AND status='QUEUED'", ('Preparazione della trascrizione non riuscita: ' + str(error), time.time(), pending['id']))
+                        continue
                     with database(workspace) as conn:
                         conn.execute("BEGIN IMMEDIATE")
                         controls = settings(workspace)
@@ -694,13 +767,17 @@ def change_job(workspace, identifier, action):
             raise ValueError('Attendi che la trascrizione attiva termini')
         payload = json.loads(row['payload'])
         if action in {'retry', 'restart', 'recover'}:
-            item = payload['recording']
-            item['path'] = str(resolve_path(workspace, item['path']))
+            previous = payload['recording']
+            current_recording = next((r for r in library(workspace) if r['id'] == previous['id']), previous)
+            item = current_recording if current_recording.get('association_source') == 'filename' else previous
+            payload['recording'] = item
+            item['path'] = str(resolve_path(workspace, item['path'], recording_id=item['id']))
             from .ingestion import is_stable
             if not Path(item['path']).is_file() or not is_stable(Path(item['path']), workspace.configuration_store().load()['ingestion']['stable_seconds']):
                 raise ValueError('Audio mancante o ancora in aggiornamento')
             from .asr import cache_identity
-            course = deepcopy(payload.get('course_profile') or profile(workspace, item))
+            changed_association = item.get('association_source') == 'filename' and (item.get('course_code'), item.get('lecture_id')) != (previous.get('course_code'), previous.get('lecture_id'))
+            course = deepcopy(profile(workspace, item) if changed_association else payload.get('course_profile') or profile(workspace, item))
             current = profile(workspace, item)['transcription']
             if current.get('tools', {}).get('fluidaudio'):
                 course['transcription']['tools']['fluidaudio'] = current['tools']['fluidaudio']

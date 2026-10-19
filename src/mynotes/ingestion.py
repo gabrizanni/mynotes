@@ -53,28 +53,39 @@ def _alias_index(configuration: dict[str, Any]) -> dict[str, set[str]]:
     return result
 
 
-def parse_recording_name(path: Path, configuration: dict[str, Any]) -> tuple[str, int] | None:
-    """Resolve one filename using only configured codes and unambiguous aliases."""
-    codes = {course["code"] for course in configuration["courses"]}
-    canonical = re.fullmatch(r"(?P<course>[A-Za-z0-9]+)_L(?P<number>\d{1,3})", path.stem)
-    if canonical and canonical["course"].upper() in codes:
-        return canonical["course"].upper(), int(canonical["number"])
-
-    compact = _name_key(path.stem)
-    aliases = _alias_index(configuration)
-    matches: list[tuple[int, str, int]] = []
-    for alias, course_codes in aliases.items():
-        if len(course_codes) != 1 or not compact.startswith(alias):
+def recording_name_association(path: Path, configuration: dict[str, Any]) -> tuple[str | None, int | None]:
+    """Infer course and optional lesson without merging separate numeric tokens."""
+    stem = path.stem.casefold().strip()
+    # Finder's explicit copy suffix is not another lesson number.
+    copy = re.search(r"\s+\(([0-9]+)\)$", stem)
+    if copy and int(copy[1]) >= 2:
+        stem = stem[:copy.start()]
+    positions = [i for i, char in enumerate(stem) if re.fullmatch('[a-z0-9]', char)]
+    compact = ''.join(stem[i] for i in positions)
+    matches = []
+    for alias, codes in _alias_index(configuration).items():
+        if not compact.startswith(alias):
             continue
-        remainder = compact[len(alias) :]
-        lesson = re.fullmatch(r"(?:l|lecture|lesson|lezione)?0*(\d{1,3})", remainder)
-        if lesson:
-            matches.append((len(alias), next(iter(course_codes)), int(lesson.group(1))))
+        remainder = stem[positions[len(alias)-1]+1:]
+        # A numeric course code must not consume part of a lesson's digit token.
+        if alias[-1].isdigit() and remainder[:1].isdigit():
+            continue
+        if remainder and remainder[0].isalpha() and not re.match(r'(?:lecture|lesson|lezione|l)[\s_.-]*[0-9]', remainder):
+            continue
+        lesson = re.fullmatch(r'[\s_.-]*(?:(?:lecture|lesson|lezione|l)[\s_.-]*)?([0-9]{1,3})\s*', remainder)
+        number = int(lesson[1]) if lesson and 1 <= int(lesson[1]) <= 999 else None
+        matches.append((len(alias), codes, number))
     if not matches:
-        return None
+        return None, None
     longest = max(length for length, _, _ in matches)
-    resolved = {(code, number) for length, code, number in matches if length == longest}
-    return next(iter(resolved)) if len(resolved) == 1 else None
+    resolved = {(code, number) for length, codes, number in matches if length == longest for code in codes}
+    return next(iter(resolved)) if len(resolved) == 1 else (None, None)
+
+
+def parse_recording_name(path: Path, configuration: dict[str, Any]) -> tuple[str, int] | None:
+    """Compatibility API for operations that require an unambiguous lesson."""
+    code, number = recording_name_association(path, configuration)
+    return (code, number) if code is not None and number is not None else None
 
 
 def is_stable(path: Path, stable_seconds: int, *, now: float | None = None) -> bool:

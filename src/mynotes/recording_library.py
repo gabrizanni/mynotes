@@ -112,8 +112,8 @@ def discover(ws):
         try: list(folder(ws).iterdir())
         except OSError as error: raise ValueError(f'Cartella audio non accessibile: {folder(ws)}') from error
     from .capture import CaptureStore
-    from .capture_associations import registry, apply
-    from .ingestion import parse_recording_name, is_stable
+    from .capture_associations import registry
+    from .ingestion import recording_name_association, is_stable
     config = ws.configuration_store().load()
     store = CaptureStore(ws)
     known = records(ws)
@@ -125,7 +125,7 @@ def discover(ws):
     for x in known.values():
         if x.get('file_identity'):
             by_inode.setdefault(tuple(x['file_identity']), []).append(x)
-    paths, sessions = set(), {}
+    paths, sessions, sessions_by_id = set(), {}, {}
     sidecars = []
     for base in roots(ws):
         if not base.is_dir():
@@ -147,6 +147,7 @@ def discover(ws):
             if p in sidecars and p.parent.resolve() != audio.parent:
                 continue
             sid = (s.get('event') or {}).get('recordingID') or hashlib.sha256(str(audio).encode()).hexdigest()[:32]
+            sessions_by_id[sid] = s
             if sid in known and known[sid]['path'] != str(audio):
                 continue
             s['_private_session'] = p.parent == store.directory / 'sessions'
@@ -155,6 +156,7 @@ def discover(ws):
         except (OSError, ValueError, TypeError):
             continue
     links = registry(store)['recordings']
+    calendar = {e['id']: e for e in store.source_events() if e.get('id')}
     codes = {c['code'] for c in config['courses']}
     found = {}
     for p in sorted(paths):
@@ -182,18 +184,42 @@ def discover(ws):
         if old is None and identifier in known and known[identifier]['path'] != str(p) and Path(known[identifier]['path']).exists() and stat:
             # A newly copied original may reuse an already-archived filename.
             identifier = hashlib.sha256(f'{p}\0{stat.st_dev}\0{stat.st_ino}\0{stat.st_mtime_ns}'.encode()).hexdigest()[:32]
-        event = apply({**event, 'recordingID': identifier}, links)
-        resolved = parse_recording_name(p, config)
-        code = event.get('courseCode', (old or {}).get('course_code', resolved[0] if resolved else None))
-        number = event.get('lessonNumber')
-        lecture = f'{code}-L{number:02d}' if code and type(number) is int and 1 <= number <= 999 else (old or {}).get('lecture_id')
-        if not lecture and resolved and code == resolved[0]:
-            lecture = f'{code}-L{resolved[1]:02d}'
-        if identifier in links:
-            number = links[identifier].get('lessonNumber')
-            lecture = f'{code}-L{number:02d}' if type(number) is int else None
+        if not event and identifier in sessions_by_id:
+            event = sessions_by_id[identifier].get('event') or {}
+        if not event and old and old.get('event_id') in calendar:
+            candidate = calendar[old['event_id']]
+            if candidate.get('recordingID') in {None, identifier}: event = candidate
+        link = links.get(identifier) or links.get(event.get('id'))
+        resolved_code, resolved_number = recording_name_association(p, config)
+        resolved = (resolved_code, resolved_number) if resolved_code and resolved_number else None
+        # Only durable links and capture/calendar events are authoritative. A
+        # cached filename inference must never outrank the current filename.
+        if link:
+            code, number = link.get('courseCode'), link.get('lessonNumber')
+            association_source = 'explicit'
+        elif event.get('courseCode'):
+            code, number = event.get('courseCode'), event.get('lessonNumber')
+            association_source = 'calendar' if event.get('sourceID') not in {None, 'manual', 'special', 'static'} else 'capture'
+        elif old and old.get('association_source') in {'calendar', 'capture'}:
+            code = old.get('course_code')
+            try:
+                from .workflow import parse_lecture_id
+                previous_code, number = parse_lecture_id(old.get('lecture_id') or '')
+                if previous_code != code: number = None
+            except (RuntimeError, TypeError):
+                number = None
+            association_source = old['association_source']
+        else:
+            code, number = resolved_code, resolved_number
+            association_source = 'filename' if code else 'unassigned'
+        lecture = f'{code}-L{number:02d}' if code and type(number) is int and 1 <= number <= 999 else None
         historical = bool(lecture and (ws.runs_dir / lecture / 'asr').exists())
         storage = (old or {}).get('storage_recording_id') if old else (session.get('event') or {}).get('recordingID') or (None if historical or (session and lecture and not (session.get('event') or {}).get('recordingID')) or (resolved and not options(ws).get('folder')) else identifier)
+        if old and not old.get('storage_recording_id') and old.get('lecture_id') != lecture:
+            previous_asr = ws.runs_dir / (old.get('lecture_id') or '_unknown') / 'asr' / 'transcript.json'
+            if previous_asr.is_file() and not old.get('transcript_json'):
+                old = {**old, 'transcript_json': str(previous_asr)}
+            storage = identifier
         item = {**(old or {}), 'id': identifier, 'path': str(p), 'original_path': (old or {}).get('original_path', str(p)),
             'title': p.stem if old and Path(old.get('original_path') or old['path']).stem != p.stem else ((old or {}).get('title') or event.get('title') or p.stem), 'course_code': code, 'lecture_id': lecture,
             'storage_recording_id': storage, 'event_id': event.get('id', (old or {}).get('event_id')), 'source_id': event.get('sourceID', (old or {}).get('source_id')),
@@ -203,10 +229,11 @@ def discover(ws):
             'capture_status': session.get('status', (old or {}).get('capture_status')), 'capture_reason': session.get('reason', (old or {}).get('capture_reason', '')),
             'collection': collection(ws, p), 'audio_available': bool(stat and local_audio(p)), 'stable': bool(stat and local_audio(p) and (not session or session.get('status') in {'COMPLETED', 'PARTIAL'}) and (session.get('_private_session') or is_stable(p, config['ingestion']['stable_seconds']))),
             'unknown_course': code is not None and code not in codes,
-            'association_state': links.get(identifier, {}).get('associationState', 'resolved' if code in codes else 'unresolved'),
-            'association_reason': links.get(identifier, {}).get('reason'),
-            'association_alternatives': links.get(identifier, {}).get('alternatives', []),
-            'association_conflict': links.get(identifier, {}).get('conflict')}
+            'association_source': association_source, 'association_filename': p.name,
+            'association_state': (link or {}).get('associationState', 'resolved' if code in codes else 'unresolved'),
+            'association_reason': (link or {}).get('reason'),
+            'association_alternatives': (link or {}).get('alternatives', []),
+            'association_conflict': (link or {}).get('conflict')}
         if stat:
             item['file_identity'] = [stat.st_dev, stat.st_ino]
         if identifier not in found or item['audio_available'] or not found[identifier]['audio_available']:
@@ -260,9 +287,12 @@ def sync(ws):
     return {'status': 'OK'}
 
 
-def resolve_path(ws, path):
+def resolve_path(ws, path, *, recording_id=None):
+    known = records(ws)
+    if recording_id in known:
+        return Path(known[recording_id]['path'])
     value = str(Path(path).resolve())
-    return Path(next((x['path'] for x in records(ws).values() if value in {x['path'], x.get('original_path'), x.get('move_source')}), value))
+    return Path(next((x['path'] for x in known.values() if value in {x['path'], x.get('original_path'), x.get('move_source')}), value))
 
 
 def _move_original(source, destination, digest):
@@ -322,7 +352,7 @@ def finish(ws, item, manifest_path):
             raise ValueError('Corso non valido')
         from .transcript_library import unique
         previous = current.get('export_text')
-        name = current.get('transcript_name') or (Path(current['original_path']).stem + '.txt')
+        name = current.get('transcript_name') or (Path(current['path']).stem + '.txt')
         target = folder(ws) / 'Trascrizioni' / course / name
         target.parent.mkdir(parents=True, exist_ok=True)
         # An existing TXT is the user's document, including their edits.
@@ -333,7 +363,10 @@ def finish(ws, item, manifest_path):
             content = private_text.read_bytes()
             prior = None  # Preserve the previous version, including edits.
             target = unique(target)
-        if prior != target or not target.exists():
+        if prior and prior != target and prior.is_file() and prior.is_relative_to(folder(ws) / 'Trascrizioni'):
+            from .transcript_library import _move
+            target = _move(prior, target)
+        elif prior != target or not target.exists():
             if target.exists(): target = unique(target)
             with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.mynotes-', delete=False) as out:
                 temporary = Path(out.name); out.write(content); out.flush(); os.fsync(out.fileno())

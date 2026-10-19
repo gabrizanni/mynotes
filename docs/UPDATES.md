@@ -1,5 +1,18 @@
 # Versioned updates and recovery
 
+## 0.2.25: recording names and associations
+
+- Separate numeric groups in filenames are no longer joined into a lesson number.
+  Filename-derived metadata follows Finder renames; explicit assignments and
+  capture/calendar links retain their precedence.
+- Lesson IDs consistently accept numbers 1–999. Missing lesson context or optional
+  material extraction falls back to the course ASR profile instead of rejecting
+  queue admission. Truly unknown courses still export completed TXT into `Dubbi`.
+- Pending jobs refresh their association before admission; active settings remain
+  frozen. Existing transcript text, personal TXT names and cancelled work survive
+  reconciliation. The source-bound lesson and coordinated Word behavior from
+  0.2.24 remains available.
+
 ## 0.2.20: usable transcripts with disclosed uncertainty
 
 Since the previous public 0.2.13 preview:

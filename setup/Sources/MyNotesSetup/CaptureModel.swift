@@ -92,6 +92,9 @@ import Combine
 
     nonisolated private static func queueMessage(_ value: String?) -> String? {
         guard let text = value?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        if text.contains("Lecture id must use COURSE-LNN") {
+            return "Associazione della lezione non valida. Premi Aggiorna e riprova: l’audio è conservato."
+        }
         let sensitive = #"(?i)https?://|webcal://|group\.calendar\.google\.com|token\s*[=:]|authorization\s*[=:]|password\s*[=:]|secret\s*[=:]|Traceback"#
         guard text.range(of: sensitive, options: .regularExpression) == nil else { return nil }
         return String(text.prefix(600))
@@ -319,6 +322,10 @@ import Combine
             } else {
                 error = "Risposta della coda non riconosciuta. Aggiorna MyNotes e riprova."
             }
+            if let notes = result["notices"] as? [[String: Any]], error == nil {
+                let messages = Set(notes.compactMap { Self.queueMessage($0["message"] as? String) })
+                if !messages.isEmpty { notice = (notice ?? "") + " " + messages.sorted().joined(separator: " ") }
+            }
             try await reconcile(version: version, includeLibrary: true)
         } catch { if version == revision { self.notice = nil; self.error = error.localizedDescription } }
     }
@@ -342,6 +349,7 @@ import Combine
         defer { queueBusy = false }
         var added = 0
         var problems: [String] = []
+        var information: Set<String> = []
         let parallel = queue?.parallel ?? 1
         for item in ready {
             do {
@@ -352,11 +360,17 @@ import Combine
                     throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: Self.queueMessage(result["message"] as? String) ?? "Inserimento non riuscito."])
                 }
                 added += result["added"] as? Int ?? 0
+                if let notes = result["notices"] as? [[String: Any]] {
+                    for note in notes {
+                        if let message = Self.queueMessage(note["message"] as? String) { information.insert(message) }
+                    }
+                }
                 if let skipped = result["skipped"] as? [[String: Any]], !skipped.isEmpty { problems.append("\(item.title): audio non più pronto.") }
             } catch { problems.append("\(item.title): \(error.localizedDescription)") }
         }
         let excluded = max(0, selectedCount-ready.count)
         notice = (added == 1 ? "1 registrazione aggiunta alla coda." : "\(added) registrazioni aggiunte alla coda.") + (excluded > 0 ? " \(excluded) escluse perché non pronte." : "")
+        if !information.isEmpty { notice = (notice ?? "") + " " + information.sorted().joined(separator: " ") }
         if !problems.isEmpty { error = problems.prefix(3).joined(separator: " ") }
         do { try await reconcile(version: version, includeLibrary: true) }
         catch { refreshWarning = "Impossibile aggiornare la vista. Premi Aggiorna per verificare i lavori aggiunti." }

@@ -62,6 +62,16 @@ def scan(ws, *, persist=False):
                     'transcript_json': old.get('transcript_json') or recording.get('transcript_json'),
                     'lecture_id': old.get('lecture_id') or recording.get('lecture_id'),
                     'association_state': links.get(old.get('recording_id') or recording.get('id'), {}).get('associationState', old.get('association_state', recording.get('association_state', 'unresolved')))}
+            # Linked filename inference is refreshed from the current audio;
+            # standalone/explicit TXT assignments keep their own identity.
+            if recording and not links.get(recording['id']) and old.get('association_source') != 'explicit':
+                item['lecture_id'] = recording.get('lecture_id') if recording.get('course_code') == code else None
+                item['association_source'] = recording.get('association_source', 'filename')
+            link = links.get(item.get('recording_id'))
+            if link:
+                number = link.get('lessonNumber')
+                item['lecture_id'] = f"{code}-L{number:02d}" if code == link.get('courseCode') and type(number) is int and 1 <= number <= 999 else None
+                item['association_source'] = 'explicit'
             if code is None:
                 item.update(lecture_id=None, association_state='unresolved')
             elif old.get('course_code') and old['course_code'] != code:
@@ -166,7 +176,7 @@ def assign(ws, assignments):
             lecture = None  # Both files remain independent sources.
         source = Path(item['path'])
         target = _move(source, folder(ws) / 'Trascrizioni' / code / source.name)
-        item.update(path=str(target), course_code=code, lecture_id=lecture,
+        item.update(path=str(target), course_code=code, lecture_id=lecture, association_source='explicit',
                     association_state=row.get('associationState', 'resolved'),
                     association_reason=row.get('reason'), association_alternatives=row.get('alternatives', []))
         _references(ws, item)

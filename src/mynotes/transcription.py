@@ -79,7 +79,8 @@ def _run_lecture_transcription(workspace: Workspace, lecture_id: str, audio: Pat
                 if not audio.is_file() or not is_stable(audio, int(configuration["ingestion"]["stable_seconds"])):
                     raise ASRError("AUDIO_UNAVAILABLE: supplied audio is missing, empty or still changing")
                 hydrate(audio)
-            course = transcription_course_context(workspace, lecture_id)
+            from .transcription_queue import profile
+            course = profile(workspace, {'course_code': parse_lecture_id(lecture_id)[0], 'lecture_id': lecture_id, 'title': lecture_id})
             manifest = transcribe_audio(workspace, lecture_id, course, audio, engines=engines,
                                         progress=progress, _lecture_locked=True)
             directory = workspace.runs_dir / lecture_id / "asr"
@@ -149,6 +150,11 @@ def _run_recording_transcription(workspace, item, *, engines=None, progress=Fals
     # An explicitly requested job may run with the window closed. Claim it in the
     # same queue transaction used by the runner; never recalculate its ASR profile.
     queued = None
+    if (queue.root(workspace) / "queue.sqlite3").exists():
+        with queue.database(workspace, readonly=True) as conn:
+            pending = conn.execute("SELECT id FROM jobs WHERE recording_id=? AND status='QUEUED' ORDER BY created DESC LIMIT 1", (item['id'],)).fetchone()
+        if pending:
+            queue.refresh_queued_association(workspace, pending['id'])
     if (queue.root(workspace) / "queue.sqlite3").exists():
         with queue.database(workspace) as conn:
             conn.execute("BEGIN IMMEDIATE")

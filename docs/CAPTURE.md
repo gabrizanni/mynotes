@@ -276,6 +276,21 @@ Free recordings without a lesson retain their title-based unique filenames.
 The recording collection is chosen by the user; an existing `registration agent`
 folder can be selected. Existing originals are never overwritten.
 
+Filename inference preserves numeric boundaries: `DEMO 12 2` identifies the
+course but leaves the lesson unset; `DEMO 12 (2)` identifies lesson 12 of a copy.
+Lesson numbers are 1–999, formatted as `DEMO-L01` through `DEMO-L999`. Renaming
+an audio in Finder refreshes filename-derived associations while preserving
+explicit assignments and verified capture/calendar metadata. TXT names remain
+independent after saving. New TXT files use the audio's current name.
+
+An unknown lesson or unavailable optional glossary never prevents transcription:
+Capture uses the configured course profile, or the neutral profile and `Dubbi`
+when the course is unknown. Pending jobs reconcile their source association before
+admission; an active worker keeps its frozen ASR settings. Changed source bytes
+require an explicit retry. Cancelled and completed jobs are never reactivated by
+renaming or refreshing.
+
+
 
 ## Selective local verification
 

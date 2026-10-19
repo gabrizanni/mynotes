@@ -35,7 +35,7 @@ from .providers import (
 from .utils import atomic_json_write, file_sha256, now_compact_utc
 from .workspace import Workspace
 
-LECTURE_ID_RE = re.compile(r"^(?P<course>[A-Z0-9]+)-L(?P<number>[0-9]{2})$")
+LECTURE_ID_RE = re.compile(r"^(?P<course>[A-Z0-9]+)-L(?P<number>[0-9]{2,3})$")
 QUALITY_ALIASES = {
     "base": "base",
     "fast": "base",
@@ -63,8 +63,8 @@ class WorkflowError(RuntimeError):
 
 def parse_lecture_id(value: str) -> tuple[str, int]:
     match = LECTURE_ID_RE.fullmatch(value.upper())
-    if not match:
-        raise WorkflowError("Lecture id must use COURSE-LNN with an alphanumeric course code")
+    if not match or not 1 <= int(match["number"]) <= 999:
+        raise WorkflowError("Identificativo lezione non valido: usa CODICE-L01 fino a CODICE-L999 con un codice corso alfanumerico")
     return match["course"], int(match["number"])
 
 
