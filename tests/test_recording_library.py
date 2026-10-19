@@ -52,10 +52,11 @@ def test_arbitrary_name_visible_readonly_and_stable_identity_after_finder_rename
     library.sync(ws)
     renamed = source.with_name('Renamed original.wav');source.rename(renamed)
     new = queue.library(ws)[0]
-    assert new['id'] == item['id'] and new['path'] == str(renamed)
+    assert new['id'] == item['id'] and new['path'] == str(renamed) and new['title'] == 'Renamed original'
     library.sync(ws);renamed.unlink()
-    missing = queue.library(ws)[0]
-    assert missing['id'] == item['id'] and missing['actions'] == ['relink']
+    assert queue.library(ws) == []
+    library.sync(ws)
+    assert library.records(ws) == {}
 
 
 def test_only_archives_scanned_not_backups_or_transcription_folder(setup):
@@ -85,29 +86,27 @@ def test_valid_asr_exports_txt_and_moves_original_byte_identical(setup):
     assert engine.calls == 1
 
 
-def test_failed_timestamps_preserve_original_and_allow_restart(setup):
+def test_timestamp_warning_saves_text_and_archives_original(setup):
     ws, folder, engine = setup
     source = audio(folder);identifier = queue.library(ws)[0]['id'];engine.end = 999
-    assert transcribe(ws, identifier)['status'] == 'NEEDS_REVIEW'
-    item = queue.library(ws)[0]
-    assert source.is_file() and 'restart' in item['actions']
-    job = queue.status(ws)['jobs'][0];queue.change_job(ws, job['id'], 'restart')
-    engine.end = 4
-    with queue.database(ws) as conn:conn.execute("UPDATE jobs SET status='RUNNING',pid=? WHERE id=?", (os.getpid(),job['id']))
-    assert queue.run_job(ws,job['id'])['status'] == 'COMPLETED'
-    assert engine.calls == 2
+    result=transcribe(ws, identifier)
+    assert result['status'] == 'COMPLETED' and result['archive_status'] == 'COMPLETED'
+    assert not source.exists() and Path(result['export_text']).is_file()
+    assert json.loads(Path(result['transcript_json']).read_text())['segments'][0]['timestamp_unavailable']
 
 
 def test_cancelled_old_failure_does_not_poison_reenqueue(setup):
     ws, folder, engine = setup
-    source=audio(folder);identifier=queue.library(ws)[0]['id'];engine.end=999
-    transcribe(ws,identifier)
+    source=audio(folder);identifier=queue.library(ws)[0]['id']
+    original=engine.transcribe
+    engine.transcribe=lambda *a,**k:(_ for _ in ()).throw(asr.ASRError('primary unavailable'))
+    assert transcribe(ws,identifier)['status']=='FAILED'
     job=queue.status(ws)['jobs'][0]
     with queue.database(ws) as conn:conn.execute("UPDATE jobs SET status='QUEUED' WHERE id=?",(job['id'],))
     queue.change_job(ws,job['id'],'remove')
     item=queue.library(ws)[0]
     assert item['transcription_status']=='NOT_STARTED' and 'enqueue' in item['actions']
-    engine.end=4
+    engine.transcribe=original
     assert transcribe(ws,identifier)['status']=='COMPLETED'
     assert not source.exists()
 
@@ -161,7 +160,7 @@ def test_modified_export_is_preserved(setup):
     audio(folder);identifier=queue.library(ws)[0]['id'];transcribe(ws,identifier)
     item=queue.library(ws)[0];export=Path(item['export_text']);export.write_text('My own annotations')
     result=library.finish(ws,item,item['transcript_json'])
-    assert result['archive_status']=='PENDING' and export.read_text()=='My own annotations' and engine.calls==1
+    assert result['archive_status']=='COMPLETED' and export.read_text()=='My own annotations' and engine.calls==1
 
 
 def test_missing_relinked_file_retains_identity_and_rejects_wrong_bytes(setup):

@@ -16,10 +16,10 @@ let f = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: URL(fileUR
 func ids(_ filter: CaptureRecordingFilter) -> [String] { f.recordings.filter { filter.includes($0) }.map(\\.id) }
 precondition(ids(.ready)==["0"])
 precondition(ids(.active)==["1","2","7"])
-precondition(ids(.review)==["3","4","5"])
+precondition(!CaptureRecordingFilter.allCases.map(\\.rawValue).contains("review"))
 precondition(ids(.completed)==["6"])
 precondition(f.queue.currentJobs.count==4 && f.queue.activeJobs.map(\\.id)==["wait"])
-precondition(f.queue.reviewJobs.map(\\.id)==["invalid"])
+precondition(f.queue.failedJobs.map(\\.id)==["invalid"])
 precondition(Set(f.queue.historyJobs.map(\\.id))==Set(["old","new","cancelled"]))
 precondition(f.recordings[3].arguments(for:"restart",parallel:2)==nil, "Missing job must never silently enqueue")
 precondition(f.recordings[0].arguments(for:"enqueue",parallel:2)==["--recording","0","--parallel","2"])

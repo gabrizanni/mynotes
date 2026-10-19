@@ -37,7 +37,12 @@ def association_candidates(recording, courses):
     # Bounded academic text is data only, not executable guidance.
     text_tokens = set()
     transcript = recording.get('transcript_json')
-    if transcript:
+    if recording.get('path', '').casefold().endswith('.txt'):
+        try:
+            text_tokens = words(Path(recording['path']).read_text(encoding='utf-8')[:32000])
+        except (OSError, UnicodeError):
+            pass
+    if transcript and not text_tokens:
         try:
             import json
             saved = json.loads(Path(transcript).read_text())
@@ -86,6 +91,20 @@ def pending(store):
         recording = item.get('recording') or item
         item['candidateCourses'] = association_candidates(recording, courses)
         item['associationState'] = recording.get('association_state', 'unresolved')
+    from .recording_library import options
+    if options(store.workspace).get('folder'):
+        from .transcript_library import scan
+        represented = {x.get('recordingID') for x in items}
+        for transcript in scan(store.workspace):
+            if transcript['course_code'] is None or transcript.get('association_state') == 'estimated' or not transcript.get('lecture_id'):
+                # TXT-only entries must survive deletion of the original audio.
+                if transcript.get('recording_id') in represented:
+                    items = [i for i in items if i.get('recordingID') != transcript['recording_id']]
+                items.append({'transcriptID': transcript['id'], **({'recordingID': transcript['recording_id']} if transcript.get('recording_id') else {}), 'title': transcript['title'],
+                              'path': transcript['path'], 'startsAt': transcript['created_at'],
+                              'courseCode': transcript.get('course_code'), 'recording': transcript,
+                              'candidateCourses': association_candidates(transcript, courses),
+                              'associationState': transcript.get('association_state', 'unresolved')})
     return {"status": "OK", "items": items}
 
 
@@ -94,6 +113,12 @@ def assign(store, payload):
     rows = payload.get("assignments") if isinstance(payload, dict) else None
     if not isinstance(rows, list) or not rows:
         raise capture.CaptureError("Supply a nonempty assignments array")
+    if any('transcriptID' in row for row in rows):
+        if not all('transcriptID' in row for row in rows):
+            raise capture.CaptureError('Invia le associazioni TXT separatamente da quelle audio/calendario')
+        from .transcript_library import assign as assign_transcripts
+        with store.lock():
+            return assign_transcripts(store.workspace, rows)
     with store.lock():
         # Holding the queue transaction prevents a queued worker from starting mid-assignment.
         with queue.database(store.workspace) as conn:

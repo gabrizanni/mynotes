@@ -62,12 +62,10 @@ def test_runtime_export_blocks_old_final_sidecar(ws, monkeypatch):
     assert not queue.library(ws)[0]['can_transcribe']
 
 
-def test_missing_audio_is_visible_with_specific_reason(ws):
+def test_missing_audio_is_not_visible(ws):
     path, identifier = audio(ws)
     path.unlink()
-    item = queue.library(ws)[0]
-    assert item['id'] == identifier and not item['audio_available'] and not item['can_transcribe']
-    assert item['blocking_reasons'][0]['code'] == 'AUDIO_UNAVAILABLE'
+    assert queue.library(ws) == []
 
 
 def test_unknown_course_is_nonblocking_and_uses_neutral_profile(ws, monkeypatch):

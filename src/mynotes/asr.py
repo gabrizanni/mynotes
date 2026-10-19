@@ -776,7 +776,7 @@ def _transcribe_audio_locked(
     run_dir = workspace.runs_dir / lecture_id / "asr"
     run_dir.mkdir(parents=True, exist_ok=True)
     audio_hash, settings_hash, cache_key, registry = cache_identity(workspace, course, audio, engines=engines)
-    for key in ("primary_engine", "secondary_engine", "extra_pass_engine"):
+    for key in ("primary_engine",):
         if settings.get(key) and settings[key] not in registry:
             raise ASRError(f"CONFIGURATION: requested ASR engine is unavailable: {settings[key]}")
     manifest_path = run_dir / "transcript.json"
@@ -872,7 +872,7 @@ def _transcribe_audio_locked(
     else:
         primary = _engine_pass(registry[primary_name], pass_root / "primary.json", duration,
             normalized_audio, run_dir / "primary", model=settings["primary_model"], language=settings["language"],
-            vocabulary=settings["vocabulary"], prompt=prompt, validate_result=not selective)
+            vocabulary=settings["vocabulary"], prompt=prompt, validate_result=False)
     atomic_json_write(run_dir/'primary-binding.json', {'audio_sha256': audio_hash,
         'normalized_audio_sha256': file_sha256(normalized_audio), 'primary_sha256': file_sha256(run_dir/'primary-result.json'),
         'settings_hash': settings_hash, 'engine': primary.engine, 'model': primary.model, 'parser_version': 3,
@@ -967,6 +967,58 @@ class ASRReviewError(ASRError):
         self.issues, self.path = issues, path
 
 
+def save_primary_text(workspace, lecture_id, course, audio, attempt, error, *, engines=None):
+    """A bound primary result is a finished text even if later checks fail."""
+    try:
+        binding = json.loads((attempt / 'primary-binding.json').read_text())
+        raw = json.loads((attempt / 'primary-result.json').read_text())
+        digest = file_sha256(audio)
+        normalized = attempt / 'input.wav'
+        if (digest != binding['audio_sha256'] or file_sha256(attempt / 'primary-result.json') != binding['primary_sha256']
+                or file_sha256(normalized) != binding['normalized_audio_sha256']):
+            return None
+        rows = raw.get('segments')
+        if not isinstance(rows, list) or not rows or any(not isinstance(x.get('text'), str) or not x['text'].strip() for x in rows):
+            return None
+        duration = audio_duration(normalized)
+        segments, previous, untimed = [], -1.0, False
+        for number, row in enumerate(rows, 1):
+            segment = {'id': f'T{number:03d}', 'text': row['text'], 'speaker': 'UNKNOWN',
+                       'start_seconds': row.get('start'), 'end_seconds': row.get('end')}
+            check = {'segments': [segment]}
+            bad = validate_transcript(check, duration)
+            if bad or segment['start_seconds'] < previous:
+                segment.update(start_seconds=None, end_seconds=None, start=None, end=None, timestamp_unavailable=True)
+                untimed = True
+            else:
+                previous = segment['start_seconds']
+            segments.append(segment)
+        _, signature, key, _ = cache_identity(workspace, course, audio, engines=engines)
+        if signature != binding['settings_hash']:
+            return None
+        manifest = {'schema_version': 3, 'status': 'COMPLETED', 'lecture_id': lecture_id,
+                    'attempt_id': attempt.name, 'audio_path': str(audio), 'audio_sha256': digest,
+                    'audio_duration_seconds': duration, 'normalized_audio_path': str(normalized),
+                    'normalized_audio_sha256': binding['normalized_audio_sha256'],
+                    'settings_hash': signature, 'cache_key': key, 'cache_reused': False,
+                    'language': raw.get('language') or course['transcription']['language'],
+                    'timestamp_quality': 'mixed' if untimed else 'indicative',
+                    'completion_policy': 'text_saved', 'human_verified': False,
+                    'quality_warnings': [{'code': 'POSTPROCESSING_INCOMPLETE', 'message': str(error)}],
+                    'quality_summary': 'Trascrizione salvata. Il controllo successivo non è stato completato.' + (' Alcuni passaggi non hanno timestamp attendibili.' if untimed else ''),
+                    'passes': [{k:raw.get(k) for k in ('engine','model','version')}], 'segments': segments}
+        manifest['segments_sha256'] = segments_digest(segments)
+        if validate_transcript(manifest, duration):
+            return None
+        atomic_json_write(attempt / 'transcript.json', manifest)
+        destination = workspace.runs_dir / lecture_id / 'asr/transcript.json'
+        atomic_json_write(destination, manifest)
+        write_transcript_text(destination.with_suffix('.txt'), manifest)
+        return manifest
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def audio_duration(path: Path) -> float | None:
     try:
         with wave.open(str(path), "rb") as handle:
@@ -985,6 +1037,12 @@ def validate_transcript(payload: Any, duration: float | None = None) -> list[dic
     for index, segment in enumerate(payload["segments"]):
         code, detail = "INVALID_SEGMENT", {}
         try:
+            if segment.get('timestamp_unavailable') and payload.get('timestamp_quality') in {'unavailable', 'mixed'}:
+                if not isinstance(segment.get('text'), str) or not segment['text'].strip():
+                    raise ValueError('Segment text must not be empty')
+                if segment.get('start_seconds') is not None or segment.get('end_seconds') is not None:
+                    raise ValueError('Unavailable timing must not contain fabricated timestamps')
+                continue
             start, end = float(segment["start_seconds"]), float(segment["end_seconds"])
             detail = {"start_seconds": start, "end_seconds": end}
             if not math.isfinite(start) or not math.isfinite(end):
@@ -1051,7 +1109,8 @@ def write_transcript_text(path: Path, manifest: dict) -> None:
             handle.write(manifest['quality_summary'] + '\nI passaggi incerti sono indicati con [passaggio incerto].\n')
         for segment in manifest["segments"]:
             marker = ' [passaggio incerto]' if segment.get('uncertainty_codes') else ''
-            handle.write(f"[{segment['start']}–{segment['end']}] {segment.get('speaker', 'UNKNOWN')}{marker}: {segment['text']}\n")
+            timing = '' if segment.get('timestamp_unavailable') else f"[{segment['start']}–{segment['end']}] "
+            handle.write(f"{timing}{segment.get('speaker', 'UNKNOWN')}{marker}: {segment['text']}\n")
         temporary = handle.name
     os.replace(temporary, path)
 
@@ -1093,7 +1152,12 @@ def transcribe_audio(workspace, lecture_id, course, audio, *, engines=None, prog
                     raise SystemExit("Transcription interrupted by SIGTERM")
                 signal.signal(signal.SIGTERM, interrupted)
             try:
-                result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir, force=force, recover_from=recover_from)
+                try:
+                    result = _transcribe_audio_locked(workspace, lecture_id, course, Path(audio), engines=engines, update=update, attempt_dir=attempt_dir, force=force, recover_from=recover_from)
+                except (ASRError, OSError, ValueError) as error:
+                    result = save_primary_text(workspace, lecture_id, course, Path(audio), attempt_dir, error, engines=engines)
+                    if result is None:
+                        raise
                 if result.get("cache_reused"):
                     text_path = directory / "transcript.txt"
                     write_transcript_text(text_path, result)

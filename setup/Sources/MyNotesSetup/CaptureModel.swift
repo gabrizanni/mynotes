@@ -12,6 +12,7 @@ import Combine
     @Published var refreshWarning: String?
     @Published var lastEventID: String?
     @Published var recordings: [CaptureRecording] = []
+    @Published var transcripts: [CaptureTranscript] = []
     @Published var queue: CaptureQueue?
     @Published var queueBusy = false
     @Published var recordingFolder: String?
@@ -126,6 +127,11 @@ import Combine
                 let message = self.snapshot == nil
                     ? "Impossibile leggere lo stato di Capture. Premi Aggiorna per riprovare."
                     : "Aggiornamento dello stato non riuscito. I dati visualizzati restano disponibili; premi Aggiorna per riprovare."
+                if error.localizedDescription.contains("Cartella") {
+                    self.recordings = []; self.transcripts = []
+                    self.refreshWarning = error.localizedDescription
+                    return
+                }
                 if self.refreshWarning != message { self.refreshWarning = message }
             }
         }
@@ -265,6 +271,8 @@ import Combine
         let library = try await Task.detached { try Self.invoke(executable, workspace, "library", ["--sync"], nil, group: "transcription-queue") }.value
         let value = try JSONDecoder().decode(CaptureLibrary.self, from: library)
         if version == revision {
+            let nextTranscripts = value.transcripts ?? []
+            if !Self.equal(transcripts, nextTranscripts) { transcripts = nextTranscripts }
             if recordingFolder != value.folder { recordingFolder = value.folder }
             if folderConfigured != (value.folderConfigured ?? false) { folderConfigured = value.folderConfigured ?? false }
         }

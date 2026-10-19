@@ -76,6 +76,8 @@ def save(ws, item):
 
 def roots(ws):
     from .capture import CaptureStore
+    if options(ws).get('folder'):
+        return [folder(ws).resolve()]
     values = [folder(ws), *(Path(p).expanduser() for p in ws.configuration_store().load()['paths']['recording_dirs']), Path(CaptureStore(ws).config()['outputDirectory'])]
     return list(dict.fromkeys(p.resolve() for p in values))
 
@@ -105,7 +107,10 @@ def local_audio(path):
 
 
 def discover(ws):
-    """Merge actual files, native private sessions and persisted missing entries."""
+    """Project existing files only; sessions enrich metadata, never create rows."""
+    if options(ws).get('folder'):
+        try: list(folder(ws).iterdir())
+        except OSError as error: raise ValueError(f'Cartella audio non accessibile: {folder(ws)}') from error
     from .capture import CaptureStore
     from .capture_associations import registry, apply
     from .ingestion import parse_recording_name, is_stable
@@ -155,7 +160,7 @@ def discover(ws):
     for p in sorted(paths):
         if p.name.startswith('.') or p.is_symlink() or p.suffix.casefold() not in config['ingestion']['audio_extensions'] or not allowed(ws, p):
             continue
-        if p.exists() and not p.is_file():
+        if not p.is_file():
             continue
         p = p.resolve()
         if any(x.get('pending_destination') == str(p) and x['path'] != str(p) and Path(x['path']).exists() for x in known.values()):
@@ -190,7 +195,7 @@ def discover(ws):
         historical = bool(lecture and (ws.runs_dir / lecture / 'asr').exists())
         storage = (old or {}).get('storage_recording_id') if old else (session.get('event') or {}).get('recordingID') or (None if historical or (session and lecture and not (session.get('event') or {}).get('recordingID')) or (resolved and not options(ws).get('folder')) else identifier)
         item = {**(old or {}), 'id': identifier, 'path': str(p), 'original_path': (old or {}).get('original_path', str(p)),
-            'title': (old or {}).get('title') or event.get('title') or p.stem, 'course_code': code, 'lecture_id': lecture,
+            'title': p.stem if old and Path(old.get('original_path') or old['path']).stem != p.stem else ((old or {}).get('title') or event.get('title') or p.stem), 'course_code': code, 'lecture_id': lecture,
             'storage_recording_id': storage, 'event_id': event.get('id', (old or {}).get('event_id')), 'source_id': event.get('sourceID', (old or {}).get('source_id')),
             'duration': session.get('durationSeconds', (old or {}).get('duration')), 'language': event.get('transcriptionLanguage', (old or {}).get('language')),
             'created_at': event.get('startsAt') or (old or {}).get('created_at') or (datetime.fromtimestamp(stat.st_mtime, UTC).isoformat() if stat else ''),
@@ -206,9 +211,6 @@ def discover(ws):
             item['file_identity'] = [stat.st_dev, stat.st_ino]
         if identifier not in found or item['audio_available'] or not found[identifier]['audio_available']:
             found[identifier] = item
-    for identifier, old in known.items():
-        if identifier not in found:
-            found[identifier] = {**old, 'audio_available': False, 'stable': False}
     return list(found.values())
 
 
@@ -216,12 +218,45 @@ def discover(ws):
 def sync(ws):
     for item in records(ws).values():
         target = item.get('pending_destination')
-        if target and item.get('move_sha256') and Path(target).exists() and item['path'] != target:
+        if target and item.get('move_sha256') and Path(target).exists() and item['path'] != target and allowed(ws, Path(target)) and allowed(ws, Path(item['path'])):
             _move_original(item['path'], target, item['move_sha256'])
             item.update(path=target, collection=collection(ws, Path(target)))
             save(ws, item)
-    for item in discover(ws):
+    found = discover(ws)
+    if options(ws).get('folder'):
+        from .transcript_library import scan
+        transcripts = scan(ws, persist=True)
+        from .transcript_library import rename
+        previous_records = records(ws)
+        for transcript in transcripts:
+            recording = previous_records.get(transcript.get('recording_id'), {})
+            if recording:
+                legacy = Path(recording['original_path']).stem + '-' + recording['id'][:8] + '.txt'
+                if Path(transcript['path']).name == legacy:
+                    rename(ws, transcript['id'], Path(recording['original_path']).stem)
+    for item in found:
+        # scan/rename may have just updated the TXT link.
+        latest = records(ws).get(item['id'], {})
+        for key in ('export_text', 'transcript_name', 'transcript_id'):
+            if key in latest: item[key] = latest[key]
+        if item['audio_available'] and item.get('audio_sha256'):
+            stat = Path(item['path']).stat()
+            signature = [stat.st_mtime_ns, stat.st_size]
+            if item.get('verified_audio') != signature and file_sha256(Path(item['path'])) == item['audio_sha256']:
+                item['verified_audio'] = signature
         save(ws, item)
+    from .transcription_queue import database
+    live = {item['id'] for item in found}
+    with database(ws) as conn:
+        for row in conn.execute('SELECT id FROM recordings').fetchall():
+            if row['id'] not in live:
+                conn.execute('DELETE FROM recordings WHERE id=?', (row['id'],))
+        for row in conn.execute("SELECT id,recording_id FROM jobs WHERE status='QUEUED'").fetchall():
+            if row['recording_id'] not in live:
+                conn.execute("UPDATE jobs SET status='CANCELLED',error='Audio rimosso dalla raccolta' WHERE id=?", (row['id'],))
+    if options(ws).get('folder'):
+        from .transcript_library import scan
+        scan(ws, persist=True)
     return {'status': 'OK'}
 
 
@@ -285,39 +320,36 @@ def finish(ws, item, manifest_path):
         course = current.get('course_code') if current.get('course_code') in codes else 'Dubbi'
         if not re.fullmatch(r'[A-Z0-9]+|Dubbi', course):
             raise ValueError('Corso non valido')
-        target = folder(ws) / 'Trascrizioni' / course / (Path(current['original_path']).stem + '-' + item['id'][:8] + '.txt')
-        target.parent.mkdir(parents=True, exist_ok=True)
+        from .transcript_library import unique
         previous = current.get('export_text')
-        if previous and previous != str(target) and Path(previous).is_file() and current.get('export_sha256') and file_sha256(Path(previous)) != current['export_sha256']:
-            raise ValueError('La copia TXT precedente è stata modificata: conservata; ricollocazione da completare')
-        if target.exists() and str(target) != previous and target.read_bytes() != private_text.read_bytes():
-            raise ValueError('Esiste una copia TXT diversa: controllala prima di esportare')
-        with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.mynotes-', delete=False) as out:
-            temporary = Path(out.name); out.write(private_text.read_bytes()); out.flush(); os.fsync(out.fileno())
-        try:
-            if target.exists() and str(target) == previous and current.get('export_sha256') and file_sha256(target) != current['export_sha256']:
-                raise ValueError('La copia TXT è stata modificata: conservata senza sovrascriverla')
-            # Initial publication is exclusive. Subsequent updates own this path.
-            if target.exists():
-                if str(target) == previous:
-                    os.replace(temporary, target)
-            else:
+        name = current.get('transcript_name') or (Path(current['original_path']).stem + '.txt')
+        target = folder(ws) / 'Trascrizioni' / course / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # An existing TXT is the user's document, including their edits.
+        prior = Path(previous) if previous else None
+        content = prior.read_bytes() if prior and prior.is_file() else private_text.read_bytes()
+        new_attempt = current.get('export_attempt_id') and current['export_attempt_id'] != saved.get('attempt_id')
+        if new_attempt and content != private_text.read_bytes():
+            content = private_text.read_bytes()
+            prior = None  # Preserve the previous version, including edits.
+            target = unique(target)
+        if prior != target or not target.exists():
+            if target.exists(): target = unique(target)
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix='.mynotes-', delete=False) as out:
+                temporary = Path(out.name); out.write(content); out.flush(); os.fsync(out.fileno())
+            try:
                 os.link(temporary, target)
-        finally:
-            temporary.unlink(missing_ok=True)
-        current.update(export_text=str(target), export_sha256=file_sha256(target))
-        save(ws, current)
-        if previous and previous != str(target):
-            prior = Path(previous)
-            if prior.is_file() and prior.is_relative_to(folder(ws) / 'Trascrizioni') and file_sha256(prior) == current['export_sha256']:
+            finally:
+                temporary.unlink(missing_ok=True)
+            if prior and prior != target and prior.is_file() and prior.is_relative_to(folder(ws) / 'Trascrizioni'):
                 prior.unlink()
+        current.update(export_text=str(target), transcript_name=target.name, export_sha256=file_sha256(target), export_attempt_id=saved.get('attempt_id'))
+        save(ws, current)
         # Historical processed folders are already archived; retain their structure.
         if current.get('collection') != 'legacy':
             destination = Path(pending) if pending else folder(ws) / 'processate' / source.name
             if not pending and destination.exists() and destination != source:
-                destination = destination.with_name(source.stem + '-' + item['id'] + source.suffix)
-                if destination.exists():
-                    raise ValueError('Destinazione audio già occupata; nessun file sovrascritto')
+                destination = unique(destination)
             current.update(pending_destination=str(destination), move_source=str(source), move_sha256=digest)
             save(ws, current)
             _move_original(source, destination, digest)
@@ -325,11 +357,13 @@ def finish(ws, item, manifest_path):
         verified = Path(current['path']).stat()
         current.update(archive_status='COMPLETED', archive_error=None, audio_sha256=digest, duration=saved.get('audio_duration_seconds', current.get('duration')), verified_audio=[verified.st_mtime_ns, verified.st_size])
         save(ws, current)
+        from .transcript_library import scan
+        scan(ws, persist=True)
         return {'current_audio_path': current['path'], 'export_text': str(target), 'archive_status': 'COMPLETED'}
     except (OSError, ValueError, KeyError) as e:
         current.update(archive_status='PENDING', archive_error=str(e))
         save(ws, current)
-        return {'archive_status': 'PENDING', 'archive_error': str(e), 'current_audio_path': current['path']}
+        return {'archive_status': 'PENDING', 'archive_error': str(e), 'current_audio_path': current['path'], **({'export_text': current['export_text']} if current.get('export_text') and Path(current['export_text']).is_file() else {})}
 
 
 def finish_audio(ws, audio, manifest_path):

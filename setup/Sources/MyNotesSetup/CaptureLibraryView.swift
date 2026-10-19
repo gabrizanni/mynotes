@@ -9,7 +9,7 @@ private func captureStateLabel(_ status: String) -> String {
     case "RUNNING": return "In trascrizione"
     case "FAILED": return "Trascrizione non riuscita"
     case "INTERRUPTED": return "Trascrizione interrotta"
-    case "NEEDS_REVIEW": return "Da verificare"
+    case "NEEDS_REVIEW": return "Trascrizione non riuscita"
     case "OUTDATED": return "Audio modificato: trascrizione da aggiornare"
     case "WAITING": return "Audio non ancora disponibile"
     case "CANCELLED": return "Rimossa dalla coda"
@@ -41,7 +41,10 @@ struct CaptureRecordingsView: View {
     @CaptureViewState<Set<String>> private var selected = []
     @CaptureViewState<CaptureRecordingFilter> private var statusFilter = .all
     @CaptureViewState<String> private var sortOrder = "recent"
-    @CaptureViewState<Bool> private var showReview = false
+    @CaptureViewState<Bool> private var showQueue = true
+    @CaptureViewState<CaptureTranscript?> private var renamingTranscript: CaptureTranscript?
+    @CaptureViewState<String> private var transcriptName = ""
+    @CaptureViewState<String?> private var selectedTranscript: String?
     @CaptureViewState<Bool> private var showHistory = false
     @CaptureViewState<CaptureRecording?> private var renaming: CaptureRecording?
     @CaptureViewState<String> private var renameText = ""
@@ -70,7 +73,12 @@ struct CaptureRecordingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             controls
             if !queueVisible { folderControls }
-            if queueVisible { queueList }
+            if queueVisible {
+                DisclosureGroup("Coda (\(model.queue?.activeJobs.count ?? 0))", isExpanded: $showQueue) {
+                    queueList.frame(maxHeight: 240)
+                }
+                transcriptList
+            }
             else { libraryList }
         }
         .onChange(of: query) { _, _ in reconcileSelection() }
@@ -88,6 +96,22 @@ struct CaptureRecordingsView: View {
                         .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(model.queueBusy || renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }.padding(24).frame(width: 440)
+        }
+        .sheet(item: $renamingTranscript) { item in
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Rinomina trascrizione").font(.title2.bold())
+                TextField("Nome del file TXT", text: $transcriptName).textFieldStyle(.roundedBorder)
+                if let error = model.error { Text(error).foregroundStyle(.red) }
+                HStack {
+                    Button("Annulla") { renamingTranscript = nil }.keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Salva") { Task {
+                        await model.queueAction("rename-transcript", arguments: ["--transcript", item.id, "--name", transcriptName])
+                        if model.error == nil { renamingTranscript = nil }
+                    } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                        .disabled(model.queueBusy || transcriptName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.padding(24).frame(width: 460)
         }
         .sheet(item: $associating) { item in
             VStack(alignment: .leading, spacing: 18) {
@@ -135,8 +159,8 @@ struct CaptureRecordingsView: View {
     private var controls: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(queueVisible ? "Coda trascrizioni" : "Registrazioni").font(.title3.bold())
-                Text(queueVisible ? queueSummary : "\(model.recordings.count) audio · \(readyCount) pronti, di cui \(pendingCount) non archiviati")
+                Text(queueVisible ? "Trascrizioni" : "Registrazioni").font(.title3.bold())
+                Text(queueVisible ? "\(model.transcripts.count) file TXT · " + queueSummary : "\(model.recordings.count) audio · \(readyCount) pronti, di cui \(pendingCount) non archiviati")
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
@@ -202,7 +226,7 @@ struct CaptureRecordingsView: View {
                         Text(courseName(item.courseCode)).foregroundStyle(.secondary)
                         if !item.createdAt.isEmpty { LabeledContent("Registrata", value: CaptureDates.label(item.createdAt)) }
                         if let duration = item.duration { LabeledContent("Durata", value: "\(Int(duration / 60)) min \(Int(duration) % 60) s") }
-                        Label(item.isTranscribed && (item.associationState == "unresolved" || item.courseCode == nil) ? "Trascritta — da collegare" : captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
+                        Label(captureStateLabel(displayState(item)), systemImage: item.isTranscribed ? "checkmark.circle" : "waveform")
                         if item.isTranscribed, let summary = item.qualitySummary {
                             Label(summary, systemImage: "info.circle").font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
@@ -230,6 +254,9 @@ struct CaptureRecordingsView: View {
                             if let error = item.archiveError { Text(error).font(.caption).textSelection(.enabled) }
                         }
                         recordingActions(item)
+                        if let transcript = model.transcripts.first(where: { $0.recordingID == item.id }) {
+                            Button("Rinomina trascrizione") { beginRename(transcript) }
+                        }
                         HStack {
                             Button("Ascolta audio", systemImage: "play") { model.openAudio(item.path) }.disabled(item.audioAvailable == false)
                             Button("Mostra nel Finder") { model.revealFile(item.path) }
@@ -279,6 +306,41 @@ struct CaptureRecordingsView: View {
             }
         }.disabled(model.queueBusy || model.busy || model.isPreview)
     }
+    private func beginRename(_ item: CaptureTranscript) {
+        transcriptName = item.title; model.error = nil; renamingTranscript = item
+    }
+    private var transcriptList: some View {
+        HSplitView {
+            VStack(spacing: 10) {
+                TextField("Cerca una trascrizione", text: $query)
+                List(selection: $selectedTranscript) {
+                    ForEach(model.transcripts.filter { query.isEmpty || ($0.title + " " + ($0.courseCode ?? "")).localizedCaseInsensitiveContains(query) }) { item in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.title).font(.headline)
+                            Text(item.courseCode.map { courseName($0) } ?? "Dubbi · corso non assegnato").font(.callout).foregroundStyle(.secondary)
+                            Text("Trascritta").font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 5).tag(item.id)
+                            .contextMenu { Button("Rinomina trascrizione") { beginRename(item) } }
+                    }
+                }.overlay {
+                    if model.transcripts.isEmpty { ContentUnavailableView("Nessuna trascrizione", systemImage: "doc.text", description: Text("Qui compaiono i TXT presenti nella cartella Trascrizioni.")) }
+                }
+            }.frame(minWidth: 360)
+            Group {
+                if let item = model.transcripts.first(where: { $0.id == selectedTranscript }) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(item.title).font(.title2.bold())
+                        Text(item.courseCode.map { courseName($0) } ?? "Corso non assegnato · Dubbi").foregroundStyle(.secondary)
+                        Label("Trascritta", systemImage: "checkmark.circle")
+                        Button("Apri trascrizione") { model.openFile(item.path) }.buttonStyle(.borderedProminent)
+                        Button("Rinomina trascrizione") { beginRename(item) }
+                        Button("Mostra nel Finder") { model.revealFile(item.path) }
+                        Spacer()
+                    }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                } else { ContentUnavailableView("Seleziona una trascrizione", systemImage: "doc.text") }
+            }.frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
     private var queueList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -294,9 +356,7 @@ struct CaptureRecordingsView: View {
                     ForEach(model.queue?.activeJobs ?? []) { queueRow($0) }
                 }
                 Divider()
-                DisclosureGroup("Da verificare (\(model.queue?.reviewJobs.count ?? 0))", isExpanded: $showReview) {
-                    ForEach(model.queue?.reviewJobs ?? []) { queueRow($0) }
-                }
+                ForEach(model.queue?.failedJobs ?? []) { queueRow($0) }
                 DisclosureGroup("Cronologia (\(model.queue?.historyJobs.count ?? 0))", isExpanded: $showHistory) {
                     ForEach(model.queue?.historyJobs ?? []) { queueRow($0, historical: true) }
                 }

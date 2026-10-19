@@ -210,19 +210,19 @@ COURSE-LNN --audio PATH --workspace PATH --json`; without a supplied file, use
 Capture identity before ASR so later assignment does not create a second pass.
 External PDFs, slides, documents and text use the existing material tools and
 `prepare --material PATH` when source-pack preparation is requested. An exported
-chat in TXT/MD/DOCX is text material, not audio. Only normalized transcript JSON
-with valid segments/timestamps belongs in `prepare --transcript PATH`; never
-invent timing for plain text. Unsupported inputs require a precise limitation,
+chat in TXT/MD/DOCX is text material, not audio. `prepare --transcript PATH`
+accepts normalized transcript JSON or a plain UTF-8 TXT transcript. Missing
+timestamps stay absent; never invent timing for plain text. Unsupported inputs require a precise limitation,
 not a fabricated extraction or an unrelated transcription run.
 These direct commands perform the relevant ASR checks; do not first run general
 doctor/status checks, explore implementation code, invent Python imports, scan
 other course recordings, generate notes or browse the web. Progress goes to
 stderr and structured results to stdout. Percentages require engine evidence.
 BUSY means an existing operation owns the slot: do not retry in a loop, queue
-another job or terminate it. NEEDS_REVIEW refers to a concrete transcription
-validation problem: report its cause/action and preserve raw results, rather than
-calling all recordings "Da verificare". A transcription deliverable is validated
-timestamped TXT and JSON, not a Word guide. Reuse it during prepare without ASR.
+another job or terminate it. Legacy NEEDS_REVIEW is an old failed attempt, not
+a human approval requirement. Save usable bound primary text even if later
+checks fail; omit invalid timestamps. A transcription deliverable is a saved TXT,
+with structured provenance kept private, not a Word guide. Reuse it during prepare without ASR.
 A request or the Trascrivi button starts work; recording completion alone does not.
 Only diagnose implementation files if the direct command actually fails, and
 keep that diagnosis relevant to the returned error. Never interrupt personal
@@ -243,9 +243,9 @@ without rerunning ASR. New Argmax passes use indicative segment timestamps and n
 decoder prompt. FluidAudio verifies only doubtful local windows (at most 30% of
 the audio). After that check, residual text disagreements are nonblocking warnings:
 the transcript is completed, exported and ready for notes with uncertainty markers
-and private alternatives retained. Completion is not human verification. Invalid
-timing, changed sources, missing reports or an incomplete independent pass remain
-blocking for reusing that result; a local recovery mismatch falls back once to a fresh
+and private alternatives retained. Completion is not human verification. A failed optional
+check never blocks saving bound primary text. Omit untrustworthy timestamps rather than
+inventing them. Changed sources and unbound reports cannot be reused; a local recovery mismatch falls back once to a fresh
 local attempt, preserving evidence. An unknown course never blocks ASR.
 Never silently guess disputed numbers or claims when preparing notes.
 Never treat a queue removal as deleting an original.
@@ -255,9 +255,18 @@ need no course mappings or first lesson number. Existing mapped sources keep the
 explicitly converted. All timed events in a dedicated lecture feed may record without a course.
 Use `capture pending --json` and `transcription-queue library --query TEXT --date YYYY-MM-DD
 --course CODE --json` (filters optional) to find recordings and completed transcript paths by
-title, event-local date or course. At the next relevant interaction, resolve pending course
+title, event-local date or course. Before EVERY course task (including repeated work in the same chat), run
+`mynotes capture pending --json` and `mynotes transcription-queue transcripts --json`.
+Inspect all TXT in the course folder AND Trascrizioni/Dubbi before declaring a lesson
+missing, running ASR or preparing notes. Do not limit this search to startup or 30 items.
+TXT files without audio/metadata and TXT files renamed in Finder are completed transcripts.
+Use `mynotes transcription-queue rename-transcript --transcript ID --name NAME --json`
+for actual TXT filename changes. Resolve course
 associations with `capture assign --file PATH --json`; the JSON is an assignments array under
 `assignments`, each with recordingID (or eventID), courseCode and optional lessonNumber.
+For TXT entries use transcriptID instead of recordingID in a separate assignment batch.
+The assignment moves the existing edited TXT without ASR. To use a TXT directly,
+run `mynotes prepare COURSE-LNN --transcript PATH` (plain UTF-8 TXT is supported).
 An optional rule object with a match string saves a source-scoped association for future events.
 Search all pending recordings, including manual/external audio and Trascrizioni/Dubbi,
 before deciding a transcript is missing. candidateCourses ranks local evidence but is not

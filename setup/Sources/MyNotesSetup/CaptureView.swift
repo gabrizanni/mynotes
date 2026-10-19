@@ -56,7 +56,7 @@ struct CaptureView: View {
                 Picker("Vista Capture", selection: $section) {
                     Text("Calendario").tag("calendar")
                     Text("Registrazioni").tag("recordings")
-                    Text("Coda").tag("transcriptions")
+                    Text("Trascrizioni").tag("transcriptions")
                 }.pickerStyle(.segmented).labelsHidden().frame(maxWidth: 460)
                 if section == "calendar" { HSplitView {
                     VStack(alignment: .leading, spacing: 14) {

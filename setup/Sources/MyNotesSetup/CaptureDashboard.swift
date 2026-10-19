@@ -53,7 +53,7 @@ struct CaptureEvent: Codable, Identifiable {
         switch eligibility {
         case "SCHEDULED": return "Programmata"
         case "CONFLICT": return "Conflitto"
-        case "NEEDS_REVIEW": return "Da verificare"
+        case "NEEDS_REVIEW": return "Trascrizione non riuscita"
         case "CANCELLED": return recordingEnabled ? "Annullata" : "Esclusa localmente"
         default: return "Stato non riconosciuto"
         }
@@ -164,11 +164,20 @@ struct CaptureRecording: Codable, Identifiable {
         case jobID = "job_id", queuePosition = "queue_position", waitReason = "wait_reason"
     }
 }
-struct CaptureLibrary: Decodable { var recordings: [CaptureRecording]; var folder: String?; var folderConfigured: Bool?
-    enum CodingKeys: String, CodingKey { case recordings, folder; case folderConfigured = "folder_configured" }
+struct CaptureTranscript: Codable, Identifiable {
+    var id: String; var path: String; var title: String; var status: String
+    var courseCode: String?; var recordingID: String?; var lectureID: String?; var createdAt: String
+    enum CodingKeys: String, CodingKey {
+        case id, path, title, status
+        case courseCode = "course_code", recordingID = "recording_id", lectureID = "lecture_id", createdAt = "created_at"
+    }
+}
+struct CaptureLibrary: Decodable { var recordings: [CaptureRecording]; var transcripts: [CaptureTranscript]?; var folder: String?; var folderConfigured: Bool?
+    enum CodingKeys: String, CodingKey { case recordings, transcripts, folder; case folderConfigured = "folder_configured" }
 }
 struct CaptureQueueJob: Codable, Identifiable {
     var id: String; var createdAt: String?; var recordingID: String; var title: String; var courseCode: String?
+    var sourcePresent: Bool?
     var status: String; var error: String?; var phase: String?; var elapsedSeconds: Double?
     var attemptID: String?; var updatedClock: Double?; var sampledClock: Double?
     var stateFresh: Bool?; var activity: String?; var recoveryNotice: String?
@@ -182,6 +191,7 @@ struct CaptureQueueJob: Codable, Identifiable {
     var archiveStatus: String?
     var archiveError: String?
     enum CodingKeys: String, CodingKey {
+        case sourcePresent = "source_present"
         case id, title, status, error, phase, actions, outputs, activity
         case attemptID = "attempt_id", updatedClock = "updated_clock", sampledClock = "sampled_clock", stateFresh = "state_fresh", recoveryNotice = "recovery_notice"
         case exportText = "export_text", archiveStatus = "archive_status", archiveError = "archive_error"
@@ -200,14 +210,13 @@ struct CaptureQueue: Codable {
 }
 
 enum CaptureRecordingFilter: String, CaseIterable, Identifiable {
-    case all, ready, active, review, completed
+    case all, ready, active, completed
     var id: String { rawValue }
     var title: String {
         switch self {
         case .all: return "Tutte"
         case .ready: return "Pronte"
         case .active: return "In coda"
-        case .review: return "Da verificare"
         case .completed: return "Trascritte"
         }
     }
@@ -216,7 +225,6 @@ enum CaptureRecordingFilter: String, CaseIterable, Identifiable {
         case .all: return true
         case .ready: return item.transcriptionState == "NOT_STARTED" && (item.actions?.contains("enqueue") ?? item.transcriptionAllowed)
         case .active: return ["QUEUED", "RUNNING", "CANCELLING"].contains(item.transcriptionState)
-        case .review: return ["FAILED", "INTERRUPTED", "NEEDS_REVIEW", "OUTDATED", "WAITING"].contains(item.transcriptionState) || item.archiveStatus == "PENDING"
         case .completed: return item.isTranscribed
         }
     }
@@ -228,12 +236,12 @@ extension CaptureQueue {
     var currentJobs: [CaptureQueueJob] {
         var latest: [String: Int] = [:]
         for (index, job) in jobs.enumerated() { latest[job.recordingID] = index }
-        return jobs.enumerated().filter { latest[$0.element.recordingID] == $0.offset }.map(\.element)
+        return jobs.enumerated().filter { latest[$0.element.recordingID] == $0.offset && $0.element.sourcePresent != false }.map(\.element)
     }
     var activeJobs: [CaptureQueueJob] { currentJobs.filter { ["RUNNING", "QUEUED", "CANCELLING"].contains($0.status) } }
-    var reviewJobs: [CaptureQueueJob] { currentJobs.filter { ["FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains($0.status) || $0.archiveStatus == "PENDING" } }
+    var failedJobs: [CaptureQueueJob] { currentJobs.filter { ["FAILED", "INTERRUPTED", "NEEDS_REVIEW"].contains($0.status) || $0.archiveStatus == "PENDING" } }
     var historyJobs: [CaptureQueueJob] {
-        let visible = Set((activeJobs + reviewJobs).map(\.id))
+        let visible = Set((activeJobs + failedJobs).map(\.id))
         return jobs.reversed().filter { !visible.contains($0.id) } + (historyEvents ?? [])
     }
 }
@@ -241,7 +249,7 @@ extension CaptureQueue {
 enum CaptureProblem {
     static func summary(status: String) -> String {
         switch status {
-        case "NEEDS_REVIEW": return "Il risultato richiede una verifica. Audio e diagnosi sono conservati; usa l’azione disponibile per procedere."
+        case "NEEDS_REVIEW": return "Il tentativo non ha salvato una trascrizione. Usa Riprova; l’audio è conservato."
         case "INTERRUPTED", "CANCELLED": return "La trascrizione è stata interrotta. Audio e tentativi precedenti sono conservati."
         case "OUTDATED": return "L’audio è cambiato rispetto alla trascrizione salvata. Verifica la sorgente prima di riprovare."
         case "WAITING": return "L’audio non è ancora pronto: potrebbe essere in salvataggio, assente o disponibile soltanto nel cloud."

@@ -175,7 +175,7 @@ def validate_source_pack(pack: dict[str, Any]) -> None:
         if transcript_id and transcript_id not in existing:
             raise SourcePackError("A visual alignment references a nonexistent transcript id")
     for item in pack["evidence"]:
-        if item["id"].startswith("T") and not (0 <= float(item.get("start_seconds", -1)) <= float(item.get("end_seconds", -1))):
+        if item["id"].startswith("T") and not item.get("timestamp_unavailable") and not (0 <= float(item.get("start_seconds", -1)) <= float(item.get("end_seconds", -1))):
             raise SourcePackError("Transcript timestamps must be ordered and non-negative")
 
 
@@ -183,6 +183,15 @@ def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str |
     """Import a normalized transcript without running ASR or changing its source."""
     if not path.is_file():
         raise SourcePackError(f"Transcript does not exist: {path}")
+    if path.suffix.casefold() == '.txt':
+        text = path.read_text(encoding='utf-8').strip()
+        if not text:
+            raise SourcePackError('Transcript text is empty')
+        return {'schema_version': 3, 'lecture_id': lecture_id, 'imported': True,
+                'source_path': str(path), 'source_sha256': file_sha256(path),
+                'timestamp_quality': 'unavailable', 'human_verified': False,
+                'segments': [{'id': 'T001', 'text': text, 'speaker': 'UNKNOWN',
+                              'start_seconds': None, 'end_seconds': None, 'timestamp_unavailable': True}]}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -201,6 +210,11 @@ def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str |
         if not isinstance(identifier, str) or not re.fullmatch(r"T\d{3,}", identifier) or identifier in seen:
             raise SourcePackError(f"Transcript segment {number} has an invalid or duplicate ID")
         seen.add(identifier)
+        if segment.get('timestamp_unavailable') and payload.get('timestamp_quality') in {'mixed', 'unavailable'}:
+            if not isinstance(segment.get('text'), str) or not segment['text'].strip() or segment.get('start_seconds') is not None or segment.get('end_seconds') is not None:
+                raise SourcePackError('Invalid text-only transcript segment')
+            segments.append({**segment, 'speaker': segment.get('speaker', 'UNKNOWN'), 'speaker_role': 'UNKNOWN'})
+            continue
         try:
             start = float(segment["start_seconds"])
             end = float(segment["end_seconds"])
@@ -317,6 +331,22 @@ def _build_source_pack_locked(
     transcription_course["transcription"]["vocabulary"] = _glossary(course, glossary_chunks)
     transcript_manifest: dict[str, Any] | None = None
     bound_recording_id = None
+    if transcript_path is None:
+        from .transcript_library import scan as scan_transcripts
+        from .recording_library import options as library_options
+        if library_options(workspace).get('folder'):
+            matches = [t for t in scan_transcripts(workspace) if t.get('lecture_id') == lecture_id]
+            if len(matches) > 1:
+                raise SourcePackError('Più trascrizioni per questa lezione: seleziona il TXT da usare')
+            if matches:
+                transcript_path = Path(matches[0]['path'])
+                from .recording_library import records as audio_records
+                recording = audio_records(workspace).get(matches[0].get('recording_id'))
+                if recording and recording.get('transcript_json') and recording.get('export_sha256') == file_sha256(transcript_path):
+                    existing = Path(recording['transcript_json'])
+                    if existing.is_file():
+                        transcript_path = existing
+                        bound_recording_id = recording['id']
     if transcript_path is None:
         from .capture_associations import linked_recording, validated_transcript
         recording = linked_recording(workspace, lecture_id)

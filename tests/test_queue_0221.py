@@ -157,7 +157,9 @@ def test_reassignment_preserves_user_edited_dubbi_copy(setup):
     ws,folder,engine=setup;audio(folder);identifier=q.library(ws)[0]['id'];transcribe(ws,identifier)
     item=q.library(ws)[0];path=Path(item['export_text']);path.write_text('User annotations')
     code=add_course(ws,'Stats')['course']['code'];links.assign(capture.CaptureStore(ws),{'assignments':[{'recordingID':identifier,'courseCode':code}]})
-    assert path.read_text()=='User annotations' and q.library(ws)[0]['archive_status']=='PENDING' and engine.calls==1
+    current=q.library(ws)[0]
+    assert not path.exists() and Path(current['export_text']).read_text()=='User annotations'
+    assert current['archive_status']=='COMPLETED' and engine.calls==1
 
 
 def test_fluid_auto_does_not_pass_an_unsupported_language_hint(tmp_path,monkeypatch):
