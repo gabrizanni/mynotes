@@ -424,3 +424,14 @@ language hint rejected by the second engine was corrected by preserving detected
 primary language and omitting unsupported auto hints. Regression fixtures cover
 one fresh local fallback on legacy normalization mismatch without relaxing report
 or original identity checks.
+
+
+## 0.2.22 follow-up
+
+A real full-length run after installing 0.2.21 exposed a final emission beyond the
+audio endpoint. Window discovery now finds real neighboring audio for independent
+verification, without clamping any emitted timestamp. A valid empty second-engine
+report still cannot manufacture usable final speech: such a candidate remains
+unpublished with its evidence. Previously validated same-source candidates remain
+reusable. Setup also preserves the existing optional local verification engine
+when updating core tools, with a regression test for its rollback registry.

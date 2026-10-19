@@ -376,3 +376,20 @@ def test_component_mirrors_require_bounded_https_urls(tmp_path):
         spec=artifact();spec['mirrors']=mirrors
         with pytest.raises(runtime.SetupError,match='mirrors'):
             runtime.download(spec,tmp_path/'file')
+
+
+def test_successful_update_preserves_existing_optional_local_engine(tmp_path,monkeypatch):
+    release,home=fake_release(tmp_path,monkeypatch)
+    engine=tmp_path/'existing-local-engine';engine.write_text('fixture existing tool')
+    runtime.atomic_json(home/'tools.json',{'fluidaudio':str(engine)})
+    monkeypatch.setattr(runtime,'install_components',lambda *args:{'schema_version':1})
+    def run(command,**kwargs):
+        if command[0]=='/bin/zsh':
+            v=home/'app/versions/0.2.1';(v/'venv/bin').mkdir(parents=True)
+            (v/'venv/bin/python').write_text('fixture');(v/'venv/bin/mynotes').write_text('fixture')
+            (home/'app/current').symlink_to(v)
+        return subprocess.CompletedProcess(command,0,stdout='')
+    monkeypatch.setattr(runtime.subprocess,'run',run)
+    assert runtime.main(['--release-root',str(release),'--provider','codex'])==0
+    assert json.loads((home/'tools.json').read_text())['fluidaudio']==str(engine)
+    assert json.loads((home/'app/versions/0.2.1/managed-tools.json').read_text())['fluidaudio']==str(engine)

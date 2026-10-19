@@ -91,6 +91,18 @@ def assessment(segments, duration, settings=None):
                 if times:
                     group = {**group, 'first': first, 'last': last}
                     lo, hi = max(0.0, min(times)), min(duration, max(times))
+        if hi <= lo:
+            # An emission entirely outside the recording still has real audio
+            # neighbors. Inspect enough anchored context to let the independent
+            # engine supply replacement text/times; never clamp the emission.
+            first, last = group['first'], group['last']
+            while (first > 0 or last < len(segments)-1) and hi-lo < min(5., duration):
+                first, last = max(0, first-1), min(len(segments)-1, last+1)
+                anchors = segments[first:last+1]
+                times = [s[k] for s in anchors for k in ('start', 'end') if _finite(s.get(k))]
+                if times:
+                    lo, hi = max(0., min(times)), min(duration, max(times))
+                    group = {**group, 'first':first, 'last':last}
         return {**group, 'start': lo, 'end': hi, 'clip_start': max(0.0, lo-5), 'clip_end': min(duration, hi+5)} if hi > lo else None
     bounded = []
     for group in groups:
@@ -267,8 +279,17 @@ def recovery_candidate(directory):
         if plan_path.is_file():
             plan = json.loads(plan_path.read_text())
             exhausted = {'MATERIAL_DISAGREEMENT', 'REPAIR_BOUNDARY_MISMATCH', 'UNRESOLVED_REPAIR', 'REPAIR_TOO_EXTENSIVE', 'UNLOCATABLE_REPAIR', 'EMPTY_REPAIR'}
-            if plan.get('policy_version') == POLICY_VERSION and any(i.get('code') in exhausted for i in plan.get('issues', [])):
-                return None
+            codes = {i.get('code') for i in plan.get('issues', [])} & exhausted
+            if plan.get('policy_version') == POLICY_VERSION and codes:
+                if codes != {'UNLOCATABLE_REPAIR'}:
+                    return None
+                # Older endpoint discovery could miss an existing real anchor.
+                # Reconsider discovery only; admission still verifies every hash.
+                from .asr import audio_duration
+                raw = json.loads((attempt/'primary-result.json').read_text())
+                duration = audio_duration(attempt/'input.wav')
+                if duration is None or not assessment(raw['segments'], duration)[1]:
+                    return None
         report = attempt/'primary-result.json'
         if report.is_file() and (attempt/'input.wav').is_file():
             return {'attempt_id': identifier, 'directory': str(attempt)}

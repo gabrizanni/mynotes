@@ -188,3 +188,28 @@ def test_removed_event_remains_accessible_after_reenqueue(ws,monkeypatch):
     q.enqueue(ws);s=q.status(ws)
     assert s['jobs'][0]['status']=='QUEUED' and s['history_events'][0]['status']=='CANCELLED'
     assert s['history_events'][0]['recording_id']==job['recording_id']
+
+
+def test_outside_final_emission_is_repaired_from_real_neighbor_audio(tmp_path):
+    from mynotes.asr_recovery import assessment, repair
+    from test_asr_selective_recovery import Local
+    end={'start':94.,'end':100.,'text':'End.'}
+    original=rows()+[end, {'start':100.3,'end':101.3,'text':'Outside.'}]
+    before=json.loads(json.dumps(original));issues,windows=assessment(original,100.)
+    assert windows and windows[-1]['end']==100 and windows[-1]['start']<95
+    assert original==before and any(i['code']=='TIMESTAMP_BEYOND_AUDIO' for i in issues)
+    # Replacement comes from an actual second-engine result, not clamped timings.
+    directory=tmp_path/'attempt';directory.mkdir()
+    fixed,plan=repair(asr.EngineResult('argmax','fixture','fixture',original),audio=wav(tmp_path/'audio.wav'),duration=100,
+                     engine=Local(rows()+[end],0),settings={'language':'en','vocabulary':[]},directory=directory,update=lambda *a,**k:None)
+    assert not asr.validate_transcript({'segments':[{**s,'start_seconds':s['start'],'end_seconds':s['end']} for s in fixed.segments]},100)
+    assert plan['attempted_clips'] and plan['comparisons'][-1]['original_text'].endswith('Outside.')
+
+
+def test_previously_unlocatable_endpoint_report_can_be_attested_again(tmp_path):
+    from mynotes.asr_recovery import recovery_candidate,POLICY_VERSION
+    d=tmp_path/'asr';a=d/'attempts'/('e'*32);a.mkdir(parents=True)
+    wav(a/'input.wav');atomic_json_write(a/'primary-result.json',{'engine':'argmax','model':'fixture','segments':rows()+[{'start':101.,'end':102.,'text':'Outside'}]})
+    atomic_json_write(a/'repair-plan.json',{'policy_version':POLICY_VERSION,'issues':[{'code':'UNLOCATABLE_REPAIR'}]})
+    atomic_json_write(d/'status.json',{'status':'NEEDS_REVIEW','attempt_id':'e'*32})
+    assert recovery_candidate(d)['attempt_id']=='e'*32

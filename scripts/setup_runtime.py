@@ -343,6 +343,11 @@ def main(argv: list[str] | None = None) -> int:
             prior_tools = {}
         if all(prior_tools.get(key) == tools.get(key) for key in ("argmax", "soffice", "model_cache")):
             tools["execution_proof"] = prior_tools.get("execution_proof", {})
+        # Optional local engines are user-installed, not part of the bundle.
+        # A core runtime update must preserve their verified existing location.
+        fluid = prior_tools.get('fluidaudio')
+        if isinstance(fluid, str) and Path(fluid).is_file():
+            tools['fluidaudio'] = fluid
         atomic_json(home / "tools.json", tools)
         emit("workspace", "Preparing your private workspace")
         prepared = subprocess.run([str(executable), "-c", "from mynotes.onboarding import prepare_setup_preferences; from mynotes.workspace import Workspace; import json,sys; print(json.dumps(prepare_setup_preferences(Workspace.from_value(sys.argv[1]), sys.argv[2])))", str(workspace), options.provider], env=environment, check=True, capture_output=True, text=True)
