@@ -23,13 +23,8 @@ def group_defects(response,plan,lectures,maps):
                 choice=plan['ownership'].get(canonical,{})
                 if choice.get('owner') and choice['owner']!=lecture:
                     foreign.append({'evidence_id':identifier,'owner':choice['owner']})
-            if block.get('kind') not in NARRATIVE_KINDS and foreign:
-                content=block.get('answer',block.get('text',' '.join(block.get('items',[]))))
-                if len(str(content).split())>50:
-                    defects.append({'phase':'CONTENT_VALIDATION','code':'CROSS_LESSON_SUMMARY_TOO_LONG',
-                        'lecture_id':lecture,'path':f'blocks[{i}]','kind':block.get('kind'),
-                        'word_count':len(str(content).split()),'sources':foreign,
-                        'action':'Review source support and revise only this answer through a separately authorized correction; no automatic rewrite'})
+            # Cross-lesson citations are legal in summaries of any length.
+            # Substantive coverage and linked-use support are checked by batch.
     return defects
 
 

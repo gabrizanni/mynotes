@@ -1036,15 +1036,20 @@ def _replace_or_append(document: Document, notes: dict[str, Any], pack: dict[str
     boundary = _boundaries(document, lecture_id)
     body = document._body._element
     before = list(body)
-    preceding = before[:boundary[0]] if boundary is not None else before
+    insertion = boundary[0] if boundary is not None else len(before) - (1 if len(before) and before[-1].tag == qn("w:sectPr") else 0)
+    if boundary is None:
+        code, number = lecture_id.rsplit('-L', 1)
+        for index, item in enumerate(before):
+            match = re.search(r'MYNOTES START ' + re.escape(code) + r'-L(\d+)', ''.join(item.itertext()))
+            if match and int(match[1]) > int(number):
+                insertion = index; break
+    preceding = before[:insertion]
     page_break_before = any(item.tag != qn("w:sectPr") and "".join(item.itertext()).strip() for item in preceding)
     _append_block(document, notes, pack, page_break_before=page_break_before, language=language, recap_language=recap_language)
-    added = [item for item in list(body)[len(before):] if item.tag != qn("w:sectPr")]
+    added = [item for item in list(body) if item not in before and item.tag != qn("w:sectPr")]
     for item in added:
         body.remove(item)
-    if boundary is None:
-        insertion = len(body) - (1 if len(body) and body[-1].tag == qn("w:sectPr") else 0)
-    else:
+    if boundary is not None:
         start, end = boundary; insertion = start
         for item in before[start:end + 1]:
             body.remove(item)
@@ -1075,6 +1080,21 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
         pass
     if candidate.get("source_pack_hash") != file_sha256(Path(candidate["source_pack"])):
         raise PublicationError("Source pack changed after candidate generation")
+    if candidate.get('batch_id') and candidate.get('batch_fingerprint') and candidate.get('batch_group') is not None:
+        from .batch import _read
+        completion = workspace.runs_dir/'_batches'/candidate['batch_id']/candidate['batch_fingerprint']/f"group-{candidate['batch_group']:03d}"/'complete.json'
+        before_publish = deepcopy(candidate)
+        before_publish['published_to_word'] = False
+        before_publish.pop('published_path', None); before_publish.pop('published_hash', None)
+        digest = hashlib.sha256((json.dumps(before_publish, ensure_ascii=False, indent=2, sort_keys=True)+'\n').encode()).hexdigest()
+        if not any(entry['lecture_id'] == lecture_id and entry['sha256'] == digest for entry in _read(completion)['candidates']):
+            raise PublicationError('Batch candidate differs from its validated completion record')
+        origin = candidate.get('source_revalidation')
+        if origin:
+            for key in ('manifest', 'returned', 'original_attempt'):
+                p = Path(origin[key])
+                if not p.resolve().is_relative_to(workspace.root.resolve()) or file_sha256(p) != origin[key+'_sha256']:
+                    raise PublicationError('Original writing revalidation provenance changed')
     if candidate.get("repair_lineage"):
         try:
             from .batch_recovery import verify_repair_lineage
@@ -1292,7 +1312,8 @@ def _publication_state(workspace, target):
             payload = json.loads(path.read_text())
             candidates[row['lecture_id']] = {"content_hash": _content_fingerprint(payload),
                 "publication": {k: payload[k] for k in ('published_to_word', 'published_path', 'published_hash') if k in payload}}
-    return {'lessons': rows, 'candidates': candidates}
+    from .course_update import baseline_index
+    return {'lessons': rows, 'candidates': candidates, 'baseline_index': baseline_index(workspace, rows[0]['lecture_id'].split('-L')[0]) if rows else {}}
 
 
 def _restore_publication_state(workspace, target, snapshot):
@@ -1337,6 +1358,12 @@ def _restore_publication_state(workspace, target, snapshot):
             atomic_json_write(path, payload)
             connection.execute('UPDATE candidate_runs SET status=?,candidate_hash=?,updated_at=? WHERE lecture_id=?',
                                ('PUBLISHED' if payload.get('published_to_word') else 'CANDIDATE_READY', file_sha256(path), now_compact_utc(), lecture))
+    from .course_update import _index_path
+    code = next((row['lecture_id'].split('-L')[0] for row in snapshot['lessons']), None)
+    if code is None:
+        code = next((lecture.split('-L')[0] for lecture in affected), None)
+    if code:
+        atomic_json_write(_index_path(workspace, code), snapshot.get('baseline_index', {}))
     state = WorkflowState(workspace.database_path)
     try:
         _write_status_markdown(workspace, state.rows())
@@ -1363,7 +1390,12 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
     state_bootstrap = WorkflowState(workspace.database_path); state_bootstrap.close()
     course = _course(workspace.configuration_store().load(), code); target = _target(course, workspace)
     if candidate_path is None:
-        matches = sorted((workspace.runs_dir / lecture_id / "word").glob("*.candidate.docx"), key=lambda path: path.stat().st_mtime)
+        matches = list((workspace.runs_dir / lecture_id / "word").glob("*.candidate.docx"))
+        for path in (workspace.runs_dir/'_course_updates'/code).glob('*/course.candidate.docx'):
+            report = path.with_suffix('.validation.json')
+            if report.is_file() and lecture_id in json.loads(report.read_text()).get('requested_lectures', []):
+                matches.append(path)
+        matches.sort(key=lambda path: path.stat().st_mtime)
         if not matches:
             raise PublicationError("No validated Word candidate exists; run mynotes build first")
         candidate_path = matches[-1]
@@ -1372,6 +1404,11 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
         validation = json.loads(validation_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise PublicationError("Candidate has no valid render/structure report") from error
+    if validation.get('mode') == 'course_update':
+        if lecture_id not in validation.get('requested_lectures', validation.get('lecture_ids', [])):
+            raise PublicationError('Validated Word candidate belongs to a different lecture')
+        from .course_update import publish_course_revision
+        return publish_course_revision(workspace, candidate_path)
     if validation.get("lecture_id") != lecture_id:
         raise PublicationError("Validated Word candidate belongs to a different lecture")
     if not isinstance(validation.get("target"), str) or Path(validation["target"]).resolve() != target.resolve():
@@ -1450,35 +1487,10 @@ def publish_word_candidate(workspace: Workspace, lecture_id: str, candidate_path
     return {"status": "PUBLISHED", "lecture_id": lecture_id, "output": str(target), "backup": transaction.get("backup"), "transaction": str(journal), "undo_hint": "Puoi chiedermi di annullare l’ultimo aggiornamento."}
 
 
-def update_course_notes(workspace: Workspace, lecture_id: str) -> dict[str, Any]:
-    """Build from the current cumulative and publish unless preview was requested."""
-    from .workflow import WorkflowState
-    lecture_id = lecture_id.upper()
-    course = _course(workspace.configuration_store().load(), lecture_id.split('-L', 1)[0])
-    target = _target(course, workspace)
-    # Repeating a completed request must not create another backup or Word version.
-    source = workspace.runs_dir / lecture_id / 'lecture_notes.candidate.json'
-    if source.is_file() and target.is_file():
-        payload, _ = _load_candidate(workspace, lecture_id)
-        state = WorkflowState(workspace.database_path)
-        try:
-            row = state.connection.execute("SELECT status FROM lesson_runs WHERE lecture_id=?", (lecture_id,)).fetchone()
-            expected = state.expected_output_hash(target)
-        finally:
-            state.close()
-        if expected and expected != file_sha256(target):
-            raise PublicationError('Final Word was edited externally; review it before an automatic update. No file was overwritten.')
-        if row and row[0] == 'PUBLISHED' and payload.get('published_to_word') and expected == file_sha256(target):
-            for record in _transactions(workspace, target):
-                if record.get('status') == 'COMPLETED' and record.get('lecture_id') == lecture_id:
-                    if record.get('content_hash') == _content_fingerprint(payload):
-                        return {'status': 'SKIPPED', 'lecture_id': lecture_id, 'output': str(target), 'reason': 'already_published'}
-                    break
-    built = build_word_candidate(workspace, lecture_id)
-    if course['publication']['mode'] == 'review':
-        return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show this candidate and publish only after approval.'}
-    result = publish_word_candidate(workspace, lecture_id, Path(built['candidate']))
-    return {**result, 'validation': built}
+def update_course_notes(workspace: Workspace, lecture_id: str | list[str]) -> dict[str, Any]:
+    """Update one or several related lessons with one cumulative transaction."""
+    from .course_update import update_course
+    return update_course(workspace, lecture_id)
 
 
 def _transactions(workspace, target):
@@ -1519,7 +1531,7 @@ def undo_last_update(workspace: Workspace, course_code: str) -> dict[str, Any]:
     record = next((r for r in records if r.get('target_hash') == digest), None)
     if record is None:
         raise PublicationError('Final Word changed since the last update; review it before undoing. No file was overwritten.')
-    with _restore_locks(workspace, target, [record['lecture_id']]):
+    with _restore_locks(workspace, target, record.get('lecture_ids', [record['lecture_id']])):
         current = file_sha256(target) if target.is_file() else None
         if current != record.get('target_hash'):
             raise PublicationError('Final Word changed since the last update; review it before undoing. No file was overwritten.')
@@ -1598,7 +1610,7 @@ def recover_publications(workspace: Workspace) -> list[dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if payload.get('undo', {}).get('status') == 'PREPARED':
             target = Path(payload['target'])
-            with _restore_locks(workspace, target, [payload['lecture_id']]):
+            with _restore_locks(workspace, target, payload.get('lecture_ids', [payload['lecture_id']])):
                 current = file_sha256(target) if target.is_file() else None
                 if current == payload['undo']['restored_hash']:
                     _restore_publication_state(workspace, target, payload.get('publication_state'))
@@ -1612,7 +1624,14 @@ def recover_publications(workspace: Workspace) -> list[dict[str, Any]]:
                 atomic_json_write(path, payload)
                 results.append(payload)
             continue
-        if payload.get("status") in {"COMPLETED", "ABORTED", "NEEDS_REVIEW", "UNDONE"}:
+        if payload.get("status") in {"COMPLETED", "ABORTED", "NEEDS_REVIEW", "UNDONE", "ROLLED_BACK"}:
+            continue
+        if payload.get('original_candidates'):
+            from .course_update import recover_course_revision
+            try:
+                results.append(recover_course_revision(workspace, payload))
+            except (OSError, ValueError, RuntimeError) as error:
+                payload.update(status='NEEDS_REVIEW', reason=str(error)); atomic_json_write(path, payload); results.append(payload)
             continue
         target = Path(payload["target"]); current = file_sha256(target) if target.is_file() else None
         if current == payload.get("candidate_hash"):

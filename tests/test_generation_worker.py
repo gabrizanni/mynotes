@@ -75,7 +75,7 @@ def test_rejected_batch_retains_transport_without_a_second_paid_call(tmp_path):
         response["lessons"][0]["notes"]["blocks"][1]["coverage_role"] = "reference"
     adapter = Adapter(invalid)
     for _ in range(2):
-        with pytest.raises(WorkflowError, match="coverage_role=full"):
+        with pytest.raises(WorkflowError, match="owned slide"):
             generate_batch(ws, "OPS", [1, 2], selection=selection, budgets=VERIFIED, provider_adapter=adapter)
     assert len(adapter.calls) == 1
     assert list(ws.runs_dir.rglob("returned-writing-*.json"))

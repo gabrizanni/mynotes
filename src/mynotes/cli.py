@@ -368,6 +368,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--lessons", help="lesson numbers/ranges, for example 1-6 or 1,3-5")
     batch.add_argument("--provider", choices=("codex", "agy", "claude"))
     batch.add_argument("--quality", help="base, standard, approfondito, or revisione; defaults to standard")
+    batch.add_argument("--context-lessons", help="other relevant lesson numbers/ranges from this course, imported with source provenance")
     batch.add_argument("--selection", help="JSON mapping canonical slide IDs to reviewed owners and inline anchors")
     batch.add_argument("--budgets", help="JSON with verified selected-model context/output limits")
     batch.add_argument("--instructions", help="temporary instructions for this batch")
@@ -401,7 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--candidate", help="specific validated candidate DOCX")
     publish.add_argument("--accept-current-word", action="store_true", help="accept an explicitly reviewed external Word change")
     update = subparsers.add_parser("update", help="build validated notes and update the stable handout, with a safety backup")
-    update.add_argument("lecture_id", help="COURSE-LNN")
+    update.add_argument("lecture_id", nargs="+", help="one or more COURSE-LNN from the same course")
     update.add_argument("--workspace", help="private workspace path")
     undo = subparsers.add_parser("undo", help="undo the last course update, preserving a safety copy")
     undo.add_argument("course", help="course code")
@@ -851,6 +852,7 @@ def _generate_batch(arguments: argparse.Namespace) -> int:
         instructions=arguments.instructions if arguments.instructions is not None else options.get("instructions", ""),
         image_limit=arguments.image_limit if arguments.image_limit is not None else options.get("image_limit"),
         speaker_focus=arguments.speaker_focus or options.get("speaker_focus"),
+        context_lessons=[f'{arguments.course.upper()}-L{number:02d}' for number in _lesson_numbers(arguments.context_lessons)] if arguments.context_lessons else saved.get('context_lessons'),
         plan_only=arguments.plan_only, batch_id=arguments.resume, build_word=arguments.build_word,
         repair_missing=bool(arguments.resume or arguments.build_word),
         pause_after=f'{arguments.course.upper()}-L{arguments.stop_after:02d}' if arguments.stop_after is not None else None,

@@ -20,7 +20,7 @@ def intent(plan, lectures, continuity, *, reviewed=False):
     return {'lectures':lectures,'sources':{l:plan['sources'][l] for l in lectures},'ownership':ownership,
             'requested':plan['requested_model'],'style':plan['style'],'course':plan['course'],
             'budgets':plan['budgets'],'contract':plan['contract'],'generation_contract':plan['generation_contract'],
-            'prompt_contract':plan['prompt_contract'],'continuity':continuity}
+            'prompt_contract':plan['prompt_contract'],'continuity':continuity, **({'context_sources':plan['context_sources']} if plan.get('context_sources') else {})}
 
 
 def equivalent_intent(old,plan,lectures,continuity):
@@ -108,6 +108,95 @@ def compatible_response(root, plan, lectures, continuity):
     return None,None
 
 
+def _historical_continuity(root, manifest, lectures):
+    """Reconstruct the original chain from hash-bound completed candidates."""
+    from .batch import _read, _hash, _continuity
+    prior = deepcopy(manifest.get('prior_continuity', []))
+    for index, group in enumerate(manifest['groups']):
+        if group == lectures:
+            return prior
+        complete = root/manifest['fingerprint']/f'group-{index:03d}'/'complete.json'
+        if not complete.is_file(): return None
+        for saved in _read(complete)['candidates']:
+            lesson = saved['lecture_id']
+            paths = [root.parent.parent/lesson/'lecture_notes.candidate.json', *root.glob(f'*/previous-candidates/{lesson}-*.json')]
+            payload = None
+            for path in paths:
+                if not path.is_file(): continue
+                row = json.loads(path.read_text())
+                row['published_to_word'] = False; row.pop('published_path', None); row.pop('published_hash', None)
+                digest = __import__('hashlib').sha256((json.dumps(row, ensure_ascii=False, indent=2, sort_keys=True)+'\n').encode()).hexdigest()
+                if digest == saved['sha256']:
+                    payload = row; break
+            if payload is None: return None
+            notes = payload['notes']; summary = _continuity(lesson, notes)
+            if manifest.get('contract', 1) == 1:
+                summary = {'lecture_id': lesson,
+                    'topics': [b['text'][:100] for b in notes['blocks'] if b['kind']=='heading'][:30],
+                    'recap': next((b['text'][:1600] for b in reversed(notes['blocks']) if b['kind']=='recap'), ''),
+                    'narrative_fingerprints': summary['narrative_fingerprints']}
+            prior.append(summary)
+    return None
+
+
+def revised_response(root, plan, lectures, continuity, *, preserve_manifest=True):
+    """Revalidate a verified original under a new policy, never claim intent equality.
+
+    Source snapshots, output lessons, model and style remain exact. Organization,
+    continuity and validation policy may change. Raw transport and its original
+    manifest stay immutable and are explicitly bound into the new candidate.
+    """
+    if not plan.get('organization_revision'):
+        return None, None
+    from .batch import _read, _request
+    from .providers import RequestedModel
+    current, current_maps = _request(plan, lectures, root, continuity)
+    for manifest in sorted(root.glob('*/manifest.json')):
+        old = _read(manifest)
+        if lectures not in old.get('groups', []):
+            continue
+        if any(old.get(key) != plan.get(key) for key in ('requested_model', 'style', 'course')):
+            continue
+        if old.get('context_sources', {}) != plan.get('context_sources', {}) or any(old.get('sources', {}).get(lesson) != plan['sources'].get(lesson) for lesson in lectures):
+            continue
+        runtime = {**old, 'packs': plan['packs'], 'inventory': plan['inventory'],
+                   'requested': RequestedModel(**old['requested_model'])}
+        _, old_maps = _request(runtime, lectures, root, [])
+        if old_maps != current_maps:
+            continue
+        # Checkpoints are enumerated, then matched by their immutable lesson
+        # array and source-bound manifest. No prompt/hash is rewritten.
+        for path in sorted((root/'generation-checkpoints').glob('*/returned-writing-*.json')):
+            response = _load_generation_phase(path, previous=None)
+            if response is None or [row.get('lecture_id') for row in response.notes.get('lessons', [])] != lectures:
+                continue
+            attempt = Path(response.attempt_path or '')
+            if not attempt.is_absolute() or not attempt.resolve().is_relative_to(root.resolve()) or not attempt.is_file():
+                continue
+            # Bind the retained checkpoint to this manifest's generation intent.
+            from .batch import _hash
+            historical = _historical_continuity(root, old, lectures)
+            saved_continuities = [historical] if historical is not None else []
+            if not any(path.parent.name == _hash(intent(runtime, lectures, prior, reviewed=True)) for prior in saved_continuities):
+                continue
+            record = json.loads(attempt.read_text())
+            if record.get('requested') != plan['requested_model']:
+                continue
+            response = certify_response(response, current, root)
+            retained = manifest
+            if preserve_manifest:
+                retained = root/'revisions'/plan['fingerprint']/'original-manifests'/manifest.parent.name/'manifest.json'
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                if not retained.exists(): retained.write_bytes(manifest.read_bytes())
+                if file_sha256(retained) != file_sha256(manifest):
+                    raise WorkflowError('Original manifest snapshot changed; no automatic writing retry')
+            return response, {'kind': 'organization_revalidation', 'manifest': str(retained),
+                'manifest_sha256': file_sha256(retained), 'returned': str(path), 'returned_sha256': file_sha256(path),
+                'original_attempt': str(attempt), 'original_attempt_sha256': file_sha256(attempt),
+                'reason': 'Original successful writing revalidated under new organization, not an equivalent writing request.'}
+    return None, None
+
+
 def certify_response(response,request,root):
     if not response.attempt_path or not Path(response.attempt_path).is_absolute():return response
     record=json.loads(Path(response.attempt_path).read_text())
@@ -161,7 +250,7 @@ def historical_active_seconds(root,plan,lectures,continuity):
 
 
 def repair_coverage(request,response,defects,maps,adapter,timeout):
-    """One hash-anchored correction; existing prose is never rewritten."""
+    """One hash-anchored correction of explicit defects, including replacements."""
     from .batch import _hash, _stage_visuals
     # A compatible response can bypass the new-writing branch that normally
     # stages images. Repair still needs verified pixels at the new paths.
@@ -173,6 +262,15 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
     task={'defects':[{**d,'evidence_id':maps[d['lecture_id']][d['evidence_id']]} for d in defects],
           'anchors':[{'lecture_id':row['lecture_id'],'block_sha256':_hash(b),'block':b}
                      for row in response.notes['lessons'] for b in row['notes']['blocks']], 'base_notes_sha256':base_hash}
+    editable = set()
+    for defect in task['defects']:
+        row = next(row for row in response.notes['lessons'] if row['lecture_id'] == defect['lecture_id'])
+        import re
+        match = re.fullmatch(r'blocks\[(\d+)\]', defect.get('path', ''))
+        if match:
+            editable.add((defect['lecture_id'], _hash(row['notes']['blocks'][int(match[1])])))
+    task['editable_blocks'] = [{'lecture_id': l, 'block_sha256': digest} for l, digest in sorted(editable)]
+    task['lesson_evidence'] = request.batch_context['lesson_evidence']
     block={'type':'object','additionalProperties':False,'properties':{
         'kind':{'type':'string','enum':['paragraph']},'text':{'type':'string'},
         'evidence_ids':{'type':'array','items':{'type':'string','enum':sorted(allowed)}},
@@ -184,6 +282,23 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
     schema['properties']['attachments']={'type':'array','maxItems':len(defects),'items':{'type':'object','additionalProperties':False,'properties':{'lecture_id':{'type':'string'},'block_sha256':{'type':'string'},'evidence_ids':{'type':'array','items':{'type':'string','enum':sorted(allowed)}}},'required':['lecture_id','block_sha256','evidence_ids']}}
     schema['properties']['visual_updates']={'type':'array','maxItems':len(defects),'items':{'type':'object','additionalProperties':False,'properties':{'evidence_id':{'type':'string','enum':sorted(allowed)},'decision':{'type':'string','enum':['exclude']},'reason':{'type':'string'},'inspected':{'type':'boolean'}},'required':['evidence_id','decision','reason','inspected']}}
     schema['required']+=['attachments','visual_updates']
+    from .providers import notes_schema
+    replacement_block = deepcopy(notes_schema(compact=True)['properties']['blocks']['items'])
+    replacement_block['properties']['coverage_role'] = {'type': 'string', 'enum': ['full', 'supplement', 'reference', 'new_insight']}
+    replacement_block['properties']['prior_lecture_id'] = {'type': 'string'}
+    schema['properties']['replacements'] = {'type': 'array', 'maxItems': len(editable), 'items': {'type': 'object', 'additionalProperties': False,
+        'properties': {'lecture_id': {'type': 'string'}, 'block_sha256': {'type': 'string'}, 'block': replacement_block}, 'required': ['lecture_id', 'block_sha256', 'block']}}
+    schema['properties']['moves'] = {'type': 'array', 'maxItems': len(editable), 'items': {'type': 'object', 'additionalProperties': False,
+        'properties': {'lecture_id': {'type': 'string'}, 'block_sha256': {'type': 'string'}, 'to_lecture_id': {'type': 'string'}, 'after_block_sha256': {'type': 'string'}},
+        'required': ['lecture_id', 'block_sha256', 'to_lecture_id', 'after_block_sha256']}}
+    schema['properties']['deletions'] = {'type': 'array', 'maxItems': len(editable), 'items': {'type': 'object', 'additionalProperties': False,
+        'properties': {'lecture_id': {'type': 'string'}, 'block_sha256': {'type': 'string'}}, 'required': ['lecture_id', 'block_sha256']}}
+    if editable:
+        # Replacements need the existing passage's cited evidence too; coverage
+        # repair still receives all original anchors and only staged sources.
+        for row in response.notes['lessons']:
+            for b in row['notes']['blocks']:
+                if (row['lecture_id'], _hash(b)) in editable: allowed.update(b['evidence_ids'])
     selected={'lecture_id':request.lecture_id,'course':request.source_pack.get('course',{}),
               'evidence':[e for e in request.source_pack['evidence'] if e['id'] in allowed],
               'visuals':[deepcopy(v) for v in request.source_pack.get('visuals',[]) if v.get('evidence_id') in allowed]}
@@ -198,6 +313,16 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
         patch=ProviderResponse(**saved['response'])
     else:
         if (directory/'started.json').exists():raise WorkflowError('Targeted correction already attempted; inspect its retained attempt, no paid retry')
+        revision = request.batch_context.get('revision_id')
+        guards = []
+        if revision:
+            guard_root = request.run_dir.parent.parent/'correction-allowances'/revision
+            for lesson in {d['lecture_id'] for d in defects}:
+                guard = guard_root/(lesson+'.json')
+                if guard.exists(): raise WorkflowError('This lesson already used its automatic correction for this revision; saved work retained')
+                guards.append(guard)
+            for guard in guards:
+                atomic_json_write(guard, {'base_notes_sha256': base_hash, 'checkpoint': str(directory)})
         atomic_json_write(directory/'started.json',{'base_notes_sha256':base_hash,'task':task})
         patch=invoke_provider(repair_request,adapter)
         atomic_json_write(path,{'base_notes_sha256':base_hash,'task':task,'response':asdict(patch)})
@@ -212,13 +337,39 @@ def apply_correction(original,patch,task):
     from .batch import _hash,NARRATIVE_KINDS
     notes=deepcopy(original);rows={r['lecture_id']:r['notes'] for r in notes['lessons']};seen=set()
     allowed={d['evidence_id'] for d in task['defects']}
-    if set(patch)-{'insertions','attachments','visual_updates'}:raise WorkflowError('Unexpected targeted correction operation')
+    if set(patch)-{'insertions','attachments','visual_updates','replacements','moves','deletions'}:raise WorkflowError('Unexpected targeted correction operation')
     by_lesson={l:{d['evidence_id'] for d in task['defects'] if d['lecture_id']==l} for l in rows}
     anchors={(l,_hash(b)):b for l,row in rows.items() for b in row['blocks']}
     insertions=patch.get('insertions',[]);attachments=patch.get('attachments',[]);updates=patch.get('visual_updates',[])
-    if (not all(isinstance(v,list) for v in (insertions,attachments,updates))
-            or not 1<=len(insertions)+len(attachments)<=len(allowed) or len(updates)>len(allowed)):
+    replacements=patch.get('replacements',[]);moves=patch.get('moves',[]);deletions=patch.get('deletions',[])
+    editable={(r['lecture_id'],r['block_sha256']) for r in task.get('editable_blocks',[])}
+    if (not all(isinstance(v,list) for v in (insertions,attachments,updates,replacements,moves,deletions))
+            or not 1<=len(insertions)+len(attachments)+len(replacements)+len(moves)+len(deletions)<=len(allowed)+len(editable) or len(updates)>len(allowed)):
         raise WorkflowError('Invalid targeted correction')
+    modified=set()
+    for op in replacements+moves+deletions:
+        key=(op.get('lecture_id'),op.get('block_sha256'));anchor=anchors.get(key)
+        if key not in editable or anchor is None or key in modified:
+            raise WorkflowError('Correction may only change hash-anchored defective blocks')
+        modified.add(key);lecture=key[0];blocks=rows[lecture]['blocks']
+        index=next(i for i,b in enumerate(blocks) if b is anchor)
+        if op in replacements:
+            if set(op)!={'lecture_id','block_sha256','block'}:raise WorkflowError('Invalid targeted replacement')
+            block=op['block'];ids=block.get('evidence_ids',[])
+            if not ids or set(ids)-set(task.get('lesson_evidence',{}).get(lecture,[])):
+                raise WorkflowError('Replacement cites evidence outside its lesson context')
+            blocks[index]=deepcopy(block)
+        elif op in moves:
+            if set(op)!={'lecture_id','block_sha256','to_lecture_id','after_block_sha256'}:raise WorkflowError('Invalid targeted move')
+            dest=op['to_lecture_id'];target=anchors.get((dest,op['after_block_sha256']))
+            if dest not in rows or dest==lecture or target is None or set(anchor['evidence_ids'])-set(task.get('lesson_evidence',{}).get(dest,[])):
+                raise WorkflowError('Move needs a verified destination and evidence visible in both lessons')
+            del blocks[index];destination=rows[dest]['blocks'];position=next(i for i,b in enumerate(destination) if b is target)
+            destination.insert(position+1,deepcopy(anchor))
+        else:
+            if set(op)!={'lecture_id','block_sha256'}:raise WorkflowError('Invalid targeted deletion')
+            del blocks[index]
+        seen.update(set(anchor['evidence_ids'])&allowed)
     for op in insertions:
         if not isinstance(op,dict) or set(op)!={'lecture_id','after_block_sha256','block'} or op['lecture_id'] not in rows:raise WorkflowError('Correction may only insert into the affected lesson')
         l=op['lecture_id'];b=op['block'];ids=b.get('evidence_ids',[]);anchor=anchors.get((l,op['after_block_sha256']))

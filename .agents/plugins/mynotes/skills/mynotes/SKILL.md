@@ -19,16 +19,17 @@ A concrete operational request takes precedence over optional setup. Reuse saved
 courses, folders, languages and style. Ask only for indispensable missing source
 or identity choices; do not start pending-course questionnaires before completing
 the request. Offer deferred context only afterwards when useful or when the user
-asks for course setup. These defaults never bypass source validation, external
+asks for course setup. These defaults never bypass source validation, preservation of personal
 Word edits, course review mode or an actual authorization requirement.
 For a configured lecture use these exact commands in MYNOTES_WORKSPACE:
 `mynotes prepare COURSE-LNN`, `mynotes generate COURSE-LNN`, then
 `mynotes update COURSE-LNN`. The final command creates missing output folders.
 A source pack is at runs/COURSE-LNN/source_pack.json; its sources list identifies
 an imported_transcript path, reusable with `prepare COURSE-LNN --transcript PATH`.
-Inspect source inventory and freshness to route the task; the writing worker
-reads the complete academic evidence. Do not duplicate that full reading before
-starting the worker. Review content and source coverage after generation.
+Inspect source inventory and freshness to route the task. Read the relevant
+recordings and existing passages to organize shared slides and cross-lesson
+connections autonomously; the writing worker still reads the complete staged
+academic evidence. Do not repeat unrelated full-course extraction or ASR. Review content and source coverage after generation.
 Use relevant --help only when the required command fails or a genuinely unknown
 option is necessary. Do not explore course/config help or directories merely to
 rediscover saved paths. There is no `mynotes config show` command.
@@ -112,8 +113,9 @@ assign with associationState="estimated", a short reason, and alternatives=[cour
 Show "Associazione stimata" when using it for notes. If no plausible candidate exists,
 leave it in Dubbi. Explicit later user information takes precedence; assign without
 associationState to resolve it. Never overwrite an occupied lesson: preserve the separate
-recording and explain the conflict. Never rewrite previously generated Word automatically
-because an association changed. Course creation
+recording and explain the conflict. A changed association alone does not prove
+old notes are wrong: review affected sources and, if necessary, correct related
+lessons together while preserving personal Word additions. Course creation
 uses the existing deferred-context flow. Missing lesson numbers do not block recording or ASR.
 Assignment never reruns ASR; it updates the course folder of the exported TXT copy. Use the bound transcript during prepare; retain its
 original ASR provenance. DEFERRED means an active recording/export/transcription must finish first.
@@ -241,9 +243,15 @@ Never supply those flags as a shortcut to turn a draft into a completed guide.
 For several lessons of one course, use `mynotes generate-batch CODE --lessons 1-6
 --plan-only` first, then `generate-batch --build-word` with the same selection. Prepare only
 missing or changed relevant source packs, reusing existing transcripts and
-extractions. Read NEEDS_SELECTION and ask only about unresolved slide ownership
-or inline supplement placement; never assign every slide of a shared deck to
-each lesson. Save the reviewed selection with the batch selection interface,
+extractions. Organize slides autonomously after reading the relevant recordings,
+shared materials and previously written lessons. Never ask the user to confirm
+slide placement, cross-lesson links or a revised assignment. Provisional choices
+are recorded and revisable, not claims that a slide was taught. Resolve
+NEEDS_SELECTION locally for organization/source review; ask only if an actual
+missing source or irreconcilable user-content contradiction needs user input.
+Never assign an entire shared deck as duplicate complete coverage to every lesson.
+Save the reviewed main placement, reason and uses (introduction, development,
+recall, supplement) with transcript evidence_ids in the batch selection interface,
 including structural_review (kind title/section_divider, reason, actual image_sha256,
 status material) only for visually inspected non-teaching covers/dividers; never
 infer this from short text or exempt diagrams. Pages with code/data are not covers.
@@ -252,8 +260,17 @@ not another writing/review phase. Then resume the same batch.
 Follow numeric lesson order with shared context.
 An untouched topic from slides belongs inline next to its related explanation,
 labelled as supplementary; preserve the lecturer's actual progression. Repeat
-references and new source-supported insights without rewriting earlier complete
-explanations, tables or images. Never silently truncate evidence to fit context.
+references and distinct source-supported insights across any lesson, including
+formulas, tables and figures where they teach something relevant. There is no
+50-word cross-lesson limit or chronological citation ban. The reasoning unit is
+the course. Main slide placement is revisable, not exclusive ownership. Use
+--context-lessons for relevant other prepared lessons; their evidence keeps its
+origin and must not be attributed to the current recording. Never silently
+truncate evidence to fit context. Inspect full relevant previous passages, not
+only headings or the first few lessons. If new evidence changes the organization,
+revise the selection and resume: MyNotes records before/after and revalidates
+retained writing without altering the original receipt. Include previously
+published affected lessons in the revision and update their Word sections too.
 Before generation, show one concise summary: ordered lessons, sources, requested
 model and effort, detail/list style, image policy and maximum image count. Reuse
 saved course context, assessment, learner background and preferences rather than
@@ -277,13 +294,18 @@ Never say a process is running after its command failed unless batch-status show
 a live job. Distinguish content-ready, Word-ready, retry wait and stopped states.
 Resuming must reuse certified responses after local structural-source review.
 Never edit returned JSON, source citations or receipt hashes to satisfy coverage.
-Only the managed, separately recorded targeted correction may fix a real gap.
+Only the managed, separately recorded hash-anchored targeted correction may fix
+a real gap or defective passage, including replacements and moves. At most one
+automatic correction per affected lesson and revision is allowed, within the
+existing time allowance and requested model settings; no nested paid retries.
 Before resuming a stopped batch, consult `mynotes recover-batch BATCH_ID --json`.
 This is local diagnosis, not another model call. Apply --apply only for a verified
 LOCALLY_RECOVERABLE result; a process failure stays preserved in a separate record.
-NEEDS_CONTENT_REVIEW means show all reported defects and preserve the response;
-never rewrite prose, evidence or receipts to force success, and do not silently
-start another paid generation. Ordinary resume also checks saved compatible work.
+NEEDS_CONTENT_REVIEW means preserve the original response and review concrete
+defects against the sources. Reorganize and revalidate locally first; use the
+bounded managed targeted correction when a real textual correction is necessary.
+Never edit raw returned prose, evidence or receipts to force success, and never
+restart whole-lesson generation to fix a local validation problem. Ordinary resume also checks saved compatible work.
 Use lecture content by default: UNKNOWN voices do not block transcript-supported
 insights and must never be relabeled as PROFESSOR. Use --speaker-focus professor
 only on an explicit user request, report inability to isolate the voice once and
@@ -293,9 +315,16 @@ that lesson. For separate and cumulative documents from a fully validated batch,
 use `mynotes build-batch BATCH_ID --mode both --json`; never concatenate historical
 cumulative Word files. Read the delivery index, render and review the actual files;
 these remain candidates and have not been academically published.
-After generation review the saved content and update each lesson in numeric order
-using `mynotes update COURSE-LNN`. Each update builds on the current target;
-never publish several candidates built against an old cumulative baseline.
+After generation review the saved content and update all related lessons together
+using `mynotes update COURSE-L01 COURSE-L02`. This builds one cumulative Word on
+the current target and publishes it with one backup and one atomic replacement.
+You may autonomously correct already written lessons when their sources or
+connections were organized incorrectly. Preserve personal additions through the
+three-way merge. PERSONAL_CONTENT_CONFLICT/PARTIALLY_PUBLISHED identifies only
+the affected passage/lesson: reconcile it against the sources, preserve user
+contributions, and involve the user only for a contradiction sources cannot
+resolve. Independent corrections may continue. Never publish several candidates
+built against an old cumulative baseline.
 Standalone batch documents remain candidates: they do not replace the stable handout.
 Correct Word styling locally without another AI call when the saved content is valid.
 When publication mode is review, show the candidate returned as AWAITING_APPROVAL

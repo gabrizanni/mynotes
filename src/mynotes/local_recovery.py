@@ -145,6 +145,9 @@ def recover_batch(workspace,batch_id,*,apply=False):
     from .batch import load_batch_manifest,_packs,_request,_continuity,_validate_group,_unchanged,generate_batch
     from .batch_recovery import prompt_matches
     manifest=load_batch_manifest(workspace,batch_id)
+    from .batch import BATCH_CONTRACT_VERSION
+    if manifest.get('contract', 1) < BATCH_CONTRACT_VERSION:
+        return _revalidate_organization(workspace, manifest, apply=apply)
     packs,sources,inventory=_packs(workspace,manifest['lectures'])
     if sources!=manifest['sources']:raise ProviderError('Batch sources changed; recovery stopped')
     plan={**manifest,'packs':packs,'inventory':inventory,'requested':RequestedModel(**manifest['requested_model'])}
@@ -202,3 +205,42 @@ def recover_batch(workspace,batch_id,*,apply=False):
         diagnoses[-1]['status']='CONTENT_RECOVERED'
     return {'batch_id':batch_id,'status':'CONTENT_RECOVERED' if apply and any(r['status']=='CONTENT_RECOVERED' for r in diagnoses) else 'DIAGNOSED',
             'lessons':diagnoses,'provider_invoked':False,'applied':any(r['status']=='CONTENT_RECOVERED' for r in diagnoses)}
+
+
+def _revalidate_organization(workspace, manifest, *, apply=False):
+    from .batch import plan_batch, _prepared_context, _request, _validate_group, _unchanged, generate_batch
+    from .batch_recovery import revised_response
+    from .lesson_organization import organization_revision
+    from .workflow import WorkflowError
+    options = manifest.get('request_options', {})
+    kwargs = dict(provider=manifest['requested_model']['provider'], quality=manifest['requested_model']['quality'],
+        selection=manifest.get('selection'), budgets=manifest.get('budgets'), instructions=options.get('instructions',''),
+        image_limit=options.get('image_limit'), speaker_focus=options.get('speaker_focus'), context_lessons=manifest.get('context_lessons'))
+    numbers = [int(l.rsplit('-L',1)[1]) for l in manifest['lectures']]
+    plan = plan_batch(workspace, manifest['course_code'], numbers, **kwargs)
+    if plan['status'] != 'PLANNED':
+        return {'batch_id':manifest['batch_id'], 'status':plan['status'], 'provider_invoked':False, 'applied':False, 'lessons':[]}
+    packs, _, inventory, _ = _prepared_context(workspace, plan['lectures'], plan.get('context_lessons'))
+    runtime = {**plan, 'packs':packs, 'inventory':inventory, 'requested':RequestedModel(**plan['requested_model']),
+               'organization_revision':organization_revision(manifest,plan)}
+    _unchanged(runtime)
+    root = workspace.runs_dir/'_batches'/manifest['batch_id']; group = plan['groups'][0]
+    response, origin = revised_response(root,runtime,group,[],preserve_manifest=False)
+    if response is None:
+        return {'batch_id':manifest['batch_id'], 'status':'NO_LOCAL_RECOVERY', 'provider_invoked':False, 'applied':False,
+                'lessons':[{'lessons':group,'status':'NO_LOCAL_RECOVERY','next_action':'inspect_retained_original'}]}
+    _, maps = _request(runtime,group,root,[])
+    try:
+        _validate_group(response,runtime,group,maps,final_phase=True,continuity=[])
+        row = {'lessons':group,'status':'LOCALLY_RECOVERABLE','defects':[], 'next_action':'resume_with_organization_revalidation'}
+    except WorkflowError as error:
+        row = {'lessons':group,'status':'NEEDS_CONTENT_REVIEW', 'defects':getattr(error,'defects',[{'message':str(error)}]),
+               'next_action':'review_organization_then_bounded_targeted_correction'}
+    row.update(provider_invoked=False,raw_result_preserved=True,phase='ORGANIZATION_REVALIDATION',origin=origin)
+    if apply and row['status']=='LOCALLY_RECOVERABLE':
+        class NoProvider:
+            def generate(self,*_):raise ProviderError('Offline revalidation cannot invoke a provider')
+        generate_batch(workspace,manifest['course_code'],numbers,**kwargs,batch_id=manifest['batch_id'],provider_adapter=NoProvider(),pause_after=group[-1])
+        row['status']='CONTENT_RECOVERED'
+    return {'batch_id':manifest['batch_id'],'status':'CONTENT_RECOVERED' if row['status']=='CONTENT_RECOVERED' else 'DIAGNOSED',
+            'lessons':[row],'provider_invoked':False,'applied':row['status']=='CONTENT_RECOVERED'}

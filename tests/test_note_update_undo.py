@@ -113,15 +113,15 @@ def test_backup_failure_never_replaces_target(setup, monkeypatch):
     assert target.read_bytes() == original
 
 
-def test_external_edit_blocks_automatic_update_and_undo(setup):
+def test_external_addition_is_preserved_by_automatic_update(setup):
     workspace, target = setup
     pub.update_course_notes(workspace, 'OPS7-L01')
     document = Document(target); document.add_paragraph('User edit.'); document.save(target)
-    current = target.read_bytes()
-    for action in (lambda: pub.update_course_notes(workspace, 'OPS7-L01'), lambda: pub.undo_last_update(workspace, 'OPS7')):
-        with pytest.raises(pub.PublicationError, match='externally|changed'):
-            action()
-        assert target.read_bytes() == current
+    with pytest.raises(pub.PublicationError, match='changed'):
+        pub.undo_last_update(workspace, 'OPS7')
+    result = pub.update_course_notes(workspace, 'OPS7-L01')
+    assert result['status'] == 'PUBLISHED'
+    assert 'User edit.' in '\n'.join(p.text for p in Document(target).paragraphs)
 
 
 def test_missing_handout_is_not_silently_recreated(setup):

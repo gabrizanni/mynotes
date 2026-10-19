@@ -39,15 +39,25 @@ Replace the example batch ID with the returned ID. Planning reads existing
 packs, writes nothing and invokes no provider. Missing or changed sources return
 `NEEDS_PREPARATION`; normal generation prepares relevant sources, preserving
 explicit source selections and using the existing extraction/ASR caches.
-Ambiguous shared-slide ownership returns `NEEDS_SELECTION` before generation.
-The coordinating conversation asks only about those unresolved boundaries.
+The coordinator reads the relevant recordings before organizing a shared deck.
+An ambiguous slide receives an explicit provisional placement that the agent
+reviews autonomously; slide assignment never requires user confirmation.
 
-Ownership uses the verified source-file SHA-256 and actual page/slide number,
-including pages with images but no extracted text. One lesson owns each complete
-explanation. When a deck spans lessons, later slides belong to the lesson that
-actually treats them; an earlier lesson must not complete the entire deck in
-advance. A later lesson can briefly reference earlier content or add a new
-teacher-supported insight, without repeating the complete text, table or figure.
+Organization uses verified source-file SHA-256 and actual page/slide number.
+`owner` is the revisable main placement, with optional `reason`, `provisional`
+and `uses`. Each use maps a lesson to `role` (introduction, development, recall,
+supplement), a `reason` and local transcript `evidence_ids`. Additional teaching
+uses require transcript evidence; material-only uses are labelled supplementary.
+Distinct contributions may include formulas, tables and figures in either lesson
+direction. There is no blanket 50-word limit for recaps or cross-lesson references.
+Headings and recaps still cannot establish substantive coverage.
+
+Use `--context-lessons 1,3-4` to import relevant other prepared lessons. Imported
+rows retain origin_lecture_id and origin_evidence_id in an immutable effective
+source pack; the original packs are not changed. Context is included in budget
+checks and is never silently truncated. Previously validated narrative is supplied
+with source links, not only a short title/recap synopsis, and is not independent
+evidence or instructions.
 
 The selection file maps returned canonical IDs to reviewed choices:
 
@@ -65,14 +75,19 @@ Allowed statuses are `taught`, `supplement`, and `material` (associated material
 without claiming it was taught). Supplementary content is visibly labelled and
 placed inline beside the relevant explanation. Same-deck neighboring anchors
 can be inferred; unclear placement requires selection, not a final appendix.
-Verified earlier published ownership is retained. Older overlapping notes with
-no trustworthy slide provenance require review rather than invented coverage.
+Verified published placement is reused as context and can be revised. Unverified
+historical coverage requires source review by the coordinator, without inventing
+coverage or asking the user to assign slides. Include related published lessons
+when their content needs correction.
 
 During the same source planning pass, a visually inspected cover or section
 divider containing no teaching content may use `status: "material"` plus
 `structural_review: {"kind": "title", "reason": "...", "image_sha256": "..."}`
 (or kind `section_divider`). Hash the actual source-pack image after inspecting
-it. The page remains in the inventory and coverage ledger, but needs no invented
+it. If an older pack omitted a non-teaching title page from its visual inventory,
+a separate inspected source render can be bound through `source_image` with
+`path`, `source_file`, `source_sha256` and `page`; these image/source hashes are
+checked without editing the old pack. The page remains in the inventory and coverage ledger, but needs no invented
 full explanation. Short or missing extracted text alone never establishes this
 classification; diagrams and image-only teaching slides still require coverage.
 The writer's own exclusion cannot grant an exemption. Changed images invalidate
@@ -144,15 +159,18 @@ Only the current job prevents idle system sleep; manual/lid sleep is respected.
 On wake the stale transport is closed. Active time and elapsed/suspended time are
 reported separately. Attempt logs record actual start and end timestamps.
 
-Resume can revalidate a prior SUCCESS response when only a verified structural
-source review changes. Module-only updates require proof that the actual writing
-prompt still matches the retained request, not merely matching model names.
-Unrecorded edits to prose/citations are not certified provider output. The
-original receipts remain immutable; only unused other-lesson exclusion metadata
-may be completed locally from trusted ownership. One managed, hash-anchored
-targeted correction may add a missing explanation or verify an exact source
-attachment to an existing explanation, with a separate SUCCESS receipt. It is
-not a general editorial rewrite and cannot erase or replace existing prose.
+Resume first revalidates retained SUCCESS writing under revised organization.
+A separate revision record retains before/after choices and affected lessons.
+Source-bound original receipts and manifests remain unchanged; reuse under a new
+validation policy is explicitly recorded as organization_revalidation, never as
+an equivalent historical prompt. Unchanged complete work is not regenerated.
+
+One managed hash-anchored targeted correction per affected lesson and revision
+may add/attach missing coverage or replace, move or delete explicitly defective
+blocks. All unrelated passages remain unchanged; source coverage is validated
+again. A durable attempt guard and inherited active-time budgets prevent paid
+retry loops or a new allowance from a changed checkpoint. Failed/unfinished
+transport never becomes certified success.
 
 `--build-word` builds/render-validates each lesson before advancing, without
 publishing. `--stop-after N` pauses at a selected lesson for inspection without
@@ -166,6 +184,17 @@ DOCX is the default deliverable for ordinary notes, multi-lesson notes, revision
 and quiz preparation. Internal JSON/Markdown is working data. Other final formats
 require an explicit user request. An improvised formatting script is not the
 normal delivery path: every Word candidate uses the shared course renderer.
+
+`mynotes update OPS-L01 OPS-L02` builds one cumulative candidate for related
+lessons, renders/validates it once, then publishes with one backup and atomic
+replacement. Current Word edits are compared to per-lesson generated baselines;
+independent personal additions survive subsequent revisions. Overlapping
+contradictions retain the current lesson and return PERSONAL_CONTENT_CONFLICT,
+or PARTIALLY_PUBLISHED when independent lessons were updated. Resolve against
+sources and ask the user only for an irreconcilable substantive contradiction.
+Interrupted commits roll back Word, publication membership and merge baselines;
+the staged candidate remains available. Review publication mode still requires
+approval of the concrete candidate.
 
 ### Standalone study guides
 

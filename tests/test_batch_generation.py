@@ -116,7 +116,8 @@ def test_plan_only_is_read_only_and_shared_ownership_needs_selection(tmp_path):
     workspace, deck, selection = workspace_and_deck(tmp_path)
     before = sorted(str(path.relative_to(workspace.root)) for path in workspace.root.rglob("*"))
     ambiguous = generate_batch(workspace, "OPS", [2, 1], plan_only=True)
-    assert ambiguous["status"] == "NEEDS_SELECTION" and len(ambiguous["unresolved"]) == 30
+    assert ambiguous["status"] == "PLANNED" and not ambiguous["unresolved"]
+    assert all(choice.get('provisional') for choice in ambiguous['ownership'].values())
     assert sorted(str(path.relative_to(workspace.root)) for path in workspace.root.rglob("*")) == before
     plan = plan_batch(workspace, "OPS", [2, 1, 1], selection=selection, budgets=VERIFIED)
     assert plan["lectures"] == ["OPS-L01", "OPS-L02"] and plan["groups"] == [["OPS-L01", "OPS-L02"]]
@@ -397,8 +398,8 @@ def test_image_only_pptx_inventory_without_office_renderer(tmp_path, monkeypatch
 def test_selection_and_preparation_manifests_can_resume_without_initial_lessons(tmp_path):
     from mynotes.batch import load_batch_manifest
     workspace, _, selection = workspace_and_deck(tmp_path)
-    result = generate_batch(workspace, "OPS", [1, 2])
-    assert result["status"] == "NEEDS_SELECTION"
+    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=Adapter())
+    assert result["status"] == "CANDIDATE_READY"
     saved = load_batch_manifest(workspace, result["batch_id"])
     assert saved["lectures"] == ["OPS-L01", "OPS-L02"]
     assert saved["budgets"]["context_tokens"] is None
@@ -457,16 +458,17 @@ def test_supplementary_table_is_labelled_in_its_inline_position(tmp_path):
     assert blocks[table_index + 1]["evidence_ids"] == ["S011"]
 
 
-def test_review_answer_cannot_reexplain_another_lessons_slide(tmp_path):
+def test_long_review_answer_is_not_rejected_for_cross_lesson_citation(tmp_path):
     workspace, _, selection = workspace_and_deck(tmp_path)
     def duplicate_answer(response, request):
         later = response["lessons"][1]["notes"]
         question = next(block for block in later["blocks"] if block["kind"] == "qa")
         question["evidence_ids"] = ["S001"]
         question["answer"] = "Detailed repeated explanation " * 40
-    with pytest.raises(WorkflowError, match="brief reference"):
-        generate_batch(workspace, "OPS", [1, 2], selection=selection, budgets=VERIFIED,
-                       provider_adapter=Adapter(duplicate_answer))
+    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, budgets=VERIFIED,
+                            provider_adapter=Adapter(duplicate_answer))
+    assert result['status'] == 'CANDIDATE_READY'
+
 
 
 def test_later_independent_source_change_reuses_completed_earlier_group(tmp_path):
