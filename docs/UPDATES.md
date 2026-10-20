@@ -13,6 +13,32 @@
   reconciliation. The source-bound lesson and coordinated Word behavior from
   0.2.24 remains available.
 
+## 0.2.24: source-bound lessons and coordinated notebooks
+
+- Source contributions can span lessons while retaining origin and evidence
+  identity. A provisional source association remains distinguishable from
+  confirmed teaching coverage; valid existing text is reused before generation.
+- Scoped revisions preserve prior decisions and valid content. Coordinated updates
+  publish one cumulative Word with a backup and atomic replacement, preserving
+  personal additions and reporting localized conflicts. Undo remains available.
+- Codex, Agy and Claude integration instructions follow the same source and
+  revision rules. Existing course batches are not resumed by upgrading.
+
+## 0.2.21-0.2.23: queue execution and real-file libraries
+
+- Shared local ASR slots, precise elapsed time and serialized queue controls
+  distinguish preparation, inference and finalization. Closing the window stops
+  new admissions while active jobs finish saving.
+- Recordings follow the selected audio collection and its archives. Transcripts
+  follow actual TXT files and remain usable without original audio. Refresh does
+  not recreate deleted TXT files or resurrect removed originals.
+- Transcript rename changes the actual TXT independently of the audio. Agents
+  inspect all unassigned TXT candidates and can assign and move them without new
+  ASR, preserving manual edits and avoiding overwrites.
+- Optional verification failures retain available primary text with an explicit
+  warning. Unreliable timestamps are omitted rather than invented; an unknown
+  course does not make a saved transcript incomplete.
+
 ## 0.2.20: usable transcripts with disclosed uncertainty
 
 Since the previous public 0.2.13 preview:

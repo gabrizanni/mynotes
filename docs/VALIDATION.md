@@ -2,6 +2,36 @@
 
 This document separates implemented safeguards from checks actually completed.
 
+## 0.2.25 local validation (2026-10-19)
+
+- The complete suite passed 1,001 tests without failures or skips. A final set of
+  153 targeted checks covers filename inference, repeated Finder renames, frozen
+  active profiles, optional-context fallback, queue isolation, TXT identity and
+  course assignment. The combined runs cover 1,002 distinct cases.
+- An isolated native window exercised Refresh, Transcribe, Rename transcript and
+  Open transcript. A standalone TXT in the unassigned folder was renamed, assigned
+  and used to build a note source pack without another ASR call. These UI cases
+  use synthetic audio and a simulated engine, not microphone capture.
+- One existing full-length recording completed a single local attempt and saved
+  usable primary text despite an empty optional verifier result. Two segments
+  omitted unreliable timestamps. This validates fallback behavior, not completed
+  second-engine verification or linguistic accuracy.
+- Existing saved transcripts were reassigned with their content, names and IDs
+  preserved and no new ASR. Cancelled jobs remained cancelled. The private course
+  configuration, previous runs and configured notebooks were compared for hash
+  preservation; no old note-generation batch was resumed.
+- The isolated upgrade/rollback sequence 0.2.24 -> 0.2.25 -> 0.2.24 -> 0.2.25
+  preserved eight seeded files at every step. The installed Python/resources
+  match the delivered source; app signatures and payload hashes were checked.
+- Publication updates only public documentation. Its repack preserves the tested
+  wheel, native executable bytes and third-party components. Hosted CI independently
+  rebuilds pinned upstream tools; its run and download verification are reported
+  on the release page rather than inferred from local results.
+
+No new personal microphone recording or listening check was performed. The
+package remains ad-hoc signed and is not Apple-notarized. A clean-account,
+overnight or full real-provider note-generation acceptance test is not claimed.
+
 ## 0.2.20 local release validation (2026-10-18)
 
 - 900 integrated tests passed; 56 focused checks passed after the final warning
