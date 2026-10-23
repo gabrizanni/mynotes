@@ -97,3 +97,101 @@ def pending_organization(ownership, lectures, packs):
             pending.append({"canonical_slide_id": canonical, "review_before": choice["owner"],
                             "reason": "Read this lesson's complete transcript and review slide placement before writing."})
     return pending
+
+
+def integrated_schema():
+    """Decisions accompany ordinary writing; they are not a second model phase."""
+    return {"type": "array", "description": "Source-bound main placement decisions, made while writing this lesson. Include every unresolved visible slide. Pending slides remain in the course pool, not missing current-lesson content.",
+            "items": {"type": "object", "additionalProperties": False,
+                      "properties": {"canonical_slide_id": {"type": "string"},
+                                     "status": {"type": "string", "enum": ["taught", "supplement", "pending", "material"]},
+                                     "reason": {"type": "string"},
+                                     "evidence_ids": {"type": "array", "items": {"type": "string"}}},
+                      "required": ["canonical_slide_id", "status", "reason", "evidence_ids"]}}
+
+
+def integrate_decisions(response, plan, lecture, mapping):
+    """Validate a separate organization ledger without editing returned prose.
+
+    Already reviewed legacy placement needs no new response field. A retained
+    response with provisional placement can derive only what its actual cited
+    narrative establishes; untouched pages stay pending until another lesson.
+    """
+    ownership = deepcopy(plan['ownership'])
+    visible = {key for key, item in plan['inventory'].items() if lecture in item['occurrences']}
+    unresolved = {key for key in visible if ownership[key].get('provisional')
+                  or ownership[key]['status'] in {'deferred', 'pending'}}
+    rows = response.notes.get('organization')
+    derived = rows is None
+    if rows is None:
+        rows = []
+        notes = next((row['notes'] for row in response.notes.get('lessons', []) if row.get('lecture_id') == lecture), {})
+        for canonical in sorted(unresolved):
+            slide = mapping[plan['inventory'][canonical]['occurrences'][lecture]]
+            blocks = [block for block in notes.get('blocks', []) if block.get('kind') in {'paragraph', 'bullets', 'table', 'formula', 'visual'}
+                      and block.get('coverage_role') in {'full', 'supplement', 'new_insight'} and slide in block.get('evidence_ids', [])]
+            turns = sorted({identifier for block in blocks for identifier in block.get('evidence_ids', []) if identifier.startswith('T')})
+            rows.append({'canonical_slide_id': canonical,
+                         'status': ('taught' if turns else 'supplement') if blocks else 'pending',
+                         'reason': 'Derived from retained narrative and its intact evidence links; no new writing or claimed historical prompt equivalence.' if blocks else 'Retained writing does not establish this page in the current lesson.',
+                         'evidence_ids': turns})
+    if not isinstance(rows, list):
+        raise WorkflowError('Integrated organization must be an array of source-bound decisions')
+    seen = set()
+    local_turns = {mapping[row['id']] for row in plan['packs'][lecture]['evidence']
+                   if row['id'].startswith('T') and row.get('origin_lecture_id', lecture) == lecture}
+    last = lecture == plan['lectures'][-1]
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {'canonical_slide_id', 'status', 'reason', 'evidence_ids'}
+                or row.get('canonical_slide_id') not in visible or row['canonical_slide_id'] in seen
+                or row.get('status') not in {'taught', 'supplement', 'pending', 'material'}
+                or not isinstance(row.get('reason'), str) or not row['reason'].strip()):
+            raise WorkflowError('Integrated organization has an unknown, duplicate or invalid slide decision')
+        canonical = row['canonical_slide_id']; seen.add(canonical)
+        prior = ownership[canonical]
+        if canonical not in unresolved:
+            if prior['owner'] != lecture or row['status'] != prior['status']:
+                raise WorkflowError('Integrated writing cannot reassign settled coverage from another lesson')
+            continue
+        ids = row['evidence_ids']
+        if not isinstance(ids, list) or len(set(ids)) != len(ids) or set(ids) - local_turns:
+            raise WorkflowError('Integrated organization needs this lesson\'s actual transcript evidence IDs')
+        status = row['status']
+        if status == 'taught' and not ids:
+            raise WorkflowError('A taught slide needs current-lesson transcript evidence')
+        if status == 'pending':
+            if ids or last:
+                raise WorkflowError('The last selected lesson cannot leave unresolved course slide coverage')
+            ownership[canonical] = {'owner': lecture, 'status': 'pending', 'reason': row['reason']}
+        elif status == 'material':
+            if not prior.get('structural_review'):
+                raise WorkflowError('Only an already inspected structural slide can omit substantive coverage')
+            ownership[canonical] = {**prior, 'provisional': False, 'reason': row['reason']}
+        else:
+            reverse = {value: key for key, value in mapping.items()}
+            ownership[canonical] = {'owner': lecture, 'status': status, 'reason': row['reason'],
+                'uses': {lecture: {'role': 'development' if status == 'taught' else 'supplement',
+                                  'reason': row['reason'], 'evidence_ids': [reverse[value] for value in ids]}}}
+    if unresolved - seen:
+        raise WorkflowError('Integrated organization omits unresolved visible slide decisions')
+    # Inline supplementation anchors come from settled neighbouring concepts.
+    for canonical, choice in ownership.items():
+        if choice['owner'] != lecture or choice['status'] != 'supplement' or choice.get('anchor'):
+            continue
+        item = plan['inventory'][canonical]
+        neighbours = [(other['page'], key) for key, other in plan['inventory'].items()
+                      if key != canonical and other['source_sha256'] == item['source_sha256']
+                      and ownership[key]['owner'] == lecture and ownership[key]['status'] == 'taught']
+        before = min((entry for entry in neighbours if entry[0] > item['page']), default=None)
+        after = max((entry for entry in neighbours if entry[0] < item['page']), default=None)
+        choice['anchor'] = {}
+        if after: choice['anchor']['after'] = plan['inventory'][after[1]]['occurrences'][lecture]
+        if before: choice['anchor']['before'] = plan['inventory'][before[1]]['occurrences'][lecture]
+        if not choice['anchor']:
+            # A slides-only lesson can explain its source in natural order;
+            # coverage_role=supplement still labels every explanatory passage.
+            choice.pop('anchor')
+    return ownership, {'kind': 'integrated_organization', 'lecture_id': lecture,
+                       'derived_from_retained_response': derived, 'decisions': deepcopy(rows),
+                       'before': deepcopy(plan['ownership']), 'after': deepcopy(ownership),
+                       'source_snapshots': deepcopy(plan['sources'])}

@@ -75,6 +75,60 @@ def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def _candidate_digest(path):
+    """Publication markers are mutable; the validated academic candidate is not."""
+    try:
+        payload = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    payload['published_to_word'] = False
+    payload.pop('published_path', None); payload.pop('published_hash', None)
+    return hashlib.sha256((json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode()).hexdigest()
+
+
+def _autonomous_retained(root, request, runtime, lectures, continuity, maps):
+    """Revalidate retained writing under the new module, without prompt equality claims."""
+    from .batch_recovery import certify_response, verify_repair_lineage
+    identity = {'lectures': lectures, 'sources': runtime['sources'], 'ownership': runtime['ownership'],
+                'requested_model': runtime['requested_model'], 'style': runtime['style'], 'course': runtime['course'],
+                'budgets': runtime['budgets'], 'contract': runtime['contract'],
+                'generation_contract': runtime['generation_contract'], 'continuity': continuity, 'maps': maps,
+                'context_sources': runtime.get('context_sources', {})}
+    current = request.run_dir / 'request-intent.json'
+    if current.exists() and _read(current) != identity:
+        raise WorkflowError('Saved autonomous source intent changed; no automatic writing retry')
+    if not current.exists(): _save(current, identity)
+    for path in sorted(root.glob('generation-checkpoints/*/request-intent.json')):
+        if path == current or _read(path) != identity:
+            continue
+        returned = path.parent / ('returned-writing-' + _hash(continuity)[:12] + '.json')
+        response = _load_generation_phase(returned, previous=None)
+        if response is None:
+            continue
+        response = certify_response(response, request, root)
+        lineage = None
+        complete = path.parent / 'complete.json'
+        if complete.exists() and _read(complete).get('repair_lineage'):
+            lineage = _read(complete)['repair_lineage']
+            for saved in _read(complete)['candidates']:
+                candidate_path = root.parent.parent / saved['lecture_id'] / 'lecture_notes.candidate.json'
+                if _candidate_digest(candidate_path) != saved['sha256']:
+                    raise WorkflowError('Retained corrected candidate changed; no automatic writing retry')
+                verify_repair_lineage(json.loads(candidate_path.read_text()), root)
+            corrected = _load_generation_phase(path.parent / ('writing-' + _hash(continuity)[:12] + '.json'), previous=None)
+            if corrected is None or _hash(corrected.notes) != lineage['effective_notes_sha256']:
+                raise WorkflowError('Retained corrected response changed; no automatic writing retry')
+            response = corrected
+        attempt = Path(response.attempt_path or '')
+        if not attempt.is_absolute() or not attempt.resolve().is_relative_to(root.resolve()) or not attempt.is_file():
+            continue
+        return response, {'kind': 'organization_revalidation', 'manifest': str(path), 'manifest_sha256': file_sha256(path),
+            'returned': str(returned), 'returned_sha256': file_sha256(returned),
+            'original_attempt': str(attempt), 'original_attempt_sha256': file_sha256(attempt),
+            'reason': 'Retained successful content revalidated locally under the new module; no equivalent historical prompt claim.'}, lineage
+    return None, None, None
+
+
 def _save(path: Path, payload: dict[str, Any]) -> None:
     atomic_json_write(path, {"schema_version": 1, "sha256": _hash(payload), "payload": payload})
 
@@ -148,7 +202,7 @@ def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]
     return packs, snapshots, inventory
 
 
-def _prepared_context(workspace, lectures, context_lessons=None, selection=None):
+def _prepared_context(workspace, lectures, context_lessons=None, selection=None, autonomous_organization=False):
     """Import explicitly relevant other lessons with stable local IDs/provenance."""
     context_lessons = sorted(set(context_lessons or []) - set(lectures))
     packs, snapshots, _ = _packs(workspace, lectures + context_lessons)
@@ -181,6 +235,14 @@ def _prepared_context(workspace, lectures, context_lessons=None, selection=None)
     # A PDF attached to L1 may later belong in L2. Import only the selected
     # source-bound slide, never relabel a foreign transcript as current speech.
     carry_slides(packs, selection or {}, lectures)
+    if autonomous_organization:
+        course_slides = {}
+        for origin in sorted(lectures):
+            for row in packs[origin]['evidence']:
+                if row.get('canonical_slide_id'):
+                    course_slides.setdefault(row['canonical_slide_id'],
+                        {'uses': {target: {} for target in lectures if target >= origin}})
+        carry_slides(packs, course_slides, lectures)
     inventory = {}
     for lecture in lectures + context_lessons:
         for row in packs[lecture]['evidence']:
@@ -409,13 +471,18 @@ def _owners(inventory: dict, packs: dict, selection: dict | None) -> tuple[dict,
     return owners, unresolved
 
 
-def batch_notes_schema() -> dict:
+def batch_notes_schema(*, autonomous_organization=False) -> dict:
     note = deepcopy(notes_schema(compact=True))
     props = note["properties"]["blocks"]["items"]["properties"]
     props["coverage_role"] = {"type": "string", "enum": ["full", "supplement", "reference", "new_insight"]}
     props["prior_lecture_id"] = {"type": "string"}
     note["properties"]["blocks"]["items"]["required"].append("coverage_role")
-    return {"type": "object", "additionalProperties": False, "properties": {"lessons": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"lecture_id": {"type": "string"}, "notes": note}, "required": ["lecture_id", "notes"]}}}, "required": ["lessons"]}
+    schema = {"type": "object", "additionalProperties": False, "properties": {"lessons": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {"lecture_id": {"type": "string"}, "notes": note}, "required": ["lecture_id", "notes"]}}}, "required": ["lessons"]}
+    if autonomous_organization:
+        from .lesson_organization import integrated_schema
+        schema['properties']['organization'] = integrated_schema()
+        schema['required'].append('organization')
+    return schema
 
 
 def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[dict]) -> tuple[ProviderRequest, dict]:
@@ -466,8 +533,16 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
     for choice in ownership:
         choice["uses"] = {lesson: {**use, "evidence_ids": [maps[lesson][i] for i in use["evidence_ids"]]} for lesson, use in choice.get("uses", {}).items() if lesson in maps}
     context = {"revision_id": plan.get('fingerprint'), "lessons": lectures, "lesson_evidence": {lecture: list(maps[lecture].values()) for lecture in lectures}, "ownership": ownership, "continuity": [{key: value for key, value in entry.items() if key != "narrative_fingerprints"} for entry in continuity]}
+    if plan.get('autonomous_organization'):
+        context.update(autonomous_organization=True, final_selected_lesson=lectures[-1] == plan['lectures'][-1],
+            organization_instructions=("While writing this lesson, decide each provisional/deferred/pending visible slide in the organization array. "
+                "Use taught only with this lesson's T evidence_ids, supplement for relevant untaught exam content inline near its concept, "
+                "pending only for untouched content to be reviewed with a later selected complete transcript. "
+                "Pending slides are in the course pool, not required current-lesson content; do not repair or explain them yet. "
+                "The final selected lesson must settle every remaining page; never invent teaching or duplicate a settled main explanation. "
+                "Do not change already settled prior ownership. Material exemption requires the existing inspected structural_review."))
     request = ProviderRequest(lectures[0], plan["course"], {}, plan["requested"], source_pack=pack, run_dir=run_dir,
-                              style=plan["style"], response_schema=batch_notes_schema(), batch_context=context)
+                              style=plan["style"], response_schema=batch_notes_schema(autonomous_organization=plan.get('autonomous_organization', False)), batch_context=context)
     return request, maps
 
 
@@ -507,7 +582,7 @@ def _fits(request: ProviderRequest, count: int, budget: BatchBudget) -> bool:
 
 def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int], *, provider: str | None = None,
                quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
-               instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None) -> dict:
+               instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False) -> dict:
     """Inspect existing prepared packs; write nothing and invoke no provider."""
     code = course_code.upper()
     if selection is not None and not isinstance(selection, dict):
@@ -535,7 +610,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     batch_id = code + "-" + _hash(lectures)[:12]
     budget = budgets if isinstance(budgets, BatchBudget) else BatchBudget(**(budgets or {}))
     try:
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization)
     except WorkflowError:
         pending = []
         for lecture in lectures + context_lessons:
@@ -571,6 +646,8 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
                "selection": selection, "request_options": {"instructions": instructions, "image_limit": image_limit, **({"speaker_focus":speaker_focus} if speaker_focus else {})},
                "contract": BATCH_CONTRACT_VERSION, "generation_contract": GENERATION_CONTRACT_VERSION,
                "prompt_contract": file_sha256(Path(__file__).with_name("providers.py"))}
+    if autonomous_organization:
+        payload['autonomous_organization'] = True
     fingerprint = _hash(payload)
     plan = {**payload, "batch_id": batch_id, "fingerprint": fingerprint, "status": "NEEDS_SELECTION" if unresolved else "PLANNED",
             "unresolved": unresolved, "groups": [], "published_to_word": False,
@@ -582,7 +659,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     prior_count = 0
     while remaining:
         chosen = None
-        for count in range(len(remaining), 0, -1):
+        for count in range(1 if autonomous_organization else len(remaining), 0, -1):
             group = remaining[:count]
             if len(group) > 1 and any(row['review_before'] in group for row in organization_pending):
                 continue  # A deferred boundary must be reviewed before writing the next lesson.
@@ -667,10 +744,10 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
         for item in pack['evidence']:
             identifier, canonical = item['id'], item.get('canonical_slide_id')
             owner = plan['ownership'].get(canonical, {}).get('owner')
-            deferred = plan['ownership'].get(canonical, {}).get('status') == 'deferred'
+            deferred = plan['ownership'].get(canonical, {}).get('status') in {'deferred', 'pending'}
             if not owner or (owner == lecture and not deferred) or identifier in cited:
                 continue
-            reason = (f'Deferred pending transcript review before {plan["ownership"][canonical]["review_before"]}; not covered in this lesson.'
+            reason = (f'Course pool pending later transcript review; not covered in this lesson.'
                       if deferred else f'Assigned by the reviewed batch ownership ledger to {owner}; not used in this lesson.')
             if identifier not in coverage:
                 notes['evidence_coverage'].append({'evidence_id': identifier, 'disposition': 'excluded', 'reason': reason})
@@ -694,7 +771,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
             for canonical in slides:
                 owner = plan["ownership"][canonical]
                 role = block.get("coverage_role")
-                if owner['status'] == 'deferred' and role != 'reference':
+                if owner['status'] in {'deferred', 'pending'} and role != 'reference':
                     raise ContentRevisionError(lecture, index, block, 'Deferred slide needs placement review before substantive explanation')
                 use = owner.get('uses', {}).get(lecture)
                 if (role == 'reference' and use and use['role'] in {'introduction', 'development'}
@@ -740,7 +817,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 if digest in duplicate_texts and duplicate_texts[digest] != lecture:
                     raise ContentRevisionError(lecture, index, block, "Batch repeats an identical narrative explanation across lessons")
                 duplicate_texts[digest] = lecture
-        required = {key for key, choice in plan["ownership"].items() if choice["owner"] == lecture and choice['status'] != 'deferred'
+        required = {key for key, choice in plan["ownership"].items() if choice["owner"] == lecture and choice['status'] not in {'deferred', 'pending'}
                     and not _structural_review(choice, local_evidence[plan["inventory"][key]["occurrences"][lecture]], pack)}
         required |= {key for key, choice in plan["ownership"].items()
                      if choice.get("uses", {}).get(lecture, {}).get("role") in {"introduction", "development", "supplement"}}
@@ -760,7 +837,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 continue
             local_id = plan["inventory"][canonical]["occurrences"][lecture]
             positions = placements.get(local_id, [])
-            for direction, anchor in choice["anchor"].items():
+            for direction, anchor in choice.get("anchor", {}).items():
                 anchor_positions = placements.get(anchor, [])
                 if not anchor_positions or (direction == "before" and max(positions) >= min(anchor_positions)) or (direction == "after" and min(positions) <= max(anchor_positions)):
                     raise WorkflowError("Supplementary slide must appear inline at its selected topic anchors")
@@ -830,9 +907,13 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
-                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None) -> dict:
+                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update") -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
-    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons)
+    if word_mode not in {'update', 'standalone'}:
+        raise WorkflowError('Word mode must be update or standalone')
+    if autonomous_organization:
+        word_mode = 'standalone'
+    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons, autonomous_organization=autonomous_organization)
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
     if batch_id is not None and batch_id != plan["batch_id"]:
         raise WorkflowError("Resume batch ID does not match the selected course and lessons")
@@ -848,7 +929,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if plan["status"] != "PLANNED":
             _save(workspace.runs_dir / "_batches" / plan["batch_id"] / "manifest.json", plan)
             return plan
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection, autonomous_organization)
         if snapshots != plan["sources"]:
             raise WorkflowError("Sources changed while preparing the batch request; no provider was invoked")
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
@@ -893,7 +974,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         try:
             for group_index, lectures in enumerate(plan["groups"]):
                 pending = [row for row in plan.get('organization_pending', []) if row['review_before'] in lectures]
-                if pending:
+                if pending and not autonomous_organization:
                     waiting = {**plan, 'status': 'NEEDS_ORGANIZATION', 'completed_groups': group_index,
                         'candidates': results, 'word_candidates': word_candidates, 'shared_attempts': shared_attempts,
                         'activity': {}, 'problem': {'kind': 'SLIDE_PLACEMENT', 'lessons': lectures,
@@ -929,6 +1010,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 activity['checkpoint']=str(group_dir)
                 version_group = version_dir / f"group-{group_index:03d}"
                 request, maps = _request(runtime, lectures, group_dir, continuity)
+                retained_response = retained_origin = retained_lineage = None
+                if autonomous_organization:
+                    retained_response, retained_origin, retained_lineage = _autonomous_retained(root, request, runtime, lectures, continuity, maps)
                 previous = None
                 validated = None
                 phases = []
@@ -944,7 +1028,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     repair_lineage=completed.get("repair_lineage")
                     for saved in completed["candidates"]:
                         path = workspace.runs_dir / saved["lecture_id"] / "lecture_notes.candidate.json"
-                        if not path.is_file() or file_sha256(path) != saved["sha256"]:
+                        if not path.is_file() or _candidate_digest(path) != saved["sha256"]:
                             raise WorkflowError("Saved batch candidate was edited or removed; inspect it before retrying. No automatic paid regeneration.")
                 for phase, context_mode in QUALITY_PHASES[runtime["requested"].quality]:
                     active = with_phase(request, phase, context_mode, previous)
@@ -956,6 +1040,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     returned = checkpoint.with_name("returned-" + checkpoint.name)
                     if response is None:
                         response = _load_generation_phase(returned, previous=previous)
+                    if response is None and phase == 'writing' and retained_response is not None:
+                        response, origin, repair_lineage = retained_response, retained_origin, retained_lineage
                     if response is None and phase == "writing":
                         response,origin=revised_response(root,runtime,lectures,continuity)
                     if response is None and phase == "writing":
@@ -996,6 +1082,21 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         if phase == 'writing' and repair_lineage is None:
                             from .batch_recovery import certify_response
                             response=certify_response(response,active,root)
+                        if autonomous_organization and phase == 'writing':
+                            from .lesson_organization import integrate_decisions
+                            organization_response = _load_generation_phase(returned, previous=None) or response
+                            if repair_lineage and retained_origin:
+                                original = Path(retained_origin['returned'])
+                                organization_response = _load_generation_phase(original, previous=None) or organization_response
+                            ownership, organization = integrate_decisions(organization_response, runtime, lectures[0], maps[lectures[0]])
+                            organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
+                            organization_path = group_dir / 'organization.json'
+                            if organization_path.exists() and _read(organization_path) != organization:
+                                raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
+                            if not organization_path.exists(): _save(organization_path, organization)
+                            runtime['ownership'] = plan['ownership'] = ownership
+                            plan['pending_course_slides'] = sorted(key for key, choice in ownership.items() if choice['status'] == 'pending')
+                            plan.setdefault('organization_receipts', {})[lectures[0]] = {'path': str(organization_path), 'sha256': file_sha256(organization_path)}
                         validation_started=time.monotonic()
                         activity={**activity,"status":"LOCAL_VALIDATION"};save_progress()
                         with phase_budget.track('local_checks'):
@@ -1029,6 +1130,10 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     previous = response.notes
                 _unchanged(runtime)
                 assert validated is not None
+                if retained_lineage and not (group_dir / 'coverage-repair/lineage.json').exists():
+                    # Preserve the original correction proof and its original
+                    # source paths; only the derived proof gets a new copy.
+                    atomic_json_write(group_dir / 'coverage-repair/lineage.json', retained_lineage)
                 group_candidates = []
                 for lecture in lectures:
                     notes = validated[lecture]
@@ -1043,7 +1148,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                    set((revision or {}).get('affected_lessons', []))),
                                "source_revalidation": origin if origin and origin.get("kind") == "organization_revalidation" else None,
                                "slide_links": {key: choice for key, choice in plan["ownership"].items() if lecture in choice.get("uses", {})},
-                               "slide_ownership": {key: choice for key, choice in plan["ownership"].items() if choice["owner"] == lecture},
+                               "slide_ownership": {key: choice for key, choice in plan["ownership"].items() if choice["owner"] == lecture and choice['status'] != 'pending'},
+                               **({'pending_course_slides': plan.get('pending_course_slides', []),
+                                   'organization_receipt': plan['organization_receipts'][lecture]} if autonomous_organization else {}),
                                "shared_attempt_paths": [entry["attempt_path"] for entry in phases if entry["attempt_path"]],
                                "usage": {}, "usage_scope": "Shared batch attempts are counted once in the batch manifest, never attributed in full to each lesson.", "published_to_word": False}
                     if repair_lineage:
@@ -1063,7 +1170,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                 backup.write_bytes(old)
                         atomic_json_write(path, payload)
                         state.record_candidate(lecture, _hash({"batch": plan["fingerprint"], "lecture": lecture}), response, runtime["requested"].quality, path)
-                    group_candidates.append({"lecture_id": lecture, "sha256": file_sha256(path)})
+                    group_candidates.append({"lecture_id": lecture, "sha256": _candidate_digest(path)})
                     continuity.append(_continuity(lecture, notes))
                     results.append({"lecture_id": lecture, "candidate": str(path), "reused": group_reused or preserve_candidate})
                 completed_payload = {"candidates": group_candidates, "phases": phases,"repair_lineage":repair_lineage}
@@ -1081,19 +1188,22 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     for lecture in lectures:
                         cached_word=prior_word_candidates.get(lecture)
                         if (cached_word and cached_word.get('renderer_hash') == word_renderer_hash()
-                                and cached_word.get('source_candidate_hash')==file_sha256(workspace.runs_dir/lecture/'lecture_notes.candidate.json')
+                                and cached_word.get('mode', 'update') == word_mode
+                                and (cached_word.get('source_candidate_content_hash') == _candidate_digest(workspace.runs_dir/lecture/'lecture_notes.candidate.json')
+                                     if cached_word.get('source_candidate_content_hash') else cached_word.get('source_candidate_hash')==file_sha256(workspace.runs_dir/lecture/'lecture_notes.candidate.json'))
                                 and Path(cached_word['path']).is_file() and file_sha256(Path(cached_word['path']))==cached_word['sha256']):
                             word_candidates[lecture]=cached_word;continue
                         activity={**activity,"status":"BUILDING_WORD"};save_progress()
                         from .execution import prevent_idle_sleep
-                        with prevent_idle_sleep(), phase_budget.track('local_checks') as remaining:
+                        with prevent_idle_sleep():
                             word_started=time.monotonic()
-                            built=build_word_candidate(workspace,lecture,timeout_seconds=remaining)
+                            built=build_word_candidate(workspace,lecture,timeout_seconds=300, **({'mode': word_mode} if word_mode != 'update' else {}))
                             phase_metrics.append({"phase":"BUILDING_WORD","lecture_id":lecture,"elapsed_seconds":time.monotonic()-word_started})
                             atomic_json_write(group_dir/"phase-metrics.json",{"lessons":lectures,"phases":phase_metrics})
                         path=Path(built['candidate']);word_candidates[lecture]={"path":str(path),"sha256":file_sha256(path),
                             "source_candidate_hash":file_sha256(workspace.runs_dir/lecture/'lecture_notes.candidate.json'),
-                            "renderer_hash":word_renderer_hash()}
+                            "source_candidate_content_hash":_candidate_digest(workspace.runs_dir/lecture/'lecture_notes.candidate.json'),
+                            "mode": word_mode, "renderer_hash":word_renderer_hash()}
                 phase_budget.save()
                 save_progress()
                 if pause_after and pause_after in lectures:

@@ -1078,6 +1078,24 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
         raise PublicationError(f"Cannot load candidate/source pack for {lecture_id}: {error}") from error
     if any(choice.get('status') == 'deferred' for choice in candidate.get('slide_ownership', {}).values()):
         raise PublicationError('Slide placement is deferred; review the next transcript and resume the batch before building or updating Word')
+    if candidate.get('organization_receipt'):
+        try:
+            from .batch import _read
+            receipt = candidate['organization_receipt']; organization_path = Path(receipt['path'])
+            if (not organization_path.is_absolute() or organization_path.is_symlink()
+                    or not organization_path.resolve().is_relative_to(workspace.root.resolve())
+                    or file_sha256(organization_path) != receipt['sha256']):
+                raise ValueError('Organization receipt changed or moved outside this workspace')
+            organization = _read(organization_path)
+            expected = {key: choice for key, choice in organization['after'].items()
+                        if choice['owner'] == lecture_id and choice['status'] != 'pending'}
+            pending = sorted(key for key, choice in organization['after'].items() if choice['status'] == 'pending')
+            if (organization['kind'] != 'integrated_organization' or organization['lecture_id'] != lecture_id
+                    or candidate.get('slide_ownership') != expected
+                    or candidate.get('pending_course_slides') != pending):
+                raise ValueError('Candidate differs from its source-bound organization receipt')
+        except (OSError, KeyError, ValueError, TypeError, RuntimeError) as error:
+            raise PublicationError('Integrated organization provenance cannot be verified: ' + str(error)) from error
     if candidate.get("published_to_word") is True:
         pass
     if candidate.get("source_pack_hash") != file_sha256(Path(candidate["source_pack"])):
@@ -1137,7 +1155,7 @@ def _soffice() -> str | None:
     return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
 
 
-def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float = 180) -> dict[str, Any]:
+def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float = 300) -> dict[str, Any]:
     soffice = _soffice()
     if not soffice:
         raise PublicationError("LibreOffice/soffice is required to validate Word rendering before publication")

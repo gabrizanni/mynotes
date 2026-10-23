@@ -82,6 +82,8 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
     """Lossless assembly; no inferred coverage, role, inspection or missing text."""
     expected = request.batch_context['lessons'] if request.batch_context else [request.lecture_id]
     merged, seen, last_lesson = {}, {}, 0
+    organization = {}
+    has_organization = False
     valid_ids = {r['id'] for r in request.source_pack.get('evidence', [])}
     for number, part in enumerate(parts):
         from .evidence_refs import normalize_references, EvidenceReferenceError
@@ -99,6 +101,18 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
             raise ProviderError('Incomplete writing portion has no continuation')
         if part['complete'] and part['next_topic'].strip():
             raise ProviderError('Completed writing portion still declares unfinished content')
+        if 'organization' in part['result']:
+            has_organization = True
+            decisions = part['result']['organization']
+            if not isinstance(decisions, list):
+                raise ProviderError('Writing organization must be an array')
+            for decision in decisions:
+                if not isinstance(decision, dict) or not isinstance(decision.get('canonical_slide_id'), str):
+                    raise ProviderError('Writing organization needs canonical source identity')
+                key = decision['canonical_slide_id']
+                if key in organization and organization[key] != decision:
+                    raise ProviderError('Writing portions contain conflicting slide organization')
+                organization[key] = deepcopy(decision)
         count = 0
         for lecture, note in _entries(request, part['result']):
             position = expected.index(lecture)
@@ -149,7 +163,11 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
             raise ProviderError('Writing portion exceeds its block budget; retained, not retried')
     if parts and parts[-1]['complete'] and list(merged) != expected:
         raise ProviderError('Writing declared completion before all selected lessons')
-    return {'lessons':[{'lecture_id':k,'notes':v} for k,v in merged.items()]} if request.batch_context else merged.get(request.lecture_id,{})
+    if request.batch_context:
+        result = {'lessons': [{'lecture_id': k, 'notes': v} for k, v in merged.items()]}
+        if has_organization: result['organization'] = list(organization.values())
+        return result
+    return merged.get(request.lecture_id, {})
 
 
 def _wire(prompt: str) -> bytes:
