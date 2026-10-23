@@ -81,7 +81,7 @@ def recover_parts(request, directory, *, apply=False):
         path=parts_root/f'returned-{i:03d}.json'
         path=_contained(path,directory)
         raw=json.loads(path.read_text())
-        if raw.get('envelope')!=envelope or _normalize_transport_notes(_decode_agy(envelope),schema)!=raw.get('part'):
+        if raw.get('envelope')!=envelope or _normalize_transport_notes(_decode_agy(envelope),schema,provider='agy')!=raw.get('part'):
             raise ProviderError('Retained portion differs from original provider stream')
         proof[str(path)]=file_sha256(path)
         if i<len(state['parts']):
@@ -131,7 +131,7 @@ def verify_local_receipt(path, root):
         raw=json.loads(_contained(name,root).read_text());envelope=raw['envelope']
         if envelope.get('status')!='SUCCESS' or envelope.get('conversation_id')!=receipt['conversation_id']:
             raise ProviderError('Recovery response is not SUCCESS in the original conversation')
-        if _normalize_transport_notes(_decode_agy(envelope),receipt['schema'])!=raw['part']:
+        if _normalize_transport_notes(_decode_agy(envelope),receipt['schema'],provider='agy')!=raw['part']:
             raise ProviderError('Recovery response content changed')
         part,report=normalize_references(raw['part'],receipt['source_ids'])
         changes.extend({'part_index':i,**r} for r in report);parts.append(part)
@@ -154,7 +154,7 @@ def recover_batch(workspace,batch_id,*,apply=False):
     _unchanged(plan)
     continuity=list(plan.get('prior_continuity',[]));diagnoses=[]
     for lessons in manifest['groups']:
-        if all((workspace.runs_dir/l/'lecture_notes.candidate.json').exists() for l in lessons):
+        if all((workspace.runs_dir/l/'lecture_notes.candidate.json').exists() and json.loads((workspace.runs_dir/l/'lecture_notes.candidate.json').read_text()).get('batch_id') == batch_id for l in lessons):
             for lesson in lessons:
                 candidate=json.loads((workspace.runs_dir/lesson/'lecture_notes.candidate.json').read_text())
                 if candidate.get('source_pack_hash')!=sources[lesson]['sha256']:raise ProviderError('Existing candidate sources changed')
@@ -168,8 +168,20 @@ def recover_batch(workspace,batch_id,*,apply=False):
         request,maps=_request(plan,lessons,directory,continuity)
         if not prompt_matches(directory,plan,plan,lessons,continuity):raise ProviderError('Original request identity cannot be verified')
         response,receipt=recover_parts(request,directory,apply=False)
+        parts_recovery = response is not None
         if response is None:
-            diagnoses.append({'lessons':lessons,'status':'NO_LOCAL_RECOVERY','next_action':'inspect_saved_result'});break
+            from .workflow import _load_generation_phase
+            from .batch_recovery import certify_response
+            paths = [directory/'certified-base.json', directory/('returned-writing-'+_hash(continuity)[:12]+'.json')]
+            for path in paths:
+                if path.is_file():
+                    response = _load_generation_phase(path, previous=None)
+                    if response is not None:
+                        response = certify_response(response, request, workspace.runs_dir/'_batches'/batch_id)
+                        break
+            if response is None:
+                diagnoses.append({'lessons':lessons,'status':'NO_LOCAL_RECOVERY','next_action':'inspect_saved_result'});break
+            receipt = {'transformations':[], 'active_seconds':None}
         started=__import__('time').monotonic()
         from .generation_diagnostics import group_defects
         from .workflow import WorkflowError
@@ -177,8 +189,21 @@ def recover_batch(workspace,batch_id,*,apply=False):
         try:
             validated=_validate_group(response,plan,lessons,maps,final_phase=True,continuity=continuity)
         except WorkflowError as error:
+            defects = getattr(error, 'defects', defects)
             if not defects: defects.append({'phase':'CONTENT_VALIDATION','code':type(error).__name__,'message':str(error),
                                            'action':'Review saved content; no provider invoked'})
+        recovered_correction = False
+        if defects and (directory/'coverage-repair/repair.json').is_file():
+            from .batch_recovery import retained_correction
+            result = retained_correction(request, response, defects, maps)
+            if result is not None:
+                corrected, normalization = result
+                try:
+                    _validate_group(corrected,plan,lessons,maps,final_phase=True,continuity=continuity)
+                    defects=[]; recovered_correction=True
+                    receipt['transformations'] = (normalization or {}).get('transformations', [])
+                except WorkflowError as error:
+                    defects = getattr(error, 'defects', [{'phase':'CONTENT_VALIDATION','code':type(error).__name__,'message':str(error)}])
         if defects:
             diagnoses.append({'lessons':lessons,'status':'NEEDS_CONTENT_REVIEW','phase':'CONTENT_VALIDATION',
                               'transformations':len(receipt['transformations']),'defects':defects,
@@ -190,8 +215,12 @@ def recover_batch(workspace,batch_id,*,apply=False):
              'local_validation_seconds':__import__('time').monotonic()-started}
         diagnoses.append(row)
         if apply:
-            response,receipt=recover_parts(request,directory,apply=True)
-            row['receipt']=response.attempt_path;row['status']='RECOVERY_CERTIFIED'
+            if parts_recovery:
+                response,receipt=recover_parts(request,directory,apply=True)
+                row['receipt']=response.attempt_path
+            if recovered_correction:
+                row['recovery_kind']='retained_targeted_correction'
+            row['status']='RECOVERY_CERTIFIED'
         break
     if apply and any(r['status']=='RECOVERY_CERTIFIED' for r in diagnoses):
         class NoProvider:
@@ -201,7 +230,7 @@ def recover_batch(workspace,batch_id,*,apply=False):
             provider=manifest['requested_model']['provider'],quality=manifest['requested_model']['quality'],
             selection=manifest.get('selection'),budgets=manifest.get('budgets'),instructions=options.get('instructions',''),
             image_limit=options.get('image_limit'),speaker_focus=options.get('speaker_focus'),
-            batch_id=batch_id,provider_adapter=NoProvider(),pause_after=diagnoses[-1]['lessons'][-1])
+            batch_id=batch_id,provider_adapter=NoProvider(),pause_after=diagnoses[-1]['lessons'][-1],repair_missing=True)
         diagnoses[-1]['status']='CONTENT_RECOVERED'
     return {'batch_id':batch_id,'status':'CONTENT_RECOVERED' if apply and any(r['status']=='CONTENT_RECOVERED' for r in diagnoses) else 'DIAGNOSED',
             'lessons':diagnoses,'provider_invoked':False,'applied':any(r['status']=='CONTENT_RECOVERED' for r in diagnoses)}

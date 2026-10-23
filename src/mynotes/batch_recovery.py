@@ -51,17 +51,52 @@ def prompt_matches(directory,old,plan,lectures,continuity):
     # The old manifest sorts dictionary keys; the original staged configuration
     # preserves request ordering. Prove semantic equality, then reproduce its
     # exact serialization rather than weakening the saved prompt fingerprint.
-    configurations=[None,*directory.glob('request-inputs/*/configuration.json')]
-    for path in configurations:
+    configurations=[None,*[json.loads(path.read_text()) for path in directory.glob('request-inputs/*/configuration.json')]]
+    for attempt in (directory/'provider-attempts').glob('*.json'):
+        record=json.loads(attempt.read_text());command=record.get('command',[])
+        if '--print' not in command:continue
+        index=command.index('--print')
+        if index+1>=len(command):continue
+        prompt_lines=command[index+1].splitlines()
+        for position,line in enumerate(prompt_lines[:-1]):
+            if line==lines[0]:
+                try:configurations.append(json.loads(prompt_lines[position+1]))
+                except ValueError:pass
+    for saved in configurations:
         candidate=context
-        if path is not None:
-            saved=json.loads(path.read_text())
+        if saved is not None:
             if canonical_configuration(saved)!=canonical_configuration(current):continue
             candidate='\n'.join([lines[0],json.dumps(saved,ensure_ascii=False,separators=(',',':')),*lines[2:]])
         identity=fingerprint({'protocol':1,'prompt':_prompt(request,context=candidate),'source_pack':request.source_pack,
                               'requested':asdict(request.requested),'schema':part_schema(request)})
         state=directory/'writing-parts'/identity/'state.json'
         if state.is_file() and json.loads(state.read_text()).get('fingerprint')==identity:return True
+        # Single-turn Agy attempts have no portions fingerprint. Prove the exact
+        # original command prompt and complete staged input content instead.
+        from .providers import _stage_agy_context
+        staged = _stage_agy_context(request, directory, write=False, context=candidate)
+        if staged != candidate:
+            files = json.loads(staged.splitlines()[-1])
+            try:
+                configuration = json.loads(Path(files[0]['path']).read_text())
+                metadata = json.loads(Path(files[1]['path']).read_text())
+                rows = [json.loads(line) for item in files[2:] for line in Path(item['path']).read_text().splitlines() if line.strip()]
+                expected = json.loads(candidate.splitlines()[-1]); evidence = expected.pop('evidence')
+                if configuration != json.loads(candidate.splitlines()[1]) or metadata != expected or rows != evidence:
+                    continue
+                if any(Path(item['path']).is_symlink() or not Path(item['path']).resolve().is_relative_to(directory.resolve())
+                       or len(Path(item['path']).read_bytes()) != item['bytes'] or len(Path(item['path']).read_text().splitlines()) != item['lines'] for item in files):
+                    continue
+            except (OSError,ValueError,KeyError,IndexError):
+                continue
+        expected_prompt = _prompt(request, context=staged)
+        for attempt in (directory/'provider-attempts').glob('*.json'):
+            record=json.loads(attempt.read_text()); command=record.get('command',[])
+            if (record.get('requested')!=asdict(request.requested) or record.get('error') or record.get('returncode')!=0
+                    or record.get('phase')!='writing' or '--print' not in command):continue
+            index=command.index('--print')
+            if index+1<len(command) and command[index+1]==expected_prompt:
+                return True
     return False
 
 
@@ -206,9 +241,18 @@ def certify_response(response,request,root):
         if response.notes != raw: raise WorkflowError('Recovered result changed')
         return response
     if record.get('error') or record.get('returncode')!=0:raise WorkflowError('Saved response came from a failed provider transport')
-    if record.get('envelope',{}).get('transport')!='agy_parts_v1':return response
-    from .agy_parts import verify_receipt
-    raw=verify_receipt(record,root)
+    if record.get('envelope',{}).get('transport')=='agy_parts_v1':
+        from .agy_parts import verify_receipt
+        raw=verify_receipt(record,root)
+    elif record.get('requested',{}).get('provider')=='agy':
+        from .providers import _decode_agy, _normalize_transport_notes
+        if record.get('requested') != asdict(request.requested):
+            raise WorkflowError('Saved writing requested settings changed')
+        envelope=json.loads(record['stdout'])
+        if envelope.get('status')!='SUCCESS':raise WorkflowError('Saved writing transport is not SUCCESS')
+        raw=_normalize_transport_notes(_decode_agy(envelope),request.response_schema,provider='agy')
+    else:
+        return response
     if raw==response.notes:return response
     owners={r['evidence_id']:r['owner'] for r in request.batch_context['ownership']}
     safe=True
@@ -271,14 +315,8 @@ def bound_budget_checkpoints(root, plan, lectures):
     return sorted(directories)
 
 
-def repair_coverage(request,response,defects,maps,adapter,timeout):
-    """One hash-anchored correction of explicit defects, including replacements."""
-    from .batch import _hash, _stage_visuals
-    # A compatible response can bypass the new-writing branch that normally
-    # stages images. Repair still needs verified pixels at the new paths.
-    _stage_visuals(request)
-    directory=request.run_dir/'coverage-repair';directory.mkdir(parents=True,exist_ok=True)
-    path=directory/'repair.json'
+def _correction_contract(request, response, defects, maps):
+    from .batch import _hash
     base_hash=_hash(response.notes)
     allowed={maps[d['lecture_id']][d['evidence_id']] for d in defects}
     task={'defects':[{**d,'evidence_id':maps[d['lecture_id']][d['evidence_id']]} for d in defects],
@@ -321,6 +359,58 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
         for row in response.notes['lessons']:
             for b in row['notes']['blocks']:
                 if (row['lecture_id'], _hash(b)) in editable: allowed.update(b['evidence_ids'])
+    return task, schema, allowed
+
+
+def _saved_correction(saved, request, task, schema, directory):
+    """Certify retained patch from the immutable SUCCESS transport, no AI call."""
+    from .providers import _decode_agy, _transport_normalization
+    if saved.get('base_notes_sha256') != task['base_notes_sha256'] or saved.get('task') != task:
+        raise WorkflowError('Saved targeted correction differs from its source task; no paid retry')
+    patch = ProviderResponse(**saved['response'])
+    if patch.provider != request.requested.provider:
+        raise WorkflowError('Targeted correction provider changed')
+    if patch.provider != 'agy':
+        return patch, None
+    attempt = Path(patch.attempt_path or '')
+    if not attempt.is_absolute() or attempt.is_symlink() or not attempt.resolve().is_relative_to(directory.resolve()):
+        raise WorkflowError('Targeted correction attempt is outside its private checkpoint')
+    record = json.loads(attempt.read_text())
+    if record.get('error') or record.get('returncode') != 0 or record.get('requested') != asdict(request.requested):
+        raise WorkflowError('Targeted correction lacks a successful matching provider attempt')
+    envelope = json.loads(record['stdout'])
+    if envelope.get('status') != 'SUCCESS':
+        raise WorkflowError('Targeted correction transport is not SUCCESS')
+    raw = _decode_agy(envelope)
+    normalized, receipt = _transport_normalization(raw, schema, provider='agy')
+    saved_normalized, _ = _transport_normalization(patch.notes, schema, provider='agy')
+    if saved_normalized != normalized:
+        raise WorkflowError('Targeted correction differs from its SUCCESS transport')
+    receipt = {**receipt, 'attempt':str(attempt), 'attempt_sha256':file_sha256(attempt), 'schema':schema}
+    return replace(patch, notes=normalized), receipt
+
+
+def retained_correction(request, response, defects, maps):
+    """Read-only diagnosis, bound to exactly the task normal resume would use."""
+    directory = request.run_dir/'coverage-repair'
+    path = directory/'repair.json'
+    if not path.is_file():
+        return None
+    task, schema, _ = _correction_contract(request, response, defects, maps)
+    patch, receipt = _saved_correction(json.loads(path.read_text()), request, task, schema, directory)
+    return replace(response, notes=apply_correction(response.notes, patch.notes, task)), receipt
+
+
+def repair_coverage(request,response,defects,maps,adapter,timeout):
+    """One hash-anchored correction of explicit defects, including replacements."""
+    from .batch import _hash, _stage_visuals
+    # A compatible response can bypass the new-writing branch that normally
+    # stages images. Repair still needs verified pixels at the new paths.
+    _stage_visuals(request)
+    directory=request.run_dir/'coverage-repair';directory.mkdir(parents=True,exist_ok=True)
+    path=directory/'repair.json'
+    task,schema,allowed=_correction_contract(request,response,defects,maps)
+    base_hash=task["base_notes_sha256"]
     selected={'lecture_id':request.lecture_id,'course':request.source_pack.get('course',{}),
               'evidence':[e for e in request.source_pack['evidence'] if e['id'] in allowed],
               'visuals':[deepcopy(v) for v in request.source_pack.get('visuals',[]) if v.get('evidence_id') in allowed]}
@@ -331,8 +421,7 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
                            response_schema=schema,run_dir=directory,timeout_seconds=timeout)
     if path.exists():
         saved=json.loads(path.read_text())
-        if saved['base_notes_sha256']!=base_hash or saved['task']!=task:raise WorkflowError('Saved targeted correction differs from its source task; no paid retry')
-        patch=ProviderResponse(**saved['response'])
+        patch,normalization=_saved_correction(saved,repair_request,task,schema,directory)
     else:
         if (directory/'started.json').exists():raise WorkflowError('Targeted correction already attempted; inspect its retained attempt, no paid retry')
         revision = request.batch_context.get('revision_id')
@@ -348,9 +437,11 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
         atomic_json_write(directory/'started.json',{'base_notes_sha256':base_hash,'task':task})
         patch=invoke_provider(repair_request,adapter)
         atomic_json_write(path,{'base_notes_sha256':base_hash,'task':task,'response':asdict(patch)})
+        patch,normalization=_saved_correction(json.loads(path.read_text()),repair_request,task,schema,directory)
     notes=apply_correction(response.notes,patch.notes,task)
     lineage={'base_attempt':response.attempt_path,'base_notes_sha256':base_hash,'repair':str(path),'repair_sha256':file_sha256(path),
              'repair_attempt':patch.attempt_path,'repair_usage':patch.usage,'effective_notes_sha256':_hash(notes),'operations':patch.notes}
+    if normalization is not None:lineage['transport_normalization']=normalization
     atomic_json_write(directory/'lineage.json',lineage)
     return replace(response,notes=notes),lineage
 
@@ -423,6 +514,38 @@ def apply_correction(original,patch,task):
     return notes
 
 
+def _candidate_completion_digest(path):
+    """Publication markers are mutable; the certified academic payload is not."""
+    value=json.loads(Path(path).read_text())
+    value['published_to_word']=False
+    value.pop('published_path',None);value.pop('published_hash',None)
+    encoded=(json.dumps(value,ensure_ascii=False,indent=2,sort_keys=True)+'\n').encode()
+    return __import__('hashlib').sha256(encoded).hexdigest()
+
+
+def _notes_request_status(root):
+    from .batch import _read
+    import os
+    path=root/'notes-run.json'
+    if not path.is_file():return None
+    value=_read(path)
+    if value.get('status') in {'GENERATING','BUILDING_WORD','UPDATING_WORD','LOCAL_WORD_RETRY'}:
+        try:os.kill(value['pid'],0)
+        except (ProcessLookupError,KeyError):value={**value,'reported_status':value.get('status'),'status':'INTERRUPTED'}
+        except PermissionError:value={**value,'reported_status':value.get('status'),'status':'STATUS_UNAVAILABLE','liveness':'permission_denied'}
+    def intact(row):
+        path=Path(row.get('path',''))
+        return path.is_file() and file_sha256(path)==row.get('sha256')
+    files=value.get('delivery',{}).get('files',[])
+    publication=value.get('publication',{});target=Path(publication.get('output',''))
+    value['delivery_files_valid']=bool(files) and all(intact(row) for row in files)
+    value['publication_file_valid']=target.is_file() and file_sha256(target)==publication.get('output_hash')
+    if value.get('status') in {'COMPLETED','COMPLETED_WITH_WARNINGS'} and not (value['delivery_files_valid'] and value['publication_file_valid']):
+        value={**value,'reported_status':value['status'],'status':'DELIVERY_CHANGED','problem':{
+            'kind':'DELIVERY_CHANGED','message':'A delivered document is missing or changed since completion; no generation was started.'}}
+    return value
+
+
 def batch_status(workspace,batch_id):
     from .batch import load_batch_manifest,_read
     manifest=load_batch_manifest(workspace,batch_id);root=workspace.runs_dir/'_batches'/batch_id
@@ -435,7 +558,7 @@ def batch_status(workspace,batch_id):
             group=next(i for i,g in enumerate(manifest['groups']) if lecture in g)
             complete=root/manifest['fingerprint']/f'group-{group:03d}'/'complete.json'
             if candidate.is_file() and complete.is_file():
-                saved=_read(complete);valid=any(c['lecture_id']==lecture and c['sha256']==file_sha256(candidate) for c in saved['candidates'])
+                saved=_read(complete);valid=any(c['lecture_id']==lecture and c['sha256'] in {file_sha256(candidate),_candidate_completion_digest(candidate)} for c in saved['candidates'])
             word_entry=manifest.get('word_candidates',{}).get(lecture)
             if valid and word_entry and Path(word_entry['path']).is_file() and file_sha256(Path(word_entry['path']))==word_entry['sha256']:word=word_entry['path']
         lessons.append({'lecture_id':lecture,'content_validated':valid,'word_candidate':word,
@@ -488,11 +611,13 @@ def batch_status(workspace,batch_id):
                 'remaining_from_saved_accounting':{phase:0 if blocked and phase!='local_checks' else max(0,limit-phases.get(phase,0))
                     for phase,limit in [('writing',MODEL_PHASE_SECONDS),('coverage_repair',MODEL_PHASE_SECONDS),('local_checks',LOCAL_CHECK_SECONDS)]}}
         row['active_seconds']=max([v for v in [*budgets,row.get('active_seconds')] if v is not None],default=None)
-    return {'batch_id':batch_id,'status':status,'lessons':lessons,'activity':activity,
+    notes_request=_notes_request_status(root)
+    return {'batch_id':batch_id,'status':notes_request['status'] if notes_request else status,'lessons':lessons,'activity':activity,
+            'notes_request':notes_request,
             'problem':manifest.get('problem',manifest.get('error')),'network_retries':retries,
             'local_recovery':recovery,'warnings':manifest.get('warnings',[]),
             'organization_pending':manifest.get('organization_pending',[]),
-            'phase':next((r['phase'] for r in lessons if r.get('phase')),None) or (manifest.get('problem') if isinstance(manifest.get('problem'),dict) else {}).get('phase') or activity.get('status'), 'published_to_word':False}
+            'phase':next((r['phase'] for r in lessons if r.get('phase')),None) or (manifest.get('problem') if isinstance(manifest.get('problem'),dict) else {}).get('phase') or activity.get('status'), 'published_to_word':bool(notes_request and notes_request.get('publication_file_valid') and notes_request.get('status') in {'COMPLETED','COMPLETED_WITH_WARNINGS'})}
 
 
 
@@ -514,17 +639,33 @@ def verify_repair_lineage(candidate,workspace_root):
     patch_path=Path(line['repair'])
     if file_sha256(patch_path)!=line['repair_sha256']:raise WorkflowError('Targeted correction response changed')
     patch=json.loads(patch_path.read_text())
-    if patch['base_notes_sha256']!=line['base_notes_sha256'] or patch['response']['notes']!=line['operations']:
-        raise WorkflowError('Correction operations differ from their retained response')
-    effective=apply_correction(base.notes,patch['response']['notes'],patch['task'])
-    if _hash(effective)!=line['effective_notes_sha256']:raise WorkflowError('Targeted correction assembly changed')
+    if patch['base_notes_sha256']!=line['base_notes_sha256']:
+        raise WorkflowError('Correction base differs from its retained response')
+    operations = patch['response']['notes']
+    if patch['response'].get('attempt_path') != line['repair_attempt']:
+        raise WorkflowError('Targeted correction attempt binding changed')
     record=json.loads(Path(line['repair_attempt']).read_text())
     if record.get('error') or record.get('returncode')!=0 or record['requested']!=candidate['requested_model']:
         raise WorkflowError('Targeted correction lacks a successful matching provider attempt')
     if record['requested']['provider']=='agy':
         envelope=json.loads(record['stdout'])
-        if envelope.get('status')!='SUCCESS' or _decode_agy(envelope)!=patch['response']['notes']:
+        if envelope.get('status')!='SUCCESS':
             raise WorkflowError('Targeted correction differs from its SUCCESS transport')
+        normalization = line.get('transport_normalization')
+        if normalization is not None:
+            from .providers import ProviderRequest, RequestedModel
+            request = ProviderRequest('', {}, {}, RequestedModel(**record['requested']))
+            verified, proof = _saved_correction(patch, request, patch['task'], normalization['schema'], patch_path.parent)
+            if proof != normalization:
+                raise WorkflowError('Correction transport normalization changed')
+            operations = verified.notes
+        elif _decode_agy(envelope)!=operations:
+            # Historical lineages retain their exact original transport contract.
+            raise WorkflowError('Targeted correction differs from its SUCCESS transport')
+    if operations != line['operations']:
+        raise WorkflowError('Correction operations differ from their retained response')
+    effective=apply_correction(base.notes,operations,patch['task'])
+    if _hash(effective)!=line['effective_notes_sha256']:raise WorkflowError('Targeted correction assembly changed')
     if line['validated_notes_sha256'].get(candidate['notes'].get('lecture_id',candidate.get('lecture_id',''))) is None:
         # Current candidates identify lessons via their source pack.
         pack=json.loads(Path(candidate['source_pack']).read_text());lecture=pack['lecture_id']

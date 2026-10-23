@@ -360,18 +360,41 @@ def _codex_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return visit(schema)
 
 
-def _normalize_transport_notes(notes: dict[str, Any], schema: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Restore omitted optional fields; retain meaningful required null values."""
-    def visit(value: Any, schema: dict[str, Any]) -> Any:
+def _transport_normalization(notes: dict[str, Any], schema: dict[str, Any], *, provider: str | None = None):
+    """Deterministic transport-only transform; unknown fields remain errors.
+
+    Agy's finish tool adds two descriptive top-level strings. They are not
+    academic content or patch operations. Never strip nested or non-text fields.
+    """
+    transformations = []
+    def visit(value, contract, path=()):
         if isinstance(value, dict):
-            properties = schema.get("properties", {})
-            required = set(schema.get("required", []))
-            return {key: visit(item, properties.get(key, {})) for key, item in value.items()
-                    if item is not None or key in required}
+            properties = contract.get("properties", {})
+            required = set(contract.get("required", []))
+            result = {}
+            for key, item in value.items():
+                location = [*path, key]
+                if not path and provider == "agy" and key in {"toolAction", "toolSummary"} and isinstance(item, str) and key not in properties:
+                    transformations.append({"kind": "agy_descriptive_metadata", "path": location})
+                elif item is None and key in properties and key not in required:
+                    transformations.append({"kind": "optional_null", "path": location})
+                else:
+                    result[key] = visit(item, properties.get(key, {}), tuple(location))
+            return result
         if isinstance(value, list):
-            return [visit(item, schema.get("items", {})) for item in value]
+            return [visit(item, contract.get("items", {}), (*path, i)) for i, item in enumerate(value)]
         return value
-    return visit(notes, schema or notes_schema())
+    normalized = visit(notes, schema)
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    receipt = {"policy": "transport_normalization_v1", "provider": provider,
+               "schema_sha256": digest(schema), "input_sha256": digest(notes),
+               "output_sha256": digest(normalized), "transformations": transformations}
+    return normalized, receipt
+
+
+def _normalize_transport_notes(notes: dict[str, Any], schema: dict[str, Any] | None = None, *, provider: str | None = None) -> dict[str, Any]:
+    return _transport_normalization(notes, schema or notes_schema(), provider=provider)[0]
 
 
 def _agy_schema(schema: dict[str, Any]) -> dict[str, Any]:
@@ -677,14 +700,14 @@ AGY_INLINE_CONTEXT_BYTES = 32000
 AGY_INPUT_PART_BYTES = 20000
 
 
-def _stage_agy_context(request: ProviderRequest, directory: Path, *, write: bool = True) -> str:
+def _stage_agy_context(request: ProviderRequest, directory: Path, *, write: bool = True, context: str | None = None) -> str:
     """Keep full evidence out of oversized user-message text.
 
     Real full-input probes lost middle/end evidence through a monolithic user
     message. Bounded view_file inputs passed the same five exact-copy checks.
     No academic text is sampled or summarized; IDs/timestamps stay unchanged.
     """
-    context = _context(request)
+    context = _context(request) if context is None else context
     if request.source_pack is None or len(context.encode("utf-8")) <= AGY_INLINE_CONTEXT_BYTES:
         return context
     lines = context.splitlines()
@@ -827,7 +850,12 @@ class AgyAdapter:
         usage = envelope.get("usage", {}) if isinstance(envelope, dict) and isinstance(envelope.get("usage"), dict) else {}
         attempt = _save_attempt(request, command=command, completed=completed, started=started, envelope={"status": status, "usage": usage})
         model, effort = _reported_settings([envelope] if isinstance(envelope, dict) else [])
-        return ProviderResponse(_normalize_transport_notes(notes, request.response_schema), "agy", model, effort, usage, str(attempt))
+        schema = request.response_schema or notes_schema()
+        normalized, normalization = _transport_normalization(notes, schema, provider="agy")
+        from .utils import file_sha256
+        atomic_json_write(attempt.parent.parent/"transport-normalization"/(attempt.stem+".json"),
+                          {**normalization, "schema":schema, "attempt":str(attempt), "attempt_sha256":file_sha256(attempt)})
+        return ProviderResponse(normalized, "agy", model, effort, usage, str(attempt))
 
     @staticmethod
     def _raise(request: ProviderRequest, command: list[str], completed: subprocess.CompletedProcess[str] | None, started: float, error: str, *, invocation_started: bool | None = None, error_type: type[ProviderError] = ProviderError) -> None:

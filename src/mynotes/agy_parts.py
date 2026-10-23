@@ -272,7 +272,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
             payload=json.loads(path.read_text())
             if payload['envelope'].get('status') != 'SUCCESS': raise ProviderError('Checkpoint came from a failed turn')
             if payload['envelope'].get('conversation_id') != state.get('conversation_id'):raise ProviderError('Writing checkpoint conversation changed')
-            if _normalize_transport_notes(_decode_agy(payload['envelope']),schema) != payload['part']:raise ProviderError('Writing checkpoint differs from its returned portion')
+            if _normalize_transport_notes(_decode_agy(payload['envelope']),schema,provider='agy') != payload['part']:raise ProviderError('Writing checkpoint differs from its returned portion')
             parts.append(payload['part']); refs.append(ref)
         assemble(request,parts)
         if state.get('finalized'):
@@ -336,7 +336,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         cid=envelope.get('conversation_id')
         if not isinstance(cid,str) or not cid or (state.get('conversation_id') and cid != state['conversation_id']):
             raise ProviderError('Agy did not preserve the writing conversation')
-        part=_normalize_transport_notes(_decode_agy(envelope),schema)
+        part=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy')
         index=len(parts); path=root/f'part-{index:03d}.json'
         raw={'envelope':envelope,'part':part}
         atomic_json_write(root/f'returned-{index:03d}.json',raw)
@@ -449,7 +449,7 @@ def verify_receipt(record: dict, workspace_root: Path) -> dict:
         if path.is_symlink() or file_sha256(path) != ref['sha256']:raise ProviderError('Writing portion was modified')
         value=json.loads(path.read_text());raw=value['envelope']
         if parts and raw.get('conversation_id') != json.loads((receipt.parent/refs[0]['file']).read_text())['envelope'].get('conversation_id'):raise ProviderError('Writing portions changed conversation')
-        if raw.get('status') != 'SUCCESS' or _normalize_transport_notes(_decode_agy(raw),saved['schema']) != value['part']:
+        if raw.get('status') != 'SUCCESS' or _normalize_transport_notes(_decode_agy(raw),saved['schema'],provider='agy') != value['part']:
             raise ProviderError('Writing portion lacks an intact SUCCESS response')
         parts.append(value['part'])
     selected=saved.get('lessons')
@@ -461,7 +461,7 @@ def verify_receipt(record: dict, workspace_root: Path) -> dict:
     results=[event.get('result') for event in (json.loads(line) for line in record['stdout'].splitlines() if line.strip()) if event.get('event')=='result']
     if not results or any(not isinstance(r,dict) or r.get('status') != 'SUCCESS' for r in results):
         raise ProviderError('Writing stream includes a failed terminal response')
-    if _normalize_transport_notes(_decode_agy(results[-1]),saved['schema']) != parts[-1]:
+    if _normalize_transport_notes(_decode_agy(results[-1]),saved['schema'],provider='agy') != parts[-1]:
         raise ProviderError('Final writing portion differs from its terminal result')
     return assemble(req,parts)
 
