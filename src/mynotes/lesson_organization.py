@@ -106,7 +106,12 @@ def integrated_schema():
                       "properties": {"canonical_slide_id": {"type": "string"},
                                      "status": {"type": "string", "enum": ["taught", "supplement", "pending", "material"]},
                                      "reason": {"type": "string"},
-                                     "evidence_ids": {"type": "array", "items": {"type": "string"}}},
+                                     "evidence_ids": {"type": "array", "items": {"type": "string"}},
+                                     "structural_review": {"type": "object", "additionalProperties": False,
+                                         "description": "Only for a visually inspected nonteaching title or section divider. Bind the actual staged source image hash. Never exempt code, data or diagrams.",
+                                         "properties": {"kind": {"type": "string", "enum": ["title", "section_divider"]},
+                                                        "reason": {"type": "string"}, "image_sha256": {"type": "string"}},
+                                         "required": ["kind", "reason", "image_sha256"]}},
                       "required": ["canonical_slide_id", "status", "reason", "evidence_ids"]}}
 
 
@@ -142,7 +147,8 @@ def integrate_decisions(response, plan, lecture, mapping):
                    if row['id'].startswith('T') and row.get('origin_lecture_id', lecture) == lecture}
     last = lecture == plan['lectures'][-1]
     for row in rows:
-        if (not isinstance(row, dict) or set(row) != {'canonical_slide_id', 'status', 'reason', 'evidence_ids'}
+        if (not isinstance(row, dict) or set(row) - {'canonical_slide_id', 'status', 'reason', 'evidence_ids', 'structural_review'}
+                or not {'canonical_slide_id', 'status', 'reason', 'evidence_ids'}.issubset(row)
                 or row.get('canonical_slide_id') not in visible or row['canonical_slide_id'] in seen
                 or row.get('status') not in {'taught', 'supplement', 'pending', 'material'}
                 or not isinstance(row.get('reason'), str) or not row['reason'].strip()):
@@ -157,6 +163,8 @@ def integrate_decisions(response, plan, lecture, mapping):
         if not isinstance(ids, list) or len(set(ids)) != len(ids) or set(ids) - local_turns:
             raise WorkflowError('Integrated organization needs this lesson\'s actual transcript evidence IDs')
         status = row['status']
+        if row.get('structural_review') and status != 'material':
+            raise WorkflowError('A structural review is only valid for a nonteaching material slide')
         if status == 'taught' and not ids:
             raise WorkflowError('A taught slide needs current-lesson transcript evidence')
         if status == 'pending':
@@ -164,9 +172,11 @@ def integrate_decisions(response, plan, lecture, mapping):
                 raise WorkflowError('The last selected lesson cannot leave unresolved course slide coverage')
             ownership[canonical] = {'owner': lecture, 'status': 'pending', 'reason': row['reason']}
         elif status == 'material':
-            if not prior.get('structural_review'):
-                raise WorkflowError('Only an already inspected structural slide can omit substantive coverage')
-            ownership[canonical] = {**prior, 'provisional': False, 'reason': row['reason']}
+            review = row.get('structural_review') or prior.get('structural_review')
+            if not review:
+                raise WorkflowError('Only an inspected image-bound structural slide can omit substantive coverage')
+            ownership[canonical] = {'owner': lecture, 'status': 'material',
+                                    'reason': row['reason'], 'structural_review': deepcopy(review)}
         else:
             reverse = {value: key for key, value in mapping.items()}
             ownership[canonical] = {'owner': lecture, 'status': status, 'reason': row['reason'],

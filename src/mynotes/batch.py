@@ -540,7 +540,7 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 "pending only for untouched content to be reviewed with a later selected complete transcript. "
                 "Pending slides are in the course pool, not required current-lesson content; do not repair or explain them yet. "
                 "The final selected lesson must settle every remaining page; never invent teaching or duplicate a settled main explanation. "
-                "Do not change already settled prior ownership. Material exemption requires the existing inspected structural_review."))
+                "Do not change already settled prior ownership. Material exemption needs a visually inspected title/divider structural_review bound to its actual source image hash; never exempt code, data or diagrams."))
     request = ProviderRequest(lectures[0], plan["course"], {}, plan["requested"], source_pack=pack, run_dir=run_dir,
                               style=plan["style"], response_schema=batch_notes_schema(autonomous_organization=plan.get('autonomous_organization', False)), batch_context=context)
     return request, maps

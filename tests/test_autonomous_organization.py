@@ -227,3 +227,30 @@ def test_settled_legacy_batch_can_build_standalone_without_changing_generation_c
     second = generate_batch(ws, 'OPS', [1], selection=selection, provider_adapter=writer, build_word=True, word_mode='standalone', batch_id=first['batch_id'])
     assert first['status'] == second['status'] == 'CANDIDATE_READY'
     assert len(writer.calls) == 1 and modes == ['update', 'standalone']
+
+
+@pytest.mark.parametrize('corrupt_hash', [False, True])
+def test_writer_structural_decision_requires_inspected_source_image_hash(tmp_path, corrupt_hash):
+    from PIL import Image
+    ws = prepared(tmp_path)
+    path = ws.runs_dir / 'OPS-L01/source_pack.json'; pack = json.loads(path.read_text())
+    pack['evidence'][0]['content'] = 'Course title'
+    image = path.parent / 'cover.png'; Image.new('RGB', (20, 20), 'white').save(image)
+    pack['visuals'] = [{'evidence_id': 'S001', 'source_file': pack['evidence'][0]['source_file'], 'page': 1,
+                        'image_path': str(image), 'reason': 'Visible source cover for structural review'}]
+    atomic_json_write(path, pack)
+    def cover(result, request):
+        if request.lecture_id.endswith('01'):
+            result['organization'][0].update(status='material', evidence_ids=[], structural_review={
+                'kind': 'title', 'reason': 'Inspected title-only cover without teaching content.',
+                'image_sha256': '0' * 64 if corrupt_hash else file_sha256(image)})
+            notes = result['lessons'][0]['notes']
+            notes['blocks'] = [row for row in notes['blocks'] if not (row.get('coverage_role') == 'full' and row['evidence_ids'] == ['S001'])]
+    if corrupt_hash:
+        with pytest.raises(WorkflowError, match='inspected source image'):
+            generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=IntegratedWriter(cover))
+    else:
+        result = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=IntegratedWriter(cover))
+        assert result['status'] == 'CANDIDATE_READY'
+        first = json.loads(Path(result['candidates'][0]['candidate']).read_text())
+        assert next(choice for choice in first['slide_ownership'].values() if choice['status'] == 'material')['structural_review']['image_sha256'] == file_sha256(image)
