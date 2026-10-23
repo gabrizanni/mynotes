@@ -242,3 +242,18 @@ Missing confidence is no longer treated as certainty. Average log probability,
 when available, supplies a labelled proxy rather than a calibrated accuracy.
 Timestamp failures include the segment, interval and specific violation.
 Original audio and failed attempt diagnostics remain preserved.
+# Local 0.2.28 implementation
+
+Complete notes requests now have a foreground `notes` command that owns retained
+response recovery, progressive slide organization, standalone/cumulative Word
+delivery and the existing safe course update. Candidate-only commands retain
+their previous meaning. Managed chat instructions select the complete path.
+
+Successful Agy corrections containing descriptive finish-tool metadata can be
+recovered locally without another paid call. Raw responses, original attempts,
+model allowances, personal edits and publication approval preferences remain
+protected. Rendering timeouts are independent of the model phase allowances.
+
+This entry describes the local implementation; it does not certify hosted CI,
+public release, a personal installation or completed real-provider runs.
+

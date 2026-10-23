@@ -246,7 +246,9 @@ def test_saved_correction_can_use_reserved_local_build_time_without_another_prov
         value['phases']={'writing':1200.,'coverage_repair':1200.,'local_checks':95.}
         atomic_json_write(budget_path,value)
     def build(workspace,lecture,**kwargs):
-        assert 0<kwargs['timeout_seconds']<=25
+        # Word rendering has its own local deadline, independent of the
+        # remaining validation allowance and exhausted paid model phases.
+        assert kwargs['timeout_seconds']==300
         path=workspace.runs_dir/lecture/'word.docx';path.write_bytes(b'isolated fake Word');return {'candidate':str(path)}
     monkeypatch.setattr(publication,'build_word_candidate',build)
     result=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,repair_missing=True,build_word=True)

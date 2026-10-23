@@ -173,7 +173,7 @@ def _baseline(workspace, code, lecture, expected):
     return None
 
 
-def build_course_revision(workspace, lectures):
+def build_course_revision(workspace, lectures, *, timeout_seconds=None):
     from . import publication as pub
     lectures = sorted(set(lecture.upper() for lecture in lectures), key=lambda value: parse_lecture_id(value)[1])
     if not lectures or len({parse_lecture_id(value)[0] for value in lectures}) != 1:
@@ -237,7 +237,8 @@ def build_course_revision(workspace, lectures):
         formula = bool(notes.get('formula') or notes.get('formulas') or any(b.get('kind') == 'formula' for b in notes.get('blocks', [])))
         tables = [b['rows'] for b in notes.get('blocks', []) if b.get('kind') == 'table'] or ([notes['table']] if notes.get('table') else [])
         structure[lecture] = pub._docx_structure(output, lecture, visuals, formula, tables)
-    render = pub._render_and_validate(output, directory/'render')
+    render = (pub._render_and_validate(output, directory/'render', timeout_seconds=timeout_seconds)
+              if timeout_seconds is not None else pub._render_and_validate(output, directory/'render'))
     if (file_sha256(target) if target.is_file() else None) != baseline_hash or any(file_sha256(workspace.runs_dir/l/'lecture_notes.candidate.json') != digest for l, digest in sources.items()):
         raise pub.PublicationError('Word or notes changed during the cumulative build; no file was overwritten')
     validation = {'lecture_id': lectures[0], 'lecture_ids': applied, 'requested_lectures': lectures, 'mode': 'course_update', 'target': str(target),
@@ -379,7 +380,7 @@ def recover_course_revision(workspace, transaction):
     return transaction
 
 
-def update_course(workspace, lectures):
+def update_course(workspace, lectures, *, timeout_seconds=None):
     from . import publication as pub
     if isinstance(lectures, str): lectures = [lectures]
     lectures = [value.upper() for value in lectures]
@@ -400,7 +401,7 @@ def update_course(workspace, lectures):
             unchanged &= bool(payload.get('published_to_word')) and previous == pub._content_fingerprint(payload)
         if unchanged:
             return {'status': 'SKIPPED', 'lecture_id': lectures[0], 'lectures': lectures, 'output': str(target), 'reason': 'already_published'}
-    built = build_course_revision(workspace, lectures)
+    built = build_course_revision(workspace, lectures, timeout_seconds=timeout_seconds)
     if built['status'] == 'PERSONAL_CONTENT_CONFLICT': return built
     if course['publication']['mode'] == 'review':
         return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show the cumulative candidate and publish only after approval.'}

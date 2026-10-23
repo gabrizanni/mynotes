@@ -50,7 +50,7 @@ def prepared(tmp_path: Path, *, visual: bool = False, formula: str | None = None
     return workspace, tmp_path / "handouts" / "OPS7_COURSE_NOTES.docx"
 
 
-def fake_render(path: Path, output: Path) -> dict:
+def fake_render(path: Path, output: Path, **_kwargs) -> dict:
     output.mkdir(parents=True, exist_ok=True); pdf = output / f"{path.stem}.pdf"; pdf.write_bytes(b"test")
     return {"pdf": str(pdf), "pages": [{"page": 1, "characters": 1, "images": 0}], "renderer": "test"}
 

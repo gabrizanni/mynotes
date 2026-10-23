@@ -24,7 +24,58 @@ stays selectable; opening the app or changing agents never rediscovers models.
 Unknown effort defaults are explicitly marked, and Automatic
 delegates the choice to the CLI. See [dynamic catalog behavior](MODEL-CATALOG.md).
 
-## Prepare, plan, generate, inspect
+## Complete an ordinary notes request
+
+```sh
+mynotes notes OPS --lessons 1-6 --plan-only
+mynotes notes OPS --lessons 1-6
+mynotes notes OPS --resume OPS-0123456789ab --json
+mynotes batch-status OPS-0123456789ab --json
+```
+
+`notes` is the foreground path from prepared sources through standalone Word
+files, a fresh cumulative candidate and the safe course update. Keep the
+terminal/chat open. It reuses saved course settings and successful writing or
+correction responses, without starting another model call for a local Word or
+transport error. `--plan-only` is read-only and invokes no provider. Source
+preparation refreshes only the relevant missing/changed packs; this command
+does not automatically transcribe new recordings.
+
+Use `--contiguous-transcripts` for a request that must stop before the first
+missing or explicitly partial transcript. Plain TXT is usable, but its size or
+line count cannot prove complete audio coverage. The returned requested and
+delivered lesson ranges and boundary warnings remain explicit.
+
+New requests integrate slide organization into the normal writing response;
+no additional organizing/model review phase is added. Pending shared-deck
+pages remain in a course pool and do not make the current lesson incomplete.
+The next lesson reads its full transcript and the complete retained prior
+passages, settles relevant pending pages and creates its own Word. The final
+selected lesson must settle remaining pages before complete course coverage can
+be claimed. A settled main explanation is reused; other lessons can add distinct
+transcript-supported insights. Actual changes to previously settled placement
+use the existing coordinated organization-revision and targeted-correction path.
+
+The controller retains generation, delivery and publication checkpoints in
+`notes-run.json`. `batch-status` reports that request and verifies the actual
+delivery files. `COMPLETED` requires a published, intact Word; candidate-ready,
+review approval, personal conflicts and external provider blockers remain
+distinct states. A changed personal Word is reconciled against the current file
+by the normal three-way merge. Review mode never becomes automatic publication.
+
+Writing and targeted correction each retain their independent 20-minute active
+allowance across resumes. Local Word rendering has separate limits: 300 seconds
+per standalone and 900 for the cumulative/update. One local timeout/temporary IO
+retry is allowed; it cannot grant another model retry or accept invalid content.
+
+Agy's descriptive top-level `toolAction` and `toolSummary` strings are separated
+from academic content and correction operations. Raw attempts remain unchanged;
+versioned hash-bound normalization is recomputed during correction provenance
+checks. Unknown operations, nested metadata-shaped content and incorrect field
+types are not silently dropped. `recover-batch` also diagnoses and applies a
+retained successful targeted correction entirely locally.
+
+## Prepare, plan, generate, inspect candidates
 
 ```sh
 mynotes generate-batch OPS --lessons 1-6 --plan-only

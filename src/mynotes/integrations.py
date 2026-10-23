@@ -20,7 +20,7 @@ or identity choices; do not start pending-course questionnaires before completin
 the request. Offer deferred context only afterwards when useful or when the user
 asks for course setup. These defaults never bypass source validation, preservation of personal
 Word edits, course review mode or an actual authorization requirement.
-For a configured lecture use these exact commands in MYNOTES_WORKSPACE:
+For source preparation and candidate-only diagnostic work use these commands in MYNOTES_WORKSPACE:
 `mynotes prepare COURSE-LNN`, `mynotes generate COURSE-LNN`, then
 `mynotes update COURSE-LNN`. The final command creates missing output folders.
 A source pack is at runs/COURSE-LNN/source_pack.json; its sources list identifies
@@ -177,14 +177,33 @@ At an empty-chat launch, greet the user and wait. Use the task's direct command
 for course configuration, folder linking or transcription. For transcription
 the direct command performs its own relevant preflight. Before generating
 notes, run `mynotes doctor` and `mynotes status` once for the current workspace;
-repeat only after a relevant configuration change or failure. For a new lecture use the real
-pipeline: `prepare`, `generate`, then `update`. Update builds and render-validates the Word and publishes automatically with a backup unless the course publication mode is review. `build` alone remains candidate-only. Inspect actual content and source coverage before updating. Never invent a provider success,
+repeat only after a relevant configuration change or failure. For a complete notes request prepare missing relevant sources, then use `mynotes notes CODE --lessons RANGE`. The command owns recovery, generation, render-validated Word delivery and course update, with a backup unless the course publication mode is review. The separate `prepare`, `generate`, `build` and `update` commands remain available for explicit diagnostic or candidate-only tasks. `build` alone remains candidate-only. Inspect actual content and source coverage. Never invent a provider success,
 silently drop evidence, overwrite an externally edited Word, or launch `mynotes chat`
 from inside this session. Use `redo` only when the user explicitly requests a rewrite.
 Private recordings, notes, paths and credentials must remain in the private workspace.
 """
 
 NOTE_GENERATION_GUIDANCE = """
+For an ordinary complete notes request use `mynotes notes CODE --lessons RANGE`.
+For a saved batch use `mynotes notes CODE --resume BATCH_ID`; successful writing
+and correction checkpoints are reused before any new writing. Keep the original
+selected range, then continue the remaining requested lessons rather than ending
+the task at the first batch. Do not switch a complete request back to candidate-only
+commands unless diagnosing an actual returned problem. Use --contiguous-transcripts
+when the user requests complete transcripts without lesson gaps. Known partial
+coverage stops the range before that lesson; file length does not certify audio completeness.
+The same foreground request builds standalone Word files as lessons settle,
+then a fresh cumulative candidate and updates the stable handout. Review mode
+and personal-content conflicts are preserved. A process crash is not a live job:
+inspect `batch-status BATCH_ID --json`, including notes_request and actual files.
+Technical transport metadata and retained successful corrections are recovered
+locally. Never rerun successful paid writing to repair local metadata or Word.
+Ordinary bounded content doubts stay in the relevant passage and the final report;
+unknown evidence, invented citations and missing substantive content remain defects.
+Do not stop merely to ask about recoverable technical steps, slide organization,
+or a saved preference. Deliver all verified requested work and report real remaining
+external blockers precisely. Keep the terminal/chat open while the job runs.
+
 Courses created from Capture can be used for recording before their context is complete.
 After completing the operational request, or when the user asks for course setup,
 check `mynotes course pending --json` if relevant. Optional course context never
@@ -226,7 +245,7 @@ Use `mynotes study-verify PATH.docx` to render/validate the guide. Record
 --editorial-reviewed, --visual-reviewed and --word-verified only after those
 checks were actually performed; --no-render reuses an intact previous render.
 Never supply those flags as a shortcut to turn a draft into a completed guide.
-For several lessons of one course, use `mynotes generate-batch CODE --lessons 1-6
+For explicit candidate-only batch diagnostics, use `mynotes generate-batch CODE --lessons 1-6
 --plan-only` first, then `generate-batch --build-word` with the same selection. Prepare only
 missing or changed relevant source packs, reusing existing transcripts and
 extractions. Organize slides autonomously after reading the relevant recordings,
@@ -441,7 +460,10 @@ compare those artifacts directly and report any discrepancy and any missing
 visual review. Stop once the decision is supported. Do not inspect MyNotes
 implementation files, tests, plugin configuration or unrelated CLI help for
 that check unless a required command fails.
-Use prepare -> generate -> update and report each state separately.
+Use `mynotes notes CODE --lessons RANGE` for complete notes requests, or
+`mynotes notes CODE --resume BATCH_ID` to finish saved work. Report actual
+content, Word and publication states separately. The diagnostic candidate-only
+path remains prepare -> generate -> update.
 Building creates a candidate; validate evidence and visually review the Word
 document. Use automatic updates with safety backups by default; ask approval only when the course publication mode is review. Never infer a provider success from a local check,
 invent evidence, silently drop sources or overwrite an externally edited Word.

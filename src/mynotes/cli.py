@@ -378,6 +378,22 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--resume", metavar="BATCH_ID", help="resume a saved batch without repeating its lesson selection")
     batch.add_argument("--build-word", action="store_true", help="build each validated lesson as a Word candidate before advancing")
     batch.add_argument("--stop-after", type=int, help="pause for review after this lesson without changing the selected batch")
+    notes = subparsers.add_parser("notes", help="complete one explicit notes request through verified Word delivery and course update")
+    notes.add_argument("course")
+    notes.add_argument("--workspace")
+    notes.add_argument("--lessons", help="ordered lesson numbers/ranges")
+    notes.add_argument("--resume", metavar="BATCH_ID", help="reuse saved responses and finish the original selected range")
+    notes.add_argument("--provider", choices=("codex", "agy", "claude"))
+    notes.add_argument("--quality", help="saved quality or standard")
+    notes.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
+    notes.add_argument("--image-limit", type=int)
+    notes.add_argument("--selection", help="optional reviewed source-bound slide decisions")
+    notes.add_argument("--budgets", help="optional verified selected-model limits")
+    notes.add_argument("--speaker-focus", choices=("lecture", "professor"))
+    notes.add_argument("--context-lessons")
+    notes.add_argument("--contiguous-transcripts", action="store_true", help="stop before a missing or explicitly partial transcript; never skip a lesson")
+    notes.add_argument("--plan-only", action="store_true", help="read existing sources without generation, writes or publication")
+    notes.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
     batch_status = subparsers.add_parser("batch-status", help="read saved batch progress without generation or state changes")
     batch_status.add_argument("batch_id")
     batch_status.add_argument("--workspace")
@@ -861,6 +877,34 @@ def _generate_batch(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _notes(arguments: argparse.Namespace) -> int:
+    import sys
+    from .notes_run import run_notes, _transcript_boundary
+    from .batch import load_batch_manifest
+    workspace = Workspace.from_value(arguments.workspace)
+    saved = load_batch_manifest(workspace, arguments.resume) if arguments.resume else {}
+    numbers = _lesson_numbers(arguments.lessons) if arguments.lessons else [int(l.rsplit('-L', 1)[1]) for l in saved.get('lectures', [])]
+    if not numbers:
+        raise WorkflowError('Supply --lessons or --resume BATCH_ID')
+    lectures = [f'{arguments.course.upper()}-L{n:02d}' for n in numbers]
+    if not arguments.plan_only:
+        if arguments.contiguous_transcripts:
+            # The explicit no-gaps policy must not prepare a missing later
+            # lecture and accidentally initiate source work outside the prefix.
+            lectures, _ = _transcript_boundary(workspace, lectures)
+        _batch_preparation(workspace, lectures, plan_only=False)
+    def progress(stage, detail):
+        print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
+    result = run_notes(workspace, arguments.course, numbers, resume=arguments.resume,
+        provider=arguments.provider, quality=arguments.quality, instructions=arguments.instructions,
+        image_limit=arguments.image_limit, selection=_load_json(arguments.selection) if arguments.selection else None,
+        budgets=_load_json(arguments.budgets) if arguments.budgets else None, speaker_focus=arguments.speaker_focus,
+        context_lessons=[f'{arguments.course.upper()}-L{n:02d}' for n in _lesson_numbers(arguments.context_lessons)] if arguments.context_lessons else None,
+        plan_only=arguments.plan_only, contiguous_transcripts=arguments.contiguous_transcripts, progress=progress)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if arguments.plan_only or result['status'] in {'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'AWAITING_APPROVAL'} else 2
+
+
 def _natural_request(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     from .onboarding import prepare_conversation
@@ -968,6 +1012,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate(arguments)
         if arguments.command == "generate-batch":
             return _generate_batch(arguments)
+        if arguments.command == "notes":
+            return _notes(arguments)
         if arguments.command == "recover-batch":
             from .local_recovery import recover_batch
             result=recover_batch(Workspace.from_value(arguments.workspace),arguments.batch_id,apply=arguments.apply)
