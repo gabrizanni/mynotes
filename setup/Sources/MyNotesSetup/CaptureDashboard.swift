@@ -46,18 +46,67 @@ struct CaptureEvent: Codable, Identifiable {
     var title: String; var startsAt: String; var endsAt: String; var stopAt: String; var timezone: String
     var eligibility: String; var reason: String; var localChanges: Bool; var recordingEnabled: Bool
     var sourceEligibility: String; var special: Bool
+    var reasonCode: String? = nil
     var courseLabel: String { if let code = courseCode { if let number = lessonNumber { return "\(code) · Lezione \(number)" }; return code }; return "Corso da associare" }
     var start: Date { CaptureDates.read(startsAt) ?? .distantFuture }
     var end: Date { CaptureDates.read(endsAt) ?? .distantFuture }
+    // Older runtimes have human-readable reasons only. Keep them readable without
+    // making the view depend on English diagnostics or changing scheduling rules.
+    var diagnosticCode: String {
+        if let reasonCode, !reasonCode.isEmpty { return reasonCode }
+        switch reason {
+        case "Calendar event has invalid times": return "INVALID_EVENT"
+        case "Title matches multiple mappings": return "UNKNOWN_COURSE"
+        case "Calendar cancellation": return "CALENDAR_CANCELLED"
+        case "Event disappeared from calendar; verify before recording": return "EVENT_DISAPPEARED"
+        case "Recording excluded locally": return "LOCAL_EXCLUSION"
+        case "Calendar disconnected": return "CALENDAR_DISCONNECTED"
+        case "Removed from static timetable": return "EVENT_DISAPPEARED"
+        case "Overlapping lectures or duplicate course/lesson": return "SCHEDULE_CONFLICT"
+        default: return ""
+        }
+    }
     var statusLabel: String {
         switch eligibility {
         case "SCHEDULED": return "Programmata"
-        case "CONFLICT": return "Conflitto"
-        case "NEEDS_REVIEW": return "Programmazione da completare"
-        case "CANCELLED": return recordingEnabled ? "Annullata" : "Esclusa localmente"
+        case "CONFLICT": return "Conflitto da risolvere"
+        case "NEEDS_REVIEW":
+            switch diagnosticCode {
+            case "INVALID_START", "MISSING_END", "INVALID_END", "INVALID_DURATION": return "Orario da correggere"
+            case "UNKNOWN_COURSE": return "Corso da associare"
+            case "EVENT_DISAPPEARED": return "Evento da verificare"
+            default: return "Programmazione da completare"
+            }
+        case "CANCELLED":
+            if diagnosticCode == "CALENDAR_DISCONNECTED" { return "Calendario scollegato" }
+            if diagnosticCode == "CALENDAR_CANCELLED" { return "Annullata dal calendario" }
+            return diagnosticCode == "LOCAL_EXCLUSION" || !recordingEnabled ? "Esclusa localmente" : "Annullata dal calendario"
         default: return "Stato non riconosciuto"
         }
     }
+    var statusExplanation: String {
+        if eligibility == "SCHEDULED" { return "La lezione è nel programma automatico. La registrazione è confermata soltanto quando Capture acquisisce il microfono." }
+        switch diagnosticCode {
+        case "INVALID_START": return "Il calendario non fornisce un inizio valido. Correggi l’evento nel calendario e sincronizza."
+        case "MISSING_END": return "Manca l’orario di fine. Aggiungilo nel calendario e sincronizza."
+        case "INVALID_END": return "L’orario di fine non è valido. Correggilo nel calendario e sincronizza."
+        case "INVALID_DURATION": return "La durata non è valida o supera il limite di 12 ore. Correggi gli orari nel calendario e sincronizza."
+        case "ALL_DAY_EVENT": return "L’evento dura tutta la giornata e non ha un orario registrabile. Imposta inizio e fine nel calendario e sincronizza."
+        case "INVALID_RECURRENCE": return "La ricorrenza dell’evento non è valida. Correggila nel calendario e sincronizza."
+        case "INVALID_EVENT": return "I dati dell’evento non sono validi. Verifica orari e corso nel calendario, poi sincronizza."
+        case "UNKNOWN_COURSE": return "Il corso non è riconosciuto in modo univoco. Correggi l’associazione nelle impostazioni del calendario e sincronizza."
+        case "CALENDAR_CANCELLED": return "Il calendario ha annullato questa lezione. Per riattivarla, correggi l’evento nel calendario e sincronizza."
+        case "EVENT_DISAPPEARED": return "L’evento non è più presente nel calendario importato. Verifica il calendario e sincronizza prima di registrare."
+        case "LOCAL_EXCLUSION": return "Hai escluso questa registrazione in MyNotes. Premi Modifica e attiva Registra questa lezione per reinserirla."
+        case "CALENDAR_DISCONNECTED": return "Il calendario è stato scollegato. Collegalo di nuovo per importare le lezioni."
+        case "SCHEDULE_CONFLICT": return "Questa lezione si sovrappone a un’altra o ripete lo stesso corso e numero. Correggi gli orari o escludi una delle lezioni."
+        default:
+            if eligibility == "CONFLICT" { return "Gli orari o il numero della lezione sono in conflitto. Verifica le lezioni interessate prima di registrare." }
+            if eligibility == "CANCELLED" { return recordingEnabled ? "Questa lezione è annullata e non verrà registrata automaticamente." : "Questa registrazione è esclusa localmente. Puoi riattivarla con Modifica." }
+            return "Questa lezione non verrà registrata automaticamente. Verifica il calendario e sincronizza; se il problema resta, controlla i dati dell’evento."
+        }
+    }
+
 }
 struct CaptureSession: Codable {
     var id: String; var event: CaptureSessionEvent; var status: String; var outputPath: String?
@@ -70,6 +119,8 @@ struct CaptureSessionEvent: Codable {
 struct CaptureRuntime: Codable {
     var recording: Bool?; var exporting: Bool?; var microphonePermission: String?
     var title: String?; var detail: String?; var currentSession: CaptureSession?; var sessions: [CaptureSession]?
+    var scheduleIssues: [String]?
+    var blockedEvents: [String: String]?
 }
 struct CaptureResponse: Codable { var requestID: String; var status: String; var message: String? }
 struct CaptureSnapshot: Codable {
@@ -101,14 +152,94 @@ struct CaptureSnapshot: Codable {
         return !(runtime.recording == true && runtime.currentSession?.event.id == event.id)
             && !(runtime.sessions ?? []).contains { $0.event.id == event.id && $0.status == "EXPORTING" }
     }
-    var stateLabel: String {
+    func session(for event: CaptureEvent) -> CaptureSession? {
+        (runtime.sessions ?? []).filter { $0.event.id == event.id }
+            .max { (CaptureDates.read($0.actualStart) ?? .distantPast) < (CaptureDates.read($1.actualStart) ?? .distantPast) }
+    }
+    func eventStatusLabel(_ event: CaptureEvent) -> String {
+        if isRecording && runtime.currentSession?.event.id == event.id { return "Registrazione in corso" }
+        if runtime.blockedEvents?[event.id] != nil { return "Registrazione bloccata" }
+        guard event.eligibility == "SCHEDULED", let session = session(for: event) else { return event.statusLabel }
+        switch session.status {
+        case "EXPORTING": return running == true ? "Salvataggio audio" : "Salvataggio da verificare"
+        case "COMPLETED": return "Registrata"
+        case "PARTIAL": return "Registrazione parziale"
+        case "EXISTING": return "Audio già presente"
+        case "FAILED": return "Registrazione non riuscita"
+        case "MISSED": return "Registrazione mancata"
+        case "INTERRUPTED", "RECORDING": return "Registrazione interrotta o da verificare"
+        default: return event.statusLabel
+        }
+    }
+    func eventNeedsAttention(_ event: CaptureEvent) -> Bool {
+        if isRecording && runtime.currentSession?.event.id == event.id { return false }
+        return runtime.blockedEvents?[event.id] != nil || event.eligibility != "SCHEDULED" || ["FAILED", "MISSED", "INTERRUPTED", "RECORDING"].contains(session(for: event)?.status ?? "")
+    }
+    func eventStatusExplanation(_ event: CaptureEvent) -> String {
+        if isRecording && runtime.currentSession?.event.id == event.id { return "Il registratore sta acquisendo il microfono per questa lezione." }
+        if let reason = runtime.blockedEvents?[event.id] { return "Il registratore ha escluso questa lezione: " + reason + " Correggi i dati del calendario e sincronizza prima di registrare." }
+        guard event.eligibility == "SCHEDULED", let session = session(for: event) else { return event.statusExplanation }
+        switch session.status {
+        case "EXPORTING": return "Il registratore sta salvando l’audio. Attendi il completamento prima di chiudere Capture; se il processo è fermo, verifica la registrazione."
+        case "COMPLETED", "PARTIAL", "EXISTING": return "Il registratore segnala audio salvato per questa lezione. Apri Registrazioni per verificarlo e ascoltarlo."
+        case "FAILED": return "La registrazione ha segnalato un errore. Controlla il microfono e gli eventuali segmenti salvati prima di riprovare."
+        case "MISSED": return "La finestra della lezione è terminata senza una registrazione. Il Mac deve essere acceso e sveglio e Capture attivo durante la lezione."
+        case "INTERRUPTED", "RECORDING": return "L’ultimo tentativo non risulta concluso. Verifica lo stato del registratore e gli eventuali segmenti salvati prima di riprovare."
+        default: return event.statusExplanation
+        }
+    }
+    func nextPendingEvent(at now: Date) -> CaptureEvent? {
+        let savedStatuses = ["COMPLETED", "PARTIAL", "EXISTING"] + (running == true ? ["RECORDING", "EXPORTING"] : [])
+        let saved = Set((runtime.sessions ?? []).filter { savedStatuses.contains($0.status) }.map { $0.event.id })
+        return events.filter { $0.eligibility != "CANCELLED" && $0.end > now && !saved.contains($0.id) }
+            .sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }.first
+    }
+    var runtimeFailed: Bool {
+        runtime.title == "Configuration error" || runtime.title == "Recording failed" || runtime.title?.hasPrefix("Could not start ") == true
+    }
+    func stateLabel(at now: Date) -> String {
         if running == nil { return "Stato del processo non verificabile" }
-        if running == true && runtime.recording == true { return "Registrazione in corso" }
-        if running == true && runtime.exporting == true { return "Salvataggio audio" }
+        if isRecording { return "Registrazione in corso" }
+        if isExporting { return "Salvataggio audio" }
         if !enabled { return "Capture disattivato" }
         if paused { return "Programmazione in pausa" }
-        return running == true ? "Capture pronto" : "Capture non in esecuzione"
+        if running != true { return "Capture non in esecuzione" }
+        if runtime.title == "Configuration error" { return "Configurazione da correggere" }
+        if runtimeFailed { return "Registrazione non riuscita" }
+        if let next = nextPendingEvent(at: now), runtime.blockedEvents?[next.id] != nil { return "Prossima lezione bloccata" }
+        if !(runtime.scheduleIssues ?? []).isEmpty || !(runtime.blockedEvents ?? [:]).isEmpty { return "Lezioni escluse dal registratore" }
+        if ["DENIED", "RESTRICTED"].contains(runtime.microphonePermission ?? "") { return "Microfono non autorizzato" }
+        if let next = nextPendingEvent(at: now), next.eligibility != "SCHEDULED" { return "Prossima lezione bloccata" }
+        if sources.contains(where: { $0.error != nil }) { return "Calendario non aggiornato" }
+        if runtime.microphonePermission != "AUTHORIZED" { return "Microfono da verificare" }
+        return nextPendingEvent(at: now) == nil ? "Nessuna lezione da registrare" : "Calendario attivo · in attesa"
     }
+    var stateLabel: String { stateLabel(at: Date()) }
+    func stateDetail(at now: Date) -> String? {
+        if runtimeFailed && !isRecording && !isExporting && running == true {
+            return runtime.title == "Configuration error" ? "Il registratore non può leggere la configurazione. Correggi la configurazione prima della prossima lezione." : "Il registratore ha segnalato un errore. Controlla il microfono e la registrazione interessata prima di riprovare."
+        }
+        if let next = nextPendingEvent(at: now), runtime.blockedEvents?[next.id] != nil {
+            return "Prossima: \(next.title) · \(CaptureDates.label(next.startsAt, zone: next.timezone)). " + eventStatusExplanation(next)
+        }
+        if !(runtime.scheduleIssues ?? []).isEmpty || !(runtime.blockedEvents ?? [:]).isEmpty {
+            let count = max(runtime.scheduleIssues?.count ?? 0, runtime.blockedEvents?.count ?? 0)
+            return (count == 1 ? "Il registratore ha escluso una lezione con dati non validi." : "Il registratore ha escluso \(count) lezioni con dati non validi.") + " Correggi il calendario e sincronizza; le altre lezioni restano in programma."
+        }
+        if ["DENIED", "RESTRICTED"].contains(runtime.microphonePermission ?? "") && !isRecording {
+            return "Consenti l’accesso al microfono in Impostazioni di Sistema → Privacy e sicurezza → Microfono."
+        }
+        if let next = nextPendingEvent(at: now) {
+            let prefix = "Prossima: \(next.title) · \(CaptureDates.label(next.startsAt, zone: next.timezone)). "
+            if next.eligibility != "SCHEDULED" { return prefix + next.statusExplanation }
+            if !enabled || paused || running != true { return prefix + "La registrazione automatica richiede Capture attivo, il calendario ripreso e il Mac acceso e sveglio." }
+            return prefix + "In programma; la registrazione non è ancora iniziata. Il Mac deve restare acceso e sveglio."
+        }
+        if sources.contains(where: { $0.error != nil }) { return "Sincronizzazione non riuscita: verifica il collegamento. Resta disponibile l’ultimo programma importato, se presente." }
+        return nil
+    }
+    var stateDetail: String? { stateDetail(at: Date()) }
+
 }
 
 struct CaptureContext {

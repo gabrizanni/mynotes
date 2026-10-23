@@ -33,7 +33,7 @@ from .workflow import (GENERATION_CONTRACT_VERSION, QUALITY_PHASES, WorkflowErro
                        resolve_model)
 from .workspace import Workspace
 
-BATCH_CONTRACT_VERSION = 2
+BATCH_CONTRACT_VERSION = 3
 NARRATIVE_KINDS = {"paragraph", "bullets", "table", "formula", "visual"}
 
 
@@ -148,7 +148,7 @@ def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]
     return packs, snapshots, inventory
 
 
-def _prepared_context(workspace, lectures, context_lessons=None):
+def _prepared_context(workspace, lectures, context_lessons=None, selection=None):
     """Import explicitly relevant other lessons with stable local IDs/provenance."""
     context_lessons = sorted(set(context_lessons or []) - set(lectures))
     packs, snapshots, _ = _packs(workspace, lectures + context_lessons)
@@ -178,6 +178,9 @@ def _prepared_context(workspace, lectures, context_lessons=None):
             for source in foreign['sources']:
                 if source not in pack['sources']: pack['sources'].append(source)
         validate_source_pack(pack)
+    # A PDF attached to L1 may later belong in L2. Import only the selected
+    # source-bound slide, never relabel a foreign transcript as current speech.
+    carry_slides(packs, selection or {}, lectures)
     inventory = {}
     for lecture in lectures + context_lessons:
         for row in packs[lecture]['evidence']:
@@ -186,6 +189,41 @@ def _prepared_context(workspace, lectures, context_lessons=None):
                 item = inventory.setdefault(canonical, {'canonical_slide_id': canonical, 'page': row['page'], 'source_sha256': canonical.split(':')[1], 'occurrences': {}})
                 item['occurrences'][lecture] = row['id']
     return packs, {l: snapshots[l] for l in lectures}, inventory, {l: snapshots[l] for l in context_lessons}
+
+
+def carry_slides(packs, selection, lectures):
+    changed = set()
+    available = {}
+    for origin, pack in packs.items():
+        for row in pack['evidence']:
+            if row.get('canonical_slide_id'):
+                available.setdefault(row['canonical_slide_id'], (origin, row))
+    for canonical, choice in selection.items():
+        if canonical not in available or not isinstance(choice, dict):
+            continue  # _owners reports unknown or malformed selections.
+        origin, row = available[canonical]
+        targets = {choice.get('owner'), choice.get('review_before'), *choice.get('uses', {})}
+        for target in targets & set(lectures):
+            pack = packs[target]
+            if any(r.get('canonical_slide_id') == canonical for r in pack['evidence']):
+                continue
+            identifier = 'S%03d' % (1 + max((int(r['id'][1:]) for r in pack['evidence'] if r['id'].startswith('S')), default=0))
+            pack['evidence'].append({**deepcopy(row), 'id': identifier,
+                'origin_lecture_id': row.get('origin_lecture_id', origin),
+                'origin_evidence_id': row.get('origin_evidence_id', row['id'])})
+            for visual in packs[origin].get('visuals', []):
+                if visual.get('evidence_id') == row['id']:
+                    copied = {**deepcopy(visual), 'evidence_id': identifier}
+                    # Its alignment refers to the original lecture's speech.
+                    copied.pop('alignment', None)
+                    pack.setdefault('visuals', []).append(copied)
+            for source in packs[origin]['sources']:
+                if source['path'] == row.get('source_file') and source not in pack['sources']:
+                    pack['sources'].append(deepcopy(source))
+            changed.add(target)
+    for target in changed:
+        validate_source_pack(packs[target])
+    return changed
 
 
 def _published_history(workspace: Workspace, code: str, selected: list[str], inventory: dict) -> tuple[dict, list, dict, list]:
@@ -318,6 +356,8 @@ def _owners(inventory: dict, packs: dict, selection: dict | None) -> tuple[dict,
         if choice is None and len(candidates) == 1:
             # Association with one lesson is reliable; it is not proof it was taught.
             choice = {"owner": candidates[0], "status": "material"}
+            if any(row['id'].startswith('T') for row in packs[candidates[0]]['evidence']):
+                choice.update(provisional=True, reason="PDF attachment is not proof of lesson coverage; review the transcript first.")
         if choice is None:
             # Exact substantial transcript matches can establish ownership;
             # heuristic visual alignment is deliberately not authoritative.
@@ -338,7 +378,7 @@ def _owners(inventory: dict, packs: dict, selection: dict | None) -> tuple[dict,
             choice = provisional_choice(item, packs)
         validate_links(choice, candidates, packs)
         owner = choice["owner"]
-        if owner in packs:
+        if owner in packs and choice['status'] != 'deferred':
             local = item["occurrences"][owner]
             slide = next(row for row in packs[owner]["evidence"] if row["id"] == local)
             _structural_review(choice, slide, packs[owner])
@@ -470,6 +510,8 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
                instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None) -> dict:
     """Inspect existing prepared packs; write nothing and invoke no provider."""
     code = course_code.upper()
+    if selection is not None and not isinstance(selection, dict):
+        raise WorkflowError("Selection must be an object mapping canonical slide IDs")
     if not lesson_numbers or any(type(number) is not int or number < 1 or number > 99 for number in lesson_numbers):
         raise WorkflowError("Select lesson numbers from 1 to 99")
     lectures = [f"{code}-L{number:02d}" for number in sorted(set(lesson_numbers))]
@@ -478,6 +520,9 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     context_lessons = sorted(set(context_lessons or []))
     if any(parse_lecture_id(value)[0] != code for value in context_lessons):
         raise WorkflowError('Context lessons must belong to the selected course')
+    if any(isinstance(choice, dict) and choice.get('status') == 'deferred'
+           and choice.get('review_before') not in lectures for choice in (selection or {}).values()):
+        raise WorkflowError('A deferred slide must be reviewed within the selected prepared lesson range')
     configuration = workspace.configuration_store().load()
     course = deepcopy(_course(configuration, code))
     # Onboarding progress is administrative, never an input to lesson writing.
@@ -490,7 +535,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     batch_id = code + "-" + _hash(lectures)[:12]
     budget = budgets if isinstance(budgets, BatchBudget) else BatchBudget(**(budgets or {}))
     try:
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection)
     except WorkflowError:
         pending = []
         for lecture in lectures + context_lessons:
@@ -512,7 +557,10 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     history_warnings = prior_unresolved
     if prior_unresolved and not explicit:
         unresolved.extend(prior_unresolved)
+    from .lesson_organization import pending_organization
+    organization_pending = pending_organization(ownership, lectures, packs)
     payload = {"course_code": code, "lectures": lectures, "sources": snapshots, "ownership": ownership,
+               "organization_pending": organization_pending,
                "review_assets": {choice['structural_review']['source_image']['path']: choice['structural_review']['image_sha256'] for choice in ownership.values() if choice.get('structural_review', {}).get('source_image')},
                "context_sources": context_sources, "context_lessons": context_lessons,
                "context_evidence": {l: [{'id': r['id'], 'origin_lecture_id': r['origin_lecture_id'], 'origin_evidence_id': r['origin_evidence_id']} for r in p['evidence'] if r.get('origin_lecture_id')] for l, p in packs.items()},
@@ -536,6 +584,8 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
         chosen = None
         for count in range(len(remaining), 0, -1):
             group = remaining[:count]
+            if len(group) > 1 and any(row['review_before'] in group for row in organization_pending):
+                continue  # A deferred boundary must be reviewed before writing the next lesson.
             request, _ = _request(runtime, group, workspace.runs_dir / "_batches" / batch_id / fingerprint / f"group-{len(plan['groups']):03d}", prior_continuity + [{"lecture_id": lectures[index], "topics": ["x" * 100] * 30, "recap": "x" * 1600} for index in range(prior_count)])
             # Quality passes resend the prior draft. Reserve its complete
             # previous-output budget conservatively before choosing a group.
@@ -617,9 +667,11 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
         for item in pack['evidence']:
             identifier, canonical = item['id'], item.get('canonical_slide_id')
             owner = plan['ownership'].get(canonical, {}).get('owner')
-            if not owner or owner == lecture or identifier in cited:
+            deferred = plan['ownership'].get(canonical, {}).get('status') == 'deferred'
+            if not owner or (owner == lecture and not deferred) or identifier in cited:
                 continue
-            reason = f'Assigned by the reviewed batch ownership ledger to {owner}; not used in this lesson.'
+            reason = (f'Deferred pending transcript review before {plan["ownership"][canonical]["review_before"]}; not covered in this lesson.'
+                      if deferred else f'Assigned by the reviewed batch ownership ledger to {owner}; not used in this lesson.')
             if identifier not in coverage:
                 notes['evidence_coverage'].append({'evidence_id': identifier, 'disposition': 'excluded', 'reason': reason})
             if identifier in available_visuals and identifier not in visuals:
@@ -642,6 +694,8 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
             for canonical in slides:
                 owner = plan["ownership"][canonical]
                 role = block.get("coverage_role")
+                if owner['status'] == 'deferred' and role != 'reference':
+                    raise ContentRevisionError(lecture, index, block, 'Deferred slide needs placement review before substantive explanation')
                 use = owner.get('uses', {}).get(lecture)
                 if (role == 'reference' and use and use['role'] in {'introduction', 'development'}
                         and set(use['evidence_ids']) & set(block['evidence_ids'])):
@@ -667,8 +721,8 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                                    if identifier.startswith("T") and local_evidence.get(identifier, {}).get("origin_lecture_id", lecture) == lecture}
                     if role == "new_insight" and not local_turns:
                         raise WorkflowError("New insight requires this lesson's transcript evidence")
-                    if role in {"full", "supplement"} and not (use and (use["role"] == "supplement" or local_turns)):
-                        raise ContentRevisionError(lecture, index, block, "A non-owned slide needs a source-bound linked use before substantive coverage")
+                    if role in {"full", "supplement"}:
+                        raise ContentRevisionError(lecture, index, block, "A non-owned slide cannot have another full main explanation; use a reference or a distinct transcript-supported new_insight in another lesson")
                     if role not in {"reference", "new_insight", "full", "supplement"}:
                         raise WorkflowError("A linked slide requires a declared coverage role")
                     if block.get("prior_lecture_id") not in {None, owner["owner"]}:
@@ -686,7 +740,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 if digest in duplicate_texts and duplicate_texts[digest] != lecture:
                     raise ContentRevisionError(lecture, index, block, "Batch repeats an identical narrative explanation across lessons")
                 duplicate_texts[digest] = lecture
-        required = {key for key, choice in plan["ownership"].items() if choice["owner"] == lecture
+        required = {key for key, choice in plan["ownership"].items() if choice["owner"] == lecture and choice['status'] != 'deferred'
                     and not _structural_review(choice, local_evidence[plan["inventory"][key]["occurrences"][lecture]], pack)}
         required |= {key for key, choice in plan["ownership"].items()
                      if choice.get("uses", {}).get(lecture, {}).get("role") in {"introduction", "development", "supplement"}}
@@ -794,7 +848,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if plan["status"] != "PLANNED":
             _save(workspace.runs_dir / "_batches" / plan["batch_id"] / "manifest.json", plan)
             return plan
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection)
         if snapshots != plan["sources"]:
             raise WorkflowError("Sources changed while preparing the batch request; no provider was invoked")
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
@@ -802,7 +856,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         root = workspace.runs_dir / "_batches" / plan["batch_id"]
         version_dir = root / plan["fingerprint"]
         effective_sources = deepcopy(snapshots)
-        if context_sources:
+        if context_sources or any(row.get('origin_lecture_id') for p in packs.values() for row in p['evidence']):
             for lecture in plan['lectures']:
                 pack = packs[lecture]
                 path = version_dir / 'source-context' / (lecture + '.json')
@@ -834,23 +888,30 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                   if (warning:=speaker_warning(p,plan["course"].get("speaker_focus","lecture"))) is not None]
         word_candidates = {}; activity = {}; network_retries = 0
         generation_started = time.monotonic()
-        budget_path=None;spent=0.;group_started=generation_started
+        budget_path=None;phase_budget=None
         from .publication import PublicationError
         try:
             for group_index, lectures in enumerate(plan["groups"]):
-                from .batch_recovery import compatible_response, historical_active_seconds, intent, repair_coverage, revised_response
-                group_started = time.monotonic()
-                spent = historical_active_seconds(root,runtime,lectures,continuity)
-                if revision:
-                    # A new organization is not a new time allowance.
-                    for saved_budget in (root/'active-budgets').glob('*.json'):
-                        prior_budget = json.loads(saved_budget.read_text())
-                        if set(prior_budget.get('lessons', [])) & set(lectures):
-                            spent = max(spent, prior_budget.get('used_seconds', 0))
+                pending = [row for row in plan.get('organization_pending', []) if row['review_before'] in lectures]
+                if pending:
+                    waiting = {**plan, 'status': 'NEEDS_ORGANIZATION', 'completed_groups': group_index,
+                        'candidates': results, 'word_candidates': word_candidates, 'shared_attempts': shared_attempts,
+                        'activity': {}, 'problem': {'kind': 'SLIDE_PLACEMENT', 'lessons': lectures,
+                            'slides': pending, 'next_action': 'review_transcript_and_resume_selection',
+                            'saved_content_preserved': True}, 'warnings': warnings}
+                    _save(manifest, waiting); _save(root/'manifest.json', waiting)
+                    return waiting
+                from .batch_recovery import compatible_response, historical_active_seconds, intent, repair_coverage, revised_response, bound_budget_checkpoints
+                from .generation_budget import PhaseBudget, GenerationBudgetError
                 budget_path = root / "active-budgets" / (_hash(intent(runtime,lectures,continuity)) + ".json")
-                if budget_path.exists():spent=max(spent,json.loads(budget_path.read_text())["used_seconds"])
-                def budget_remaining(reserve=120):
-                    return 1200 - reserve - spent - (time.monotonic()-group_started)
+                try:
+                    phase_budget = PhaseBudget(budget_path, lectures,
+                        previous_paths=(root/'active-budgets').glob('*.json'),
+                        receipt_directories=bound_budget_checkpoints(root, runtime, lectures),
+                        legacy_used_seconds=historical_active_seconds(root,runtime,lectures,continuity),
+                        permit_local_recovery=True)
+                except GenerationBudgetError as error:
+                    raise WorkflowError(str(error)) from error
                 def save_progress(status="RUNNING",problem=None):
                     progress={**plan,"status":status,"completed_groups":len({e['group'] for e in shared_attempts}),"shared_attempts":shared_attempts,
                               "candidates":results,"word_candidates":word_candidates,"activity":activity,
@@ -919,11 +980,11 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             raise WorkflowError("Validated continuity/prior draft exceeds the selected group budget; replan smaller groups before invoking a provider")
                         _unchanged(runtime)
                         _stage_visuals(active)
-                        if budget_remaining() <= 0:raise WorkflowError("Lesson active time budget exhausted; saved content preserved")
                         from dataclasses import replace
-                        active=replace(active,timeout_seconds=budget_remaining())
-                        activity={**activity,"status":"WRITING"};save_progress()
-                        response = invoke_provider(active, provider_adapter)
+                        activity={**activity,"status":"WRITING", "phase_budget":phase_budget.snapshot()};save_progress()
+                        with phase_budget.track(phase) as remaining:
+                            active=replace(active,timeout_seconds=remaining)
+                            response = invoke_provider(active, provider_adapter)
                         # A local validation failure must not discard a paid,
                         # successful transport or trigger another paid write.
                         _save_generation_phase(returned, previous, response)
@@ -937,20 +998,21 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             response=certify_response(response,active,root)
                         validation_started=time.monotonic()
                         activity={**activity,"status":"LOCAL_VALIDATION"};save_progress()
-                        validated = _validate_group(response, runtime, lectures, maps, final_phase=phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
+                        with phase_budget.track('local_checks'):
+                            validated = _validate_group(response, runtime, lectures, maps, final_phase=phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
                     except (CoverageError, ContentRevisionError) as error:
                         cached_repair = (group_dir/'coverage-repair/repair.json').is_file()
-                        if not repair_missing or phase != "writing" or (budget_remaining() <= 0 and not cached_repair):raise
-                        if budget_remaining(reserve=0) <= 0:
-                            raise WorkflowError('Lesson active budget exhausted; saved correction retained for local review')
+                        if not repair_missing or phase != "writing" or (phase_budget.remaining('coverage_repair') <= 0 and not cached_repair):raise
                         certified_base=group_dir/'certified-base.json'
                         if certified_base.exists():
                             bound=_load_generation_phase(certified_base,previous=None)
                             if bound is None or bound.notes!=response.notes:raise WorkflowError('Certified repair base changed; no paid retry')
                         else:_save_generation_phase(certified_base,None,response)
-                        activity={**activity,"status":"TARGETED_CORRECTION"};save_progress(problem={"kind":"COVERAGE","defects":error.defects})
-                        response,repair_lineage=repair_coverage(active,response,error.defects,maps,provider_adapter,budget_remaining())
-                        validated=_validate_group(response,runtime,lectures,maps,final_phase=True,continuity=continuity)
+                        activity={**activity,"status":"TARGETED_CORRECTION", "phase_budget":phase_budget.snapshot()};save_progress(problem={"kind":"COVERAGE","defects":error.defects})
+                        with phase_budget.track('local_checks' if cached_repair else 'coverage_repair') as remaining:
+                            response,repair_lineage=repair_coverage(active,response,error.defects,maps,provider_adapter,remaining)
+                        with phase_budget.track('local_checks'):
+                            validated=_validate_group(response,runtime,lectures,maps,final_phase=True,continuity=continuity)
                         repair_lineage["base_response"]=str(certified_base)
                         repair_lineage["validated_notes_sha256"]={l:_hash(n) for l,n in validated.items()}
                         atomic_json_write(group_dir/"coverage-repair/lineage.json",repair_lineage)
@@ -977,7 +1039,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                "batch_id": plan["batch_id"], "batch_fingerprint": plan["fingerprint"], "batch_group": group_index,
                                "request_options": {"instructions": instructions, "image_limit": image_limit}, "effective_style": runtime["style"],
                                "organization_revision": revision,
-                               "related_lessons": plan.get('related_lessons', []),
+                               "related_lessons": sorted(set(plan.get('related_lessons', [])) |
+                                   set((revision or {}).get('affected_lessons', []))),
                                "source_revalidation": origin if origin and origin.get("kind") == "organization_revalidation" else None,
                                "slide_links": {key: choice for key, choice in plan["ownership"].items() if lecture in choice.get("uses", {})},
                                "slide_ownership": {key: choice for key, choice in plan["ownership"].items() if choice["owner"] == lecture},
@@ -1013,7 +1076,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     shared_attempts.append({"phase":"coverage_repair","group":group_index,"lessons":lectures,"attempt_path":repair_lineage.get("repair_attempt"),"reported_usage":repair_lineage.get("repair_usage",{}),"reused":group_reused})
                 for path in group_dir.glob("writing-parts/*/state.json"):
                     network_retries+=json.loads(path.read_text()).get("network_retries",0)
-                if build_word:
+                if build_word and not any(choice['status'] == 'deferred' and choice['owner'] in lectures for choice in plan['ownership'].values()):
                     from .publication import build_word_candidate, word_renderer_hash
                     for lecture in lectures:
                         cached_word=prior_word_candidates.get(lecture)
@@ -1022,17 +1085,16 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                 and Path(cached_word['path']).is_file() and file_sha256(Path(cached_word['path']))==cached_word['sha256']):
                             word_candidates[lecture]=cached_word;continue
                         activity={**activity,"status":"BUILDING_WORD"};save_progress()
-                        if budget_remaining(reserve=0)<=0:raise WorkflowError("Word deferred: lesson active budget exhausted")
                         from .execution import prevent_idle_sleep
-                        with prevent_idle_sleep():
+                        with prevent_idle_sleep(), phase_budget.track('local_checks') as remaining:
                             word_started=time.monotonic()
-                            built=build_word_candidate(workspace,lecture,timeout_seconds=budget_remaining(reserve=0))
+                            built=build_word_candidate(workspace,lecture,timeout_seconds=remaining)
                             phase_metrics.append({"phase":"BUILDING_WORD","lecture_id":lecture,"elapsed_seconds":time.monotonic()-word_started})
                             atomic_json_write(group_dir/"phase-metrics.json",{"lessons":lectures,"phases":phase_metrics})
                         path=Path(built['candidate']);word_candidates[lecture]={"path":str(path),"sha256":file_sha256(path),
                             "source_candidate_hash":file_sha256(workspace.runs_dir/lecture/'lecture_notes.candidate.json'),
                             "renderer_hash":word_renderer_hash()}
-                atomic_json_write(budget_path,{"lessons":lectures,"used_seconds":spent+time.monotonic()-group_started})
+                phase_budget.save()
                 save_progress()
                 if pause_after and pause_after in lectures:
                     activity={};save_progress(status='PAUSED_REVIEW')
@@ -1044,7 +1106,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
             _save(manifest, ready)
             _save(root / "manifest.json", ready)
             return ready
-        except (ProviderError, WorkflowError, PublicationError, KeyboardInterrupt, KeyError, ValueError, OSError, TypeError) as error:
+        except (ProviderError, WorkflowError, PublicationError, GenerationBudgetError, KeyboardInterrupt, KeyError, ValueError, OSError, TypeError) as error:
             failure_status=('PAUSED_QUOTA' if isinstance(error,ProviderQuotaError) else
                             'PAUSED_AUTH' if isinstance(error,ProviderAuthenticationError) else
                             'PAUSED_SLEEP' if isinstance(error,ProviderSuspendedError) else
@@ -1059,7 +1121,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                  "phase":activity.get("status","LOCAL_VALIDATION"),
                                  "next_action":"build_word_without_generation" if isinstance(error,PublicationError) else "review_saved_content",
                                  "saved_content_preserved":True},"warnings":warnings}
-            if budget_path is not None:atomic_json_write(budget_path,{"lessons":lectures,"used_seconds":spent+time.monotonic()-group_started})
+            if phase_budget is not None:phase_budget.save()
             _save(manifest, failed)
             _save(root / "manifest.json", failed)
             if not isinstance(error,(ProviderError,WorkflowError,PublicationError,KeyboardInterrupt)):

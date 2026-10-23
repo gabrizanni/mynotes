@@ -139,6 +139,19 @@ def test_invalid_edit_leaves_schedule_and_overrides_untouched(store,patch):
     assert not (store.directory/'overrides.json').exists()
 
 
+def test_edit_validation_uses_authoritative_association_for_historical_source_code(store):
+    recording_id = 'c' * 32
+    old = capture.normalize_event({**event(), 'recordingID': recording_id, 'title': 'MATH 1'}, {'MATH'}, 'teaching')
+    old['courseCode'] = 'OBSOLETE'
+    atomic_json_write(store.directory / 'associations.json', {'schemaVersion': 1, 'recordings': {
+        recording_id: {'courseCode': 'MATH', 'lessonNumber': 1, 'associationState': 'resolved'}}})
+    store.save_schedule([old], store.config())
+    dashboard.edit_lesson(store, old['id'], {'title': 'Local title'})
+    effective = store.schedule()['events'][0]
+    assert effective['title'] == 'Local title' and effective['courseCode'] == 'MATH'
+    assert store.source_events()[0]['courseCode'] == 'OBSOLETE'
+
+
 def test_edit_rechecks_overlap_and_can_resolve_it(store):
     capture.import_schedule(store,[event(),event(2,'2026-10-12T12:00:00Z','2026-10-12T13:00:00Z')])
     dashboard.edit_lesson(store,'static:MATH-L02',{'startsAt':'2026-10-12T10:30:00Z','endsAt':'2026-10-12T11:30:00Z'})

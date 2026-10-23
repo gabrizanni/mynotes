@@ -1076,6 +1076,8 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
         pack = json.loads(Path(candidate["source_pack"]).read_text(encoding="utf-8"))
     except (OSError, KeyError, json.JSONDecodeError) as error:
         raise PublicationError(f"Cannot load candidate/source pack for {lecture_id}: {error}") from error
+    if any(choice.get('status') == 'deferred' for choice in candidate.get('slide_ownership', {}).values()):
+        raise PublicationError('Slide placement is deferred; review the next transcript and resume the batch before building or updating Word')
     if candidate.get("published_to_word") is True:
         pass
     if candidate.get("source_pack_hash") != file_sha256(Path(candidate["source_pack"])):

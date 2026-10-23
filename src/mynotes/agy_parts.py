@@ -31,11 +31,12 @@ from .providers import (ProviderError, ProviderCancelledError, ProviderQuotaErro
 from .utils import atomic_json_write, file_sha256
 from .provider_limits import validate_command_size
 from .execution import AttemptStart, SleepMonitor, prevent_idle_sleep
+from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout
 
 PROTOCOL = 1
 BLOCKS_PER_PART = 12
 MAX_PARTS = 16
-TOTAL_SECONDS = 1080  # reserve at least two minutes for local validation and Word
+TOTAL_SECONDS = MODEL_PHASE_SECONDS  # local checks have a separate allowance
 FIRST_TURN_SECONDS = 300
 NEXT_TURN_SECONDS = 300
 
@@ -181,7 +182,11 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                     error.suspended_seconds = slept
                     raise error
                 if now-started > total_seconds or now-turn_started > turn_limit:
-                    raise subprocess.TimeoutExpired(command, min(total_seconds, turn_limit))
+                    total_expired = now-started > total_seconds
+                    error = subprocess.TimeoutExpired(command, total_seconds if total_expired else turn_limit)
+                    error.budget_kind = "phase" if total_expired else "useful-progress"
+                    error.elapsed_seconds = now-started if total_expired else now-turn_started
+                    raise error
                 ready = selector.select(timeout=min(.25, max(.01,total_seconds-(now-started))))
                 if finished and process.poll() is not None and not ready:
                     # Agy descendants may retain pipe handles after its parent
@@ -277,7 +282,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         if parts and parts[-1]['complete']: raise ProviderError('Complete portions lack a clean final process exit; review retained transport')
     used_seconds=state.get('used_seconds',0)
     if type(used_seconds) not in (int,float) or not math.isfinite(used_seconds) or used_seconds<0:raise ProviderError('Writing checkpoint has an invalid time budget')
-    remaining=min(TOTAL_SECONDS-used_seconds, request.timeout_seconds or TOTAL_SECONDS)
+    remaining=min(TOTAL_SECONDS-used_seconds, invocation_timeout(request.timeout_seconds))
     if remaining <= 1: raise ProviderError('The lesson writing budget is exhausted; retained portions require review')
     _stage_agy_writer(directory)
     context = _stage_agy_context(request,directory)
@@ -300,7 +305,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
     if parts:
         initial=protocol+f'\nResume part_index {len(parts)} in this same conversation. Previously saved portions are complete and must not be repeated. Continue at: '+parts[-1]['next_topic']
     command=[provider_executable('agy'),'--agent','mynotes-note-writer','--disable-slash-commands','--mode','plan',
-             '--input-format','stream-json','--output-format','stream-json','--print-timeout','19m',
+             '--input-format','stream-json','--output-format','stream-json','--print-timeout',CLI_PHASE_TIMEOUT,
              *provider_override_flags(request.requested),'--json-schema',json.dumps(_agy_schema(schema),separators=(',',':')),'--add-dir',str(directory)]
     if state.get('conversation_id'): command += ['--conversation',state['conversation_id']]
     env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'};validate_command_size(command,env)
@@ -367,7 +372,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
             except (ProviderError, subprocess.TimeoutExpired) as error:
                 # A provider network ERROR may arrive during timeout cleanup.
                 # Preserve its cause instead of hiding it behind the watchdog.
-                classified = (ProviderTimeoutError('Writing exceeded its active or useful-progress budget; completed portions retained')
+                classified = (ProviderTimeoutError(f"Writing {getattr(error, 'budget_kind', 'execution')} deadline exceeded after {getattr(error, 'elapsed_seconds', error.timeout):.1f}s (limit {error.timeout:.1f}s); completed portions retained")
                               if isinstance(error,subprocess.TimeoutExpired) else error)
                 output = getattr(error, 'output', b'')
                 if isinstance(output, bytes): output = output.decode(errors='replace')
@@ -379,7 +384,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
                         if isinstance(cause, (ProviderTransportError, ProviderQuotaError, ProviderAuthenticationError)):
                             classified = cause
                 elapsed = time.monotonic() - started
-                remaining = min(TOTAL_SECONDS-used_seconds-elapsed, (request.timeout_seconds or TOTAL_SECONDS)-elapsed)
+                remaining = min(TOTAL_SECONDS-used_seconds-elapsed, (invocation_timeout(request.timeout_seconds))-elapsed)
                 suspended = getattr(error, 'suspended_seconds', 0.)
                 save_state(status='PAUSED_SLEEP' if suspended else 'FAILED',
                            suspended_seconds=state.get('suspended_seconds', 0.) + suspended,

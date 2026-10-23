@@ -58,7 +58,7 @@ def test_writer_has_no_shell_and_has_bounded_runtime(tmp_path, monkeypatch):
     def run(command, **kw):
         assert command[command.index("--agent")+1] == "mynotes-note-writer"
         assert "--disable-slash-commands" in command
-        assert command[command.index("--print-timeout")+1] == "19m"
+        assert command[command.index("--print-timeout")+1] == "21m"
         assert kw["timeout"] == 1200 and kw["env"]["MYNOTES_GENERATION_WORKER"] == "1"
         agent = (tmp_path / ".agents/agents/mynotes-note-writer.md").read_text()
         assert "  - view_file" in agent and "  - run_command" not in agent

@@ -29,6 +29,7 @@ def apply_local_changes(events: list[dict], overrides: dict, config: dict) -> li
         if change.get("recordingEnabled") is False:
             event["eligibility"] = "CANCELLED"
             event["reason"] = "Recording excluded locally"
+            event["reasonCode"] = "LOCAL_EXCLUSION"
     return capture.validate_windows(effective, config)
 
 
@@ -51,7 +52,8 @@ def _missing():
 
 def _save_changes(store, changes: dict) -> None:
     events, config = store.source_events(), store.config()
-    apply_local_changes(events, changes, config)  # Validate before any mutation.
+    from .capture_associations import project_events
+    apply_local_changes(project_events(store, events), changes, config)  # Validate the same effective associations that will be saved.
     path = store.directory / "overrides.json"
     store.save(path, changes)
     store.save_schedule(events, config, overrides=changes)
@@ -120,6 +122,7 @@ def unsubscribe(store, source_id: str) -> dict:
             if event["sourceID"] == source_id:
                 _assert_editable(store, event["id"])
                 event["eligibility"], event["reason"] = "CANCELLED", "Calendar disconnected"
+                event["reasonCode"] = "CALENDAR_DISCONNECTED"
         config["sources"] = [s for s in config["sources"] if s["sourceID"] != source_id]
         store.save_schedule(events, config)
         store.save_config(config)

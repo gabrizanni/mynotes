@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,7 +22,7 @@ def main() -> None:
                         "-module-cache-path", str(temporary / "module-cache"),
                         *(str(path) for path in sources), str(ROOT / "capture/Tests/Regression.swift"),
                         "-o", str(executable)], check=True)
-        subprocess.run([str(executable)], check=True, env=dict(os.environ, MYNOTES_CAPTURE_HOME=str(temporary / "runtime")))
+        subprocess.run([str(executable), *sys.argv[1:]], check=True, env=dict(os.environ, MYNOTES_CAPTURE_HOME=str(temporary / "runtime")))
 
 
 if __name__ == "__main__":

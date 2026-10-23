@@ -49,6 +49,10 @@ final class CaptureEngine: NSObject {
     private var sleeping = false
     private var exporting = Set<String>()
     private var attempted = Set<String>()
+    private var permissionBlocked = Set<String>()
+    private var automaticRecoveryAttempted = Set<String>()
+    private var scheduleIssues: [String] = []
+    private var blockedEvents: [String: String] = [:]
     private var warned = Set<String>()
     private var processing = Set<String>()
     private var syncProcess: Process?
@@ -63,7 +67,7 @@ final class CaptureEngine: NSObject {
     var isRecording: Bool { recorder?.isRecording == true }
     var outputDirectory: URL { URL(fileURLWithPath: config.outputDirectory) }
     var paused: Bool { config.paused }
-    var nextLecture: Lecture? { lectures.first { $0.eligibility == "SCHEDULED" && $0.stopAt > Date() && !outputExists($0) } }
+    var nextLecture: Lecture? { lectures.first { $0.eligibility == "SCHEDULED" && $0.endsAt > Date() && !outputExists($0) } }
 
     init(workspace: URL, authorization: @escaping () -> Bool = { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized }) throws {
         self.workspace = workspace.standardizedFileURL
@@ -89,7 +93,7 @@ final class CaptureEngine: NSObject {
             sessions[index].status = "INTERRUPTED"
             sessions[index].partial = true
             sessions[index].reason = "App restarted during recording; preserved segments"
-            sessions[index].actualStop = Date()
+            if sessions[index].actualStop == nil { sessions[index].actualStop = Date() }
             try saveSession(sessions[index])
         }
     }
@@ -120,22 +124,26 @@ final class CaptureEngine: NSObject {
         let next = try CaptureJSON.load(CaptureConfiguration.self, from: configurationURL)
         let schedule = try CaptureJSON.load(Schedule.self, from: scheduleURL)
         guard next.schemaVersion == 1, schedule.schemaVersion == 1 else { throw CaptureFailure.message("Unsupported Capture schema") }
-        for event in schedule.events {
-            guard event.validTarget(next.courseCodes),
-                  event.startsAt < event.endsAt, event.recordAt <= event.startsAt, event.stopAt >= event.endsAt,
-                  event.stopAt.timeIntervalSince(event.recordAt) <= 14 * 3600 else {
-                throw CaptureFailure.message("Invalid recording event")
-            }
-        }
+        let checked = schedule.recordingEvents(next.courseCodes)
         config = next
+        scheduleIssues = checked.issues
+        blockedEvents = [:]
+        let scheduledIDs = Set(schedule.events.filter { $0.eligibility == "SCHEDULED" }.map(\.id))
+        for event in checked.events where event.eligibility == "NEEDS_REVIEW" && scheduledIDs.contains(event.id) {
+            blockedEvents[event.id] = event.reason
+        }
         // The current session retains its own immutable event snapshot.
-        lectures = schedule.events.sorted { $0.recordAt < $1.recordAt }
+        lectures = checked.events
     }
 
     func evaluate(now: Date) {
         guard !sleeping else { return }
         do { try reload(); reloadError = nil }
         catch { reloadError = error.localizedDescription; announce("Configuration error", error.localizedDescription, notice: true) }
+        if !permissionBlocked.isEmpty && authorization() {
+            attempted.subtract(permissionBlocked)
+            permissionBlocked.removeAll()
+        }
         handleRequests(now: now)
         if let session = current {
             if !isRecording { failRecording(CaptureFailure.message("Microphone recorder stopped")) }
@@ -148,6 +156,9 @@ final class CaptureEngine: NSObject {
                 catch {
                     if !error.localizedDescription.contains("Capture is already running") {
                         attempted.insert(event.id)
+                        if let failure = error as? CaptureFailure, case .microphonePermission = failure {
+                            permissionBlocked.insert(event.id)
+                        }
                         if !sessions.contains(where: { $0.event.id == event.id && $0.status == "FAILED" }) {
                             let failure = Session(id: UUID().uuidString, event: event, directory: "", actualStart: now, actualStop: now,
                                                   status: "FAILED", partial: true, reason: error.localizedDescription, segments: [], isTest: false)
@@ -167,6 +178,7 @@ final class CaptureEngine: NSObject {
             else if let latest = sessions.max(by: { $0.actualStart < $1.actualStart }), latest.status == "FAILED" {
                 announce("Recording failed", "\(latest.event.lectureID): \(latest.reason)")
             }
+            else if !scheduleIssues.isEmpty { announce("Calendar needs attention", scheduleIssues.joined(separator: "\n")) }
             else if let next = nextLecture {
                 if next.startsAt.timeIntervalSince(now) <= 300 && warned.insert(next.id).inserted {
                     onNotice?("Next: \(next.lectureID)", display(next.startsAt, timezone: next.timezone))
@@ -174,6 +186,7 @@ final class CaptureEngine: NSObject {
                 announce("Next: \(next.lectureID)", display(next.startsAt, timezone: next.timezone))
             } else { announce("No pending lecture", "Configure the timetable through your MyNotes agent") }
         }
+        recoverAutomatic(now: now)
         if now >= nextSyncCheck { syncCalendar() }
         persistRuntime()
         // Calendar deadlines use wall time and are reconciled on every wake.
@@ -200,16 +213,16 @@ final class CaptureEngine: NSObject {
         guard isTest || (event.validTarget(config.courseCodes) && event.eligibility == "SCHEDULED") else {
             throw CaptureFailure.message("Event is not eligible for recording")
         }
-        guard event.stopAt > now && (allowEarly || event.recordAt <= now) else {
+        guard event.endsAt > now && (allowEarly || event.recordAt <= now) else {
             throw CaptureFailure.message("Recording window is unavailable")
         }
-        guard authorization() else { throw CaptureFailure.message("Allow microphone access from the Capture menu") }
+        guard authorization() else { throw CaptureFailure.microphonePermission }
         guard isTest || !outputExists(event) else { throw CaptureFailure.message("Existing recording retained") }
         guard !isExporting(event) else { throw CaptureFailure.message("This lecture is being exported") }
         if updateLease == nil { updateLease = try InstanceLock(url: updateLockURL) }
         let interrupted = sessions.filter { $0.event.id == event.id && $0.status == "INTERRUPTED" && !$0.isTest }
         var session: Session
-        if interrupted.count == 1 && event.isCurrent(now) && !isTest {
+        if interrupted.count == 1 && interrupted[0].event.canResume(with: event) && event.isCurrent(now) && !isTest {
             session = interrupted[0]
             session.actualStop = nil
             session.partial = true
@@ -220,7 +233,11 @@ final class CaptureEngine: NSObject {
             let stage = URL(fileURLWithPath: config.stageDirectory).appendingPathComponent(isTest ? "tests/\(id)" : id)
             session = Session(id: id, event: event, directory: stage.path, actualStart: now,
                               status: "RECORDING", partial: now > event.startsAt.addingTimeInterval(5),
-                              reason: "", segments: [], isTest: isTest)
+                              reason: now > event.startsAt.addingTimeInterval(5) ? "Started late; beginning of the lesson was not recorded" : "", segments: [], isTest: isTest)
+            if !interrupted.isEmpty {
+                session.partial = true
+                session.reason = "New attempt after timetable change or ambiguous interruption; previous staged audio preserved"
+            }
         }
         session.requestID = requestID
         if session.destinationDirectory == nil { session.destinationDirectory = config.outputDirectory }
@@ -285,10 +302,10 @@ final class CaptureEngine: NSObject {
         export(session, requestID: requestID)
     }
 
-    private func export(_ input: Session, requestID: String? = nil, completion: ((Bool) -> Void)? = nil) {
-        guard !exporting.contains(input.id) else { completion?(false); return }
+    @discardableResult private func export(_ input: Session, requestID: String? = nil, completion: ((Bool) -> Void)? = nil) -> Bool {
+        guard !exporting.contains(input.id) else { completion?(false); return false }
         do { if updateLease == nil { updateLease = try InstanceLock(url: updateLockURL) } }
-        catch { completion?(false); return }
+        catch { completion?(false); return false }
         exporting.insert(input.id)
         if current == nil { announce("Saving audio", "Keep Capture open until export finishes") }
         persistRuntime()
@@ -318,16 +335,18 @@ final class CaptureEngine: NSObject {
             self.persistRuntime()
             self.evaluate(now: Date())
         }
+        return true
     }
 
-    func recoverAutomatic() {
-        let eligible = RecoveryPolicy.candidates(sessions, now: Date()).filter {
-            $0.event.stopAt <= Date() && !outputExists($0.event) && !exporting.contains($0.id)
+    func recoverAutomatic(now: Date = Date()) {
+        let eligible = RecoveryPolicy.candidates(sessions, now: now).filter {
+            $0.event.stopAt <= now && !outputExists($0.event) && !exporting.contains($0.id)
+                && current?.event.id != $0.event.id
         }
-        for var session in RecoveryPolicy.unambiguous(eligible) {
+        for var session in RecoveryPolicy.unambiguous(eligible) where !automaticRecoveryAttempted.contains(session.id) {
             session.partial = true
             session.reason = "Recovered after interruption; verify coverage"
-            export(session)
+            if export(session) { automaticRecoveryAttempted.insert(session.id) }
         }
     }
 
@@ -465,7 +484,7 @@ final class CaptureEngine: NSObject {
     }
 
     private func reconcilePast(now: Date) {
-        for event in lectures where event.stopAt <= now && event.eligibility == "SCHEDULED" {
+        for event in lectures where event.endsAt <= now && event.eligibility == "SCHEDULED" {
             guard !sessions.contains(where: { $0.event.id == event.id }) else { continue }
             let exists = outputExists(event)
             let session = Session(id: UUID().uuidString, event: event, directory: "", actualStart: now, actualStop: now,
@@ -507,7 +526,9 @@ final class CaptureEngine: NSObject {
         do {
             try CaptureJSON.save(RuntimeStatus(pid: getpid(), updatedAt: Date(), recording: isRecording, exporting: !exporting.isEmpty,
                                               microphonePermission: microphonePermission(), title: title, detail: detail,
-                                              currentSession: current, sessions: sessions.sorted { $0.actualStart > $1.actualStart }),
+                                              currentSession: current, sessions: sessions.sorted { $0.actualStart > $1.actualStart },
+                                              scheduleIssues: scheduleIssues.isEmpty ? nil : scheduleIssues,
+                                              blockedEvents: blockedEvents.isEmpty ? nil : blockedEvents),
                                  to: directory.appendingPathComponent("runtime.json"))
         } catch { fputs("Capture state write failed: \(error.localizedDescription)\n", stderr) }
     }

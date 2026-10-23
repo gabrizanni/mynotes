@@ -32,7 +32,7 @@ final class SegmentedRecorder: NSObject, AVAudioRecorderDelegate {
         }
     }
     private func startSegment() throws {
-        let url = directory.appendingPathComponent(String(format: "segment-%03d.m4a", segments.count + 1))
+        let url = try Self.reserveSegment(in: directory, startingAt: segments.count + 1)
         let next = try AVAudioRecorder(url: url, settings: [
             AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44_100,
             AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 128_000,
@@ -45,6 +45,18 @@ final class SegmentedRecorder: NSObject, AVAudioRecorderDelegate {
         recorder = next
         segments.append(url)
         onSegment?(segments)
+    }
+    static func reserveSegment(in directory: URL, startingAt number: Int) throws -> URL {
+        var index = max(1, number)
+        while true {
+            let url = directory.appendingPathComponent(String(format: "segment-%03d.m4a", index))
+            let descriptor = open(url.path, O_CREAT | O_EXCL | O_WRONLY, 0o600)
+            if descriptor >= 0 { close(descriptor); return url }
+            guard errno == EEXIST else {
+                throw CaptureFailure.message("Cannot reserve audio segment: \(String(cString: strerror(errno)))")
+            }
+            index += 1
+        }
     }
     func stop() -> [URL] {
         timer?.invalidate(); timer = nil

@@ -72,13 +72,57 @@ struct Lecture: Codable, Identifiable, Equatable {
         guard let code = courseCode, let number = lessonNumber else { return false }
         return courses.contains(code) && (1...999).contains(number)
     }
-    func isCurrent(_ now: Date) -> Bool { recordAt <= now && now < stopAt && eligibility == "SCHEDULED" }
+    // Post-roll extends an existing recording; it must not start a new one.
+    func isCurrent(_ now: Date) -> Bool { recordAt <= now && now < endsAt && eligibility == "SCHEDULED" }
+
+    func validWindow(_ courses: [String]) -> Bool {
+        validTarget(courses) && startsAt < endsAt && recordAt <= startsAt
+            && endsAt.timeIntervalSince(startsAt) <= 12 * 3600
+            && stopAt >= endsAt && stopAt.timeIntervalSince(recordAt) <= 14 * 3600
+            && TimeZone(identifier: timezone) != nil
+    }
+    func canResume(with updated: Lecture) -> Bool {
+        id == updated.id && lectureID == updated.lectureID
+            && courseCode == updated.courseCode && lessonNumber == updated.lessonNumber
+            && recordAt == updated.recordAt && startsAt == updated.startsAt
+            && endsAt == updated.endsAt && stopAt == updated.stopAt && filename == updated.filename
+    }
 }
 
 struct Schedule: Codable {
     var schemaVersion: Int
     var revision: Int
     var events: [Lecture]
+
+    func recordingEvents(_ courses: [String]) -> (events: [Lecture], issues: [String]) {
+        let scheduled = events.filter { $0.eligibility == "SCHEDULED" && $0.validWindow(courses) }
+        let duplicateIDs = Set(Dictionary(grouping: events.filter { $0.eligibility == "SCHEDULED" }, by: \.id).filter { $0.value.count > 1 }.keys)
+        let duplicateFiles = Set(Dictionary(grouping: scheduled, by: \.filename).filter { $0.value.count > 1 }.keys)
+        var overlappingIDs = Set<String>()
+        for (index, first) in scheduled.enumerated() {
+            for second in scheduled.dropFirst(index + 1) where first.startsAt < second.endsAt && second.startsAt < first.endsAt {
+                overlappingIDs.formUnion([first.id, second.id])
+            }
+        }
+        var issues: [String] = []
+        let checked = events.map { event -> Lecture in
+            // Cancelled/review entries are informational and cannot stop unrelated lessons.
+            guard event.eligibility == "SCHEDULED" else { return event }
+            let problem: String?
+            if !event.validWindow(courses) { problem = "Dati della lezione non validi: correggi corso o orari." }
+            else if duplicateIDs.contains(event.id) { problem = "Identità della lezione duplicata nel calendario." }
+            else if duplicateFiles.contains(event.filename) { problem = "Due lezioni usano lo stesso nome audio: correggi titolo o numero." }
+            else if overlappingIDs.contains(event.id) { problem = "Gli orari di due lezioni si sovrappongono: scegli quale registrare." }
+            else { problem = nil }
+            guard let problem else { return event }
+            var blocked = event
+            blocked.eligibility = "NEEDS_REVIEW"
+            blocked.reason = problem
+            issues.append("\(event.title): \(problem)")
+            return blocked
+        }
+        return (checked.sorted { $0.recordAt < $1.recordAt }, issues)
+    }
 }
 
 struct Session: Codable {
@@ -135,11 +179,19 @@ struct RuntimeStatus: Codable {
     var currentSession: Session?
     var sessions: [Session]
     var capabilities: [String]? = ["standalone-recordings-v1", "calendar-recordings-v1"]
+    var scheduleIssues: [String]? = nil
+    var blockedEvents: [String: String]? = nil
 }
 
 enum CaptureFailure: LocalizedError {
     case message(String)
-    var errorDescription: String? { if case let .message(value) = self { return value }; return "Capture failed" }
+    case microphonePermission
+    var errorDescription: String? {
+        switch self {
+        case let .message(value): return value
+        case .microphonePermission: return "Allow microphone access from the Capture menu"
+        }
+    }
 }
 
 enum CaptureJSON {

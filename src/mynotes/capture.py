@@ -164,7 +164,7 @@ def normalize_event(raw: dict, courses: set[str], source_id: str = "static") -> 
     if standalone:
         result["recordingID"] = raw["recordingID"]
         result["title"] = raw["title"].strip()
-    for key in ("associationState", "candidateCourses", "calendarUID", "originalOccurrence"):
+    for key in ("associationState", "candidateCourses", "calendarUID", "originalOccurrence", "reasonCode"):
         if key in raw:
             result[key] = copy.deepcopy(raw[key])
     if raw.get("transcriptionLanguage") is not None:
@@ -184,6 +184,7 @@ def validate_windows(events: list[dict], config: dict) -> list[dict]:
         seen.add(event["id"])
         if event["eligibility"] == "CONFLICT":
             event["eligibility"], event["reason"] = "SCHEDULED", ""
+            event.pop("reasonCode", None)
         event["recordAt"] = iso(timestamp(event["startsAt"]) - timedelta(seconds=config["recordBeforeSeconds"]))
         event["stopAt"] = iso(timestamp(event["endsAt"]) + timedelta(seconds=config["recordAfterSeconds"]))
     ordered = sorted(result, key=lambda e: (e["startsAt"], e["id"]))
@@ -196,6 +197,7 @@ def validate_windows(events: list[dict], config: dict) -> list[dict]:
     for event in eligible:
         if event["id"] in conflicts:
             event["eligibility"], event["reason"] = "CONFLICT", "Overlapping lectures or duplicate course/lesson"
+            event["reasonCode"] = "SCHEDULE_CONFLICT"
     playable = [e for e in eligible if e["eligibility"] == "SCHEDULED"]
     for first, second in zip(playable, playable[1:]):
         # Keep real lesson time intact. Margins alone must not create a conflict.
@@ -357,6 +359,12 @@ def recognition_key(details: list[dict]) -> str:
         for c in details], sort_keys=True).encode()).hexdigest()
 
 
+def projection_key(source: dict, details: list[dict]) -> str:
+    """HTTP freshness does not imply that local interpretation is unchanged."""
+    policy = {key: source.get(key) for key in ("mappings", "importMode", "timezone", "periodStart", "periodEnd")}
+    return hashlib.sha256(json.dumps({"version": 2, "recognition": recognition_key(details), "policy": policy}, sort_keys=True).encode()).hexdigest()
+
+
 def project_calendar(data: bytes, source: dict, old: list[dict], details: list[dict]) -> tuple[list[dict], dict]:
     capture_links.validate_body(data, source["url"])
     summary = {}
@@ -398,7 +406,8 @@ def connect(store: CaptureStore, raw: dict) -> dict:
                     raise capture_links.CalendarLinkError("RECORDER_INCOMPATIBLE") from error
             details = store.workspace.configuration_store().load()["courses"]
             old = store.source_events()
-            imported, summary = project_calendar(data, source, old, details)
+            from .capture_associations import project_events
+            imported, summary = project_calendar(data, source, project_events(store, old), details)
             events = validate_windows([e for e in old if e["sourceID"] != source["sourceID"]] + imported, config)
             now = datetime.now(UTC)
             metadata["sources"][source["sourceID"]] = success_metadata(source, headers, details, summary, now, config)
@@ -418,7 +427,7 @@ def connect(store: CaptureStore, raw: dict) -> dict:
 
 def success_metadata(source, headers, details, summary, now, config):
     return {**{k: headers[k] for k in ("etag", "lastModified") if k in headers}, "feedURLHash": hashlib.sha256(source["url"].encode()).hexdigest(),
-            "recognitionKey": recognition_key(details), "summary": summary,
+            "recognitionKey": recognition_key(details), "projectionKey": projection_key(source, details), "summary": summary,
             "lastSuccess": iso(now), "lastAttempt": iso(now), "error": None,
             "nextAttempt": iso(now + timedelta(hours=config["refreshHours"]))}
 
@@ -535,14 +544,18 @@ def sync(store: CaptureStore, *, if_due: bool = False, now: datetime | None = No
             raise CaptureError("Calendar source not found")
         path = store.directory / "sync.json"
         metadata = read_json(path, {"sources": {}})
-        courses = {c["code"] for c in store.workspace.configuration_store().load()["courses"]}
+        course_details = store.workspace.configuration_store().load()["courses"]
+        courses = {c["code"] for c in course_details}
         reports = []
         for source in config["sources"]:
             if source_id is not None and source["sourceID"] != source_id:
                 continue
             calendar_id = source["sourceID"]
             meta = metadata["sources"].get(calendar_id, {})
-            if if_due and (meta.get("retryable") is False or (meta.get("nextAttempt") and timestamp(meta["nextAttempt"]) > now)):
+            desired_projection = projection_key(source, course_details)
+            interpretation_changed = meta.get("projectionKey") != desired_projection
+            new_interpretation = meta.get("attemptProjectionKey", meta.get("projectionKey")) != desired_projection
+            if if_due and not new_interpretation and (meta.get("retryable") is False or (meta.get("nextAttempt") and timestamp(meta["nextAttempt"]) > now)):
                 continue
             resolved = None
             try:
@@ -552,18 +565,20 @@ def sync(store: CaptureStore, *, if_due: bool = False, now: datetime | None = No
                         require_calendar_recordings(store)
                     except CaptureError as error:
                         raise capture_links.CalendarLinkError("RECORDER_INCOMPATIBLE") from error
-                course_details = store.workspace.configuration_store().load()["courses"]
-                key = recognition_key(course_details)
                 url_hash = hashlib.sha256(resolved["url"].encode()).hexdigest()
                 changed_url = (source["url"] != resolved["url"] or
                                (meta.get("feedURLHash") is not None and meta["feedURLHash"] != url_hash))
-                validators = {} if changed_url or (source.get("importMode") == "all_timed" and meta.get("recognitionKey") != key) else meta
+                validators = {} if changed_url or interpretation_changed else meta
                 data, headers = download(resolved, validators)
                 summary = meta.get("summary")
-                if data is None and not meta.get("lastSuccess"):
+                if data is None and (not meta.get("lastSuccess") or interpretation_changed or changed_url):
                     raise capture_links.CalendarLinkError("INVALID_CALENDAR")
                 if data is not None:
-                    imported, summary = project_calendar(data, resolved, events, course_details)
+                    # Explicit event links are authoritative for legacy
+                    # destinations too. Validate their effective course, not an
+                    # obsolete source snapshot which is projected only later.
+                    from .capture_associations import project_events
+                    imported, summary = project_calendar(data, resolved, project_events(store, events), course_details)
                     candidate = [e for e in events if e["sourceID"] != calendar_id] + imported
                     events = validate_windows(candidate, config)
                 meta = success_metadata(resolved, headers, course_details, summary, now, config)
@@ -572,6 +587,7 @@ def sync(store: CaptureStore, *, if_due: bool = False, now: datetime | None = No
             except Exception as error:
                 detail = capture_links.diagnostic(error, resolved["url"] if resolved else "")
                 meta = {**meta, **detail, "lastAttempt": iso(now), "error": detail["code"],
+                        "attemptProjectionKey": desired_projection,
                         "nextAttempt": iso(now + timedelta(minutes=15)) if detail["retryable"] else None}
                 reports.append({"sourceID": calendar_id, "status": "FAILED", "error": detail["code"], **detail})
             metadata["sources"][calendar_id] = meta

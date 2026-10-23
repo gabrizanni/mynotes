@@ -207,7 +207,7 @@ wheels = [
 
 [[package]]
 name = "mynotes"
-version = "0.2.25"
+version = "0.2.27"
 source = { editable = "." }
 dependencies = [
     { name = "av" },

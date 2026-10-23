@@ -249,6 +249,28 @@ def historical_active_seconds(root,plan,lectures,continuity):
     return total
 
 
+def bound_budget_checkpoints(root, plan, lectures):
+    """Bind historical clocks to immutable manifests, including older organization."""
+    from .batch import _hash, _read
+    directories = set()
+    for path in root.glob('*/manifest.json'):
+        old = _read(path)
+        for group in old.get('groups', []):
+            if not set(group) & set(lectures):
+                continue
+            prior = _historical_continuity(root, old, group)
+            if prior is None:
+                continue  # A legacy aggregate without receipts will fail closed.
+            try:
+                runtime = {**old, 'inventory': plan['inventory']}
+                directory = root/'generation-checkpoints'/_hash(intent(runtime, group, prior, reviewed=True))
+            except KeyError:
+                continue
+            if directory.is_dir():
+                directories.add(directory)
+    return sorted(directories)
+
+
 def repair_coverage(request,response,defects,maps,adapter,timeout):
     """One hash-anchored correction of explicit defects, including replacements."""
     from .batch import _hash, _stage_visuals
@@ -449,14 +471,27 @@ def batch_status(workspace,batch_id):
                 row.update({k:group[k] for k in ('status','phase','defects','next_action','raw_result_preserved') if k in group})
                 row['active_seconds']=group.get('active_seconds_preserved')
     for row in lessons:
-        budgets=[]
+        budgets=[]; phases={}; blocked=[]; has_phases=False
         for file in (root/'active-budgets').glob('*.json'):
             value=json.loads(file.read_text())
-            if row['lecture_id'] in value.get('lessons',[]):budgets.append(value.get('used_seconds',0))
+            if row['lecture_id'] in value.get('lessons',[]):
+                budgets.append(sum(value['phases'].values()) if 'phases' in value else value.get('used_seconds',0))
+                if 'phases' in value:
+                    has_phases=True
+                    for phase, seconds in value['phases'].items():
+                        phases[phase]=max(phases.get(phase,0),seconds)
+                    blocked.extend(value.get('model_block_reasons',[]))
+        if has_phases:
+            from .generation_budget import MODEL_PHASE_SECONDS, LOCAL_CHECK_SECONDS
+            row['phase_budget']={'used_seconds':phases, 'phase_limit_seconds':MODEL_PHASE_SECONDS,
+                'local_check_limit_seconds':LOCAL_CHECK_SECONDS, 'model_block_reasons':sorted(set(blocked)),
+                'remaining_from_saved_accounting':{phase:0 if blocked and phase!='local_checks' else max(0,limit-phases.get(phase,0))
+                    for phase,limit in [('writing',MODEL_PHASE_SECONDS),('coverage_repair',MODEL_PHASE_SECONDS),('local_checks',LOCAL_CHECK_SECONDS)]}}
         row['active_seconds']=max([v for v in [*budgets,row.get('active_seconds')] if v is not None],default=None)
     return {'batch_id':batch_id,'status':status,'lessons':lessons,'activity':activity,
             'problem':manifest.get('problem',manifest.get('error')),'network_retries':retries,
             'local_recovery':recovery,'warnings':manifest.get('warnings',[]),
+            'organization_pending':manifest.get('organization_pending',[]),
             'phase':next((r['phase'] for r in lessons if r.get('phase')),None) or (manifest.get('problem') if isinstance(manifest.get('problem'),dict) else {}).get('phase') or activity.get('status'), 'published_to_word':False}
 
 

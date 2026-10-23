@@ -1,6 +1,6 @@
 # MyNotes + Capture
 
-Versione preliminare **0.2.25**, con raccolte basate sui file audio e TXT reali, trascrizioni salvate anche con tempi o associazioni incerti e aggiornamenti Word coordinati fra lezioni. Vedi le [note di aggiornamento](docs/UPDATES.md).
+Versione preliminare **0.2.27**, con calendario Capture più affidabile, slide distribuite progressivamente fra lezioni e tempi separati per scrittura e correzione. Conserva audio, TXT completati e aggiunte personali nei Word. Vedi le [note di aggiornamento](docs/UPDATES.md).
 
 Registra le lezioni e trasforma audio, slide e appunti personali in dispense Word con formule modificabili. Capture è incluso: non serve scaricarlo separatamente.
 
@@ -10,8 +10,8 @@ Italiano | [English](README.md)
 
 **Mac Apple Silicon (M1 o successivo), macOS 14+, internet per il setup e un account utilizzabile con Codex, Agy o Claude Code CLI.**
 
-**MyNotes 0.2.25 è disponibile come versione preliminare per proseguire i test.**
-[Scarica il DMG per Apple Silicon](https://github.com/gabrizanni/mynotes/releases/download/v0.2.25/MyNotes-0.2.25-macOS-arm64.dmg) · [Novità, checksum e problemi noti](https://github.com/gabrizanni/mynotes/releases/tag/v0.2.25).
+**MyNotes 0.2.27 è disponibile come versione preliminare per proseguire i test.**
+[Scarica il DMG per Apple Silicon](https://github.com/gabrizanni/mynotes/releases/download/v0.2.27/MyNotes-0.2.27-macOS-arm64.dmg) · [Novità, checksum e problemi noti](https://github.com/gabrizanni/mynotes/releases/tag/v0.2.27).
 
 1. Apri il file `.dmg` scaricato.
 2. Trascina **MyNotes** in **Applicazioni**.

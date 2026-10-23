@@ -135,6 +135,7 @@ struct CaptureView: View {
     }
     private var unavailable: Bool { model.busy || model.isPreview }
     private func status(_ snapshot: CaptureSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
         HStack(spacing: 16) {
             Label(snapshot.stateLabel, systemImage: snapshot.isRecording ? "record.circle.fill" : "mic")
                 .foregroundStyle(snapshot.isRecording ? Color.red : Color.primary)
@@ -154,6 +155,13 @@ struct CaptureView: View {
             } else {
                 if snapshot.paused { Text("Calendario sospeso").font(.callout).foregroundStyle(.secondary) }
             } }.disabled(snapshot.isRecording ? model.stopping || model.isPreview : model.busy || model.isPreview)
+        }
+        if let detail = snapshot.stateDetail { Text(detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+        if let issues = snapshot.runtime.scheduleIssues, !issues.isEmpty {
+            DisclosureGroup("Dettagli delle lezioni escluse") {
+                ForEach(Array(issues.enumerated()), id: \.offset) { _, issue in Text(issue).font(.caption).textSelection(.enabled) }
+            }.font(.caption)
+        }
         }.padding(12).background(.quaternary, in: RoundedRectangle(cornerRadius: 10))
     }
     private func calendars(_ snapshot: CaptureSnapshot) -> some View {
@@ -210,12 +218,12 @@ struct CaptureView: View {
     }
     private var lessons: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack { Text("Prossime lezioni").font(.headline); Spacer(); Toggle("Mostra annullate", isOn: $showCancelled).toggleStyle(.checkbox).font(.caption) }
+            HStack { Text("Prossime lezioni").font(.headline); Spacer(); Toggle("Mostra annullate/escluse", isOn: $showCancelled).toggleStyle(.checkbox).font(.caption) }
             TextField("Cerca corso o lezione", text: $query)
             List(selection: $selected) {
                 ForEach(events) { event in
                     VStack(alignment: .leading, spacing: 5) {
-                        HStack { Text(event.title).font(.headline).lineLimit(2); Spacer(); Text(event.statusLabel).font(.caption).foregroundStyle(event.eligibility == "SCHEDULED" ? Color.secondary : Color.orange) }
+                        HStack { Text(event.title).font(.headline).lineLimit(2); Spacer(); Text(snapshot?.eventStatusLabel(event) ?? event.statusLabel).font(.caption).foregroundStyle(snapshot?.eventNeedsAttention(event) == true ? Color.orange : Color.secondary) }
                         Text(event.courseLabel).font(.callout).foregroundStyle(.secondary)
                         Text(CaptureDates.label(event.startsAt, zone: event.timezone) + " → " + CaptureDates.label(event.endsAt, zone: event.timezone)).font(.caption).foregroundStyle(.secondary)
                         if event.localChanges || event.special { Text(event.special ? "Lezione speciale" : "Modifiche locali").font(.caption).foregroundStyle(.secondary) }
@@ -231,17 +239,17 @@ struct CaptureView: View {
                     Text("Dettaglio lezione").font(.headline)
                     Text(event.title).font(.title2.bold())
                     Text(event.courseLabel).foregroundStyle(.secondary)
-                    Label(event.statusLabel, systemImage: event.eligibility == "SCHEDULED" ? "checkmark.circle" : "exclamationmark.triangle")
+                    Label(snapshot.eventStatusLabel(event), systemImage: snapshot.eventNeedsAttention(event) ? "exclamationmark.triangle" : snapshot.isRecording && snapshot.runtime.currentSession?.event.id == event.id ? "record.circle.fill" : "checkmark.circle")
                     Divider()
+                    if event.eligibility == "NEEDS_REVIEW" && ["INVALID_START", "MISSING_END", "INVALID_END", "INVALID_DURATION", "INVALID_RECURRENCE"].contains(event.diagnosticCode) {
+                        Text("Questi sono gli ultimi orari salvati. L’evento attuale nel calendario richiede una correzione.").font(.callout).foregroundStyle(.secondary)
+                    }
                     LabeledContent("Inizio", value: CaptureDates.label(event.startsAt, zone: event.timezone))
                     LabeledContent("Fine", value: CaptureDates.label(event.endsAt, zone: event.timezone))
                     LabeledContent("Fuso", value: event.timezone)
                     LabeledContent("Origine", value: event.special ? "Lezione speciale" : snapshot.sources.first(where: { $0.id == event.sourceID })?.label ?? "Calendario importato")
-                    if !event.reason.isEmpty { Text(event.reason).font(.callout).foregroundStyle(.orange) }
+                    Text(snapshot.eventStatusExplanation(event)).font(.callout).foregroundStyle(snapshot.eventNeedsAttention(event) ? Color.orange : Color.secondary).fixedSize(horizontal: false, vertical: true)
                     if event.localChanges { Text("Le modifiche locali restano valide dopo la sincronizzazione.").font(.callout).foregroundStyle(.secondary) }
-                    if ["CANCELLED", "NEEDS_REVIEW"].contains(event.sourceEligibility) {
-                        Text("Il calendario ha annullato questa lezione o richiede una verifica. Una modifica locale non la riattiva.").font(.callout).foregroundStyle(.secondary)
-                    }
                     HStack {
                         Button("Modifica") { sheet = .edit }
                         if event.localChanges { Button("Ripristina calendario") { Task { await model.perform("reset-lesson", arguments: ["--event", event.id]) } } }

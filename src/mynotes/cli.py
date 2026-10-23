@@ -369,7 +369,7 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--provider", choices=("codex", "agy", "claude"))
     batch.add_argument("--quality", help="base, standard, approfondito, or revisione; defaults to standard")
     batch.add_argument("--context-lessons", help="other relevant lesson numbers/ranges from this course, imported with source provenance")
-    batch.add_argument("--selection", help="JSON mapping canonical slide IDs to reviewed owners and inline anchors")
+    batch.add_argument("--selection", help="JSON mapping canonical slide IDs to reviewed owners, inline anchors or deferred review_before boundaries")
     batch.add_argument("--budgets", help="JSON with verified selected-model context/output limits")
     batch.add_argument("--instructions", help="temporary instructions for this batch")
     batch.add_argument("--image-limit", type=int, help="maximum inserted images per lesson for this request")

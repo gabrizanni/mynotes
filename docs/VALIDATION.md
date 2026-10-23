@@ -2,6 +2,61 @@
 
 This document separates implemented safeguards from checks actually completed.
 
+## 0.2.27 local implementation and personal update (2026-10-23)
+
+- The final complete implementation suite passed **1,066 tests**, with zero
+  failures, errors or skips. Installation/integration contracts passed 59 tests;
+  final independent review exercised 55 focused tests. These subsets overlap and
+  are not additional suite totals.
+- Synthetic tests cover a 95-page deck initially attached only to the first
+  lesson, deferred placement, reading the next lesson boundary, saved-response
+  reuse, canonical source identity and one full main explanation per slide.
+- A simulated eight-minute write followed by a correction longer than ten minutes
+  completes under independent phase allowances. Resume, failed attempts,
+  interrupted markers, uncertain legacy consumption and separate local deadlines
+  retain their budget and recovery protections.
+- Direct Word routes reject pending slide placement; affected lessons require
+  coordinated updates. Existing tests exercise backup, atomic replacement,
+  concurrent edits, personal additions and undo with synthetic documents.
+- The isolated 0.2.26 -> 0.2.27 -> 0.2.26 -> 0.2.27 update/rollback preserved eight
+  seeded files at every step. The personal update compared protected workspace,
+  course documents, audio/TXT, preferences, cancelled jobs and the previous runtime.
+- Installed app/CLI versions, signatures, source-module hashes and managed
+  instruction exports were verified. The reopened Capture UI showed an active
+  calendar and the next scheduled event. The existing provider chat was left open.
+
+No new real-provider academic generation, personal ASR, microphone/playback,
+physical sleep/wake, overnight or clean-account trial was performed for these
+changes. Installed doctor reports local tools ready but provider authentication
+unverified; UI readiness is not proof of a paid provider call. Hosted CI and
+public-download checks are reported on the release page once completed, separately
+from these local results. Earlier sections retain their historical scope/status.
+
+## 0.2.26 personal update (2026-10-23)
+
+The tested calendar candidate was subsequently installed personally with explicit
+authorization, a verified backup and retained rollback runtime. An isolated
+four-step upgrade/rollback preserved eight seeded files at every step. Personal
+app/CLI versions and signatures were checked, the configured calendar refreshed
+successfully, and the reopened calendar UI showed scheduled lessons without the
+previous association errors. Protected files and cancelled jobs were audited.
+This supersedes the pre-install candidate status below. No public release or
+new personal microphone/playback/overnight acceptance is claimed.
+
+## Calendar reliability development candidate (2026-10-23)
+
+- 1,029 tests passed without failures, errors or skips; includes four actual
+  Python-schedule/native-model boundary cases. Counts are not additive.
+- Full standalone native recorder regressions passed using synthetic audio,
+  including restart settling followed by periodic recovery into a real audio
+  file, corrupt-segment rejection and existing-file preservation.
+- Native setup debug build passed; a synthetic-only native calendar preview was
+  visually inspected. Final UI-focused checks followed the last explanatory-text
+  change. No personal microphone capture or classroom trial was performed.
+- Independent code review and public-tree audit passed. This candidate has not
+  been installed personally, packaged as a new release, or published. Real
+  scheduled deadlines, physical sleep/wake and overnight acceptance remain open.
+
 ## 0.2.25 local validation (2026-10-19)
 
 - The complete suite passed 1,001 tests without failures or skips. A final set of

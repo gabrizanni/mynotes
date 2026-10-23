@@ -39,19 +39,45 @@ struct Regression {
                             startsAt: now.addingTimeInterval(-20), endsAt: now.addingTimeInterval(60),
                             recordAt: now.addingTimeInterval(-20), stopAt: now.addingTimeInterval(180),
                             timezone: "UTC", title: "Quantitative Methods", eligibility: "SCHEDULED", reason: "")
+        precondition(event.isCurrent(event.recordAt) && !event.isCurrent(event.endsAt), "Fresh starts must end at lesson end, not post-roll")
+        precondition(!event.isCurrent(event.recordAt.addingTimeInterval(-1)), "Recording must not start before its window")
+        var updated = event; updated.title = "A descriptive title change"; updated.timezone = "Asia/Kolkata"
+        precondition(event.canResume(with: updated), "Cosmetic calendar changes must not strand an interrupted recording")
+        updated.endsAt = event.endsAt.addingTimeInterval(60)
+        precondition(!event.canResume(with: updated), "Changed deadlines must not reuse an obsolete session snapshot")
+        var obsolete = event
+        obsolete.id = "old-review"; obsolete.courseCode = "OLDCOURSE"; obsolete.eligibility = "NEEDS_REVIEW"
+        var invalid = event
+        invalid.id = "invalid-scheduled"; invalid.courseCode = "OLDCOURSE"; invalid.title = "Invalid future lesson"
+        let checked = Schedule(schemaVersion: 1, revision: 1, events: [obsolete, invalid, event]).recordingEvents(["QNT9"])
+        precondition(checked.issues.count == 1 && checked.events.first(where: { $0.id == event.id })?.eligibility == "SCHEDULED", "An obsolete blocked event and a quarantined invalid event must not stop valid lessons")
+        var duplicate = event; duplicate.id = "two"
+        let duplicates = Schedule(schemaVersion: 1, revision: 1, events: [event, duplicate]).recordingEvents(["QNT9"])
+        precondition(duplicates.events.allSatisfy { $0.eligibility == "NEEDS_REVIEW" }, "Duplicate output names must be explicit conflicts")
+        duplicate.title = "Distinct title"; duplicate.lessonNumber = 2; duplicate.id = event.id
+        precondition(Schedule(schemaVersion: 1, revision: 1, events: [event, duplicate]).recordingEvents(["QNT9"]).issues.count == 2, "Duplicate event identity must block both entries")
+        duplicate.courseCode = "OLDCOURSE"
+        precondition(Schedule(schemaVersion: 1, revision: 1, events: [event, duplicate]).recordingEvents(["QNT9"]).issues.count == 2, "An invalid duplicate identity must not leave an ambiguous valid entry runnable")
         let config = CaptureConfiguration(revision: 1, enabled: true, paused: false, refreshHours: 6,
                                           recordBeforeSeconds: 0, recordAfterSeconds: 120,
                                           outputDirectory: root.appendingPathComponent("recordings").path,
                                           stageDirectory: root.appendingPathComponent("staging").path,
                                           pythonExecutable: "/usr/bin/false", courseCodes: ["QNT9"])
         try CaptureJSON.save(config, to: root.appendingPathComponent("config/capture.json"))
-        try CaptureJSON.save(Schedule(schemaVersion: 1, revision: 1, events: [event]), to: root.appendingPathComponent("state/capture/schedule.json"))
+        try CaptureJSON.save(Schedule(schemaVersion: 1, revision: 1, events: [event, obsolete, invalid]), to: root.appendingPathComponent("state/capture/schedule.json"))
         var stale = Session(id: UUID().uuidString, event: event, directory: root.appendingPathComponent("attempt").path,
                             actualStart: now, status: "RECORDING", partial: false, reason: "", segments: ["one"], isTest: false)
         let replayID = UUID().uuidString
         stale.requestID = replayID
         try CaptureJSON.save(stale, to: root.appendingPathComponent("state/capture/sessions/\(stale.id).json"))
-        let engine = try CaptureEngine(workspace: root, authorization: { false })
+        do {
+        var authorizationChecks = 0
+        var authorizeOnce = false
+        let engine = try CaptureEngine(workspace: root, authorization: {
+            authorizationChecks += 1
+            if authorizeOnce { authorizeOnce = false; return true }
+            return false
+        })
         var named = scheduled
         named.title = "QNT 03"; named.courseCode = "QNT9"; named.lessonNumber = 3
         let legacyOutput = URL(fileURLWithPath: config.outputDirectory).appendingPathComponent(named.legacyFilename)
@@ -84,10 +110,25 @@ struct Regression {
         precondition(!engine.isRecording, "Denied microphone must not claim REC")
         let deniedRuntime = try CaptureJSON.load(RuntimeStatus.self, from: root.appendingPathComponent("state/capture/runtime.json"))
         precondition(deniedRuntime.title == "Recording failed" && deniedRuntime.detail.contains("microphone"), "Failed recording must remain visible instead of showing the next lecture")
+        precondition(deniedRuntime.scheduleIssues?.count == 1, "Native quarantine must be disclosed to the dashboard")
+        let previousAuthorizationChecks = authorizationChecks
+        authorizeOnce = true
+        engine.evaluate(now: now)
+        precondition(authorizationChecks == previousAuthorizationChecks + 2, "An authorization transition must retry the blocked event; this fixture denies again before microphone acquisition")
+        let sentinel = root.appendingPathComponent("segments")
+        try FileManager.default.createDirectory(at: sentinel, withIntermediateDirectories: true)
+        let unjournalled = sentinel.appendingPathComponent("segment-001.m4a")
+        let protectedSegment = Data("unjournalled audio must survive".utf8)
+        try protectedSegment.write(to: unjournalled)
+        let reserved = try SegmentedRecorder.reserveSegment(in: sentinel, startingAt: 1)
+        precondition(reserved.lastPathComponent == "segment-002.m4a", "Crash leftovers must not be reused")
+        let unchangedSegment = try Data(contentsOf: unjournalled)
+        precondition(unchangedSegment == protectedSegment, "Unjournalled segments must remain byte-identical")
         engine.interrupt()
         engine.evaluate(now: now)
         precondition(!engine.isRecording, "Sleeping app must not record")
         engine.shutdown()
+        }
         let first = Session(id: "one", event: event, directory: "one", actualStart: now, actualStop: now.addingTimeInterval(-60), status: "INTERRUPTED", partial: true, reason: "", segments: ["one"], isTest: false)
         var second = first; second.id = "two"; second.segments = ["one", "two"]
         second.reason = "Resumed after interruption; audio contains a gap"
@@ -99,6 +140,11 @@ struct Regression {
         var collision = false
         do { _ = try InstanceLock(url: lockURL) } catch { collision = true }
         withExtendedLifetime(lock) { precondition(collision, "Single-instance lock must be exclusive") }
+
+        if CommandLine.arguments.contains("--scheduler-only") {
+            print("PASS: calendar quarantine, duplicate identity/output protection, start deadlines, permission-transition retry without microphone, crash segment protection, stale-state recovery, command replay, sleep guard, attempt selection, single instance")
+            return
+        }
 
         let format = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44_100)!
@@ -124,6 +170,38 @@ struct Regression {
         var rejected = false
         do { _ = try await SegmentAssembler.assemble([corrupt], to: invalidOutput) } catch { rejected = true }
         precondition(rejected && !FileManager.default.fileExists(atPath: invalidOutput.path), "Corrupt segments must fail export")
-        print("PASS: stale-state recovery, expired commands, persisted command replay, duplicate acknowledgement, denied microphone, sleep guard, attempt selection, single instance, synthetic audio assembly, existing-file protection, corrupt-segment rejection")
+        // Restart inside the recovery settling period, then advance the scheduler.
+        // The input is a generated tone, never microphone audio.
+        let recoveryRoot = root.appendingPathComponent("recovery-workspace")
+        var recoveryConfig = config
+        recoveryConfig.outputDirectory = recoveryRoot.appendingPathComponent("recordings").path
+        recoveryConfig.stageDirectory = recoveryRoot.appendingPathComponent("staging").path
+        try CaptureJSON.save(recoveryConfig, to: recoveryRoot.appendingPathComponent("config/capture.json"))
+        var expiredEvent = event
+        expiredEvent.startsAt = now.addingTimeInterval(-600)
+        expiredEvent.recordAt = expiredEvent.startsAt
+        expiredEvent.endsAt = now.addingTimeInterval(-300)
+        expiredEvent.stopAt = now.addingTimeInterval(-180)
+        try CaptureJSON.save(Schedule(schemaVersion: 1, revision: 1, events: [expiredEvent]), to: recoveryRoot.appendingPathComponent("state/capture/schedule.json"))
+        var recoverable = stale
+        recoverable.event = expiredEvent; recoverable.requestID = nil
+        recoverable.actualStop = nil; recoverable.segments = segments.map(\.path)
+        try CaptureJSON.save(recoverable, to: recoveryRoot.appendingPathComponent("state/capture/sessions/\(recoverable.id).json"))
+        let recoveryEngine = try CaptureEngine(workspace: recoveryRoot, authorization: { false })
+        recoveryEngine.evaluate(now: Date())
+        precondition(recoveryEngine.sessions.first?.status == "INTERRUPTED", "Fresh restart must wait for the settling period")
+        recoveryEngine.evaluate(now: Date().addingTimeInterval(16))
+        for _ in 0..<100 where recoveryEngine.sessions.first?.status == "INTERRUPTED" {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        precondition(recoveryEngine.sessions.first?.status == "PARTIAL", "Periodic evaluation must recover staged audio after settling, without another restart or wake")
+        let recoveredPath = recoveryEngine.sessions.first?.outputPath ?? ""
+        precondition(FileManager.default.fileExists(atPath: recoveredPath), "Recovered audio must actually exist")
+        let recoveredBytes = try Data(contentsOf: URL(fileURLWithPath: recoveredPath))
+        recoveryEngine.evaluate(now: Date().addingTimeInterval(32))
+        let retainedRecoveredBytes = try Data(contentsOf: URL(fileURLWithPath: recoveredPath))
+        precondition(recoveredBytes == retainedRecoveredBytes, "Repeated evaluation must not overwrite recovered output")
+        recoveryEngine.shutdown()
+        print("PASS: calendar quarantine, deadline and permission-transition guards, crash segment protection, stale-state recovery, expired commands, replay, sleep guard, attempt selection, single instance, synthetic audio assembly, original-file protection, corrupt-segment rejection, periodic staged recovery with real synthetic output")
     }
 }

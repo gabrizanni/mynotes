@@ -19,6 +19,13 @@ calendar. These changes survive refresh; **Ripristina calendario** restores the
 latest source values. Conflicts, cancellations and unresolved events are explicit.
 An externally cancelled or disappeared event cannot be re-enabled locally.
 
+The status banner identifies the next blocked lesson and its cause. Each lesson
+distinguishes scheduling eligibility from actual recording, saving, completion,
+interruption or failure. A scheduled lesson is not proof of microphone capture.
+Timing errors, unknown courses, cancelled events and conflicts have different
+explanations and corrective actions. Native recorder validation failures also
+appear on the affected lesson rather than only in a general warning.
+
 **Aggiungi lezione** schedules a special lesson for an existing course.
 **Registra ora** requests a recording with course, number and duration when
 Capture is running. A pending request is not proof that recording started;
@@ -128,6 +135,13 @@ disappearance becomes `NEEDS_REVIEW` and suppresses automatic recording. The
 teaching period is bounded to 550 days, feeds to ten sources and downloads to ten
 MB each. Refreshes require no AI runtime.
 
+In complete-calendar mode, malformed events and recurrence groups are isolated
+so unrelated valid lessons can still be scheduled. A cancellation needs only its
+calendar identity; missing timing fields in a cancellation do not make it a
+timing error. Course assignments are reconciled before validation. Changes to
+course recognition, import rules or the selected period force a fresh calendar
+interpretation, even when HTTP cache validators would otherwise hide them.
+
 ## Settings and manual controls
 
 `configure --file` accepts any of these fields:
@@ -209,6 +223,14 @@ The Mac must be awake at the recording time; lid closure and power-off prevent
 capture. Capture prevents idle system sleep only while recording. It does not
 schedule hardware wake. A live LaunchAgent alone does not prove audio readiness:
 check permission, runtime state, test audio and file duration.
+
+Automatic late starts are allowed only before the lesson ends; the final margin
+extends a recording already in progress. One invalid or obsolete event cannot
+block unrelated valid lessons. Conflicting identities, audio filenames and real
+time overlaps are blocked explicitly. After a restart, periodic evaluation
+rechecks staged audio after its settling period; failed automatic exports are
+not retried in a tight loop, and explicit recovery remains available. Unjournalled
+audio segments are retained rather than overwritten when recording resumes.
 
 ## Build and release
 

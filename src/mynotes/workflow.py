@@ -12,6 +12,7 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -1018,7 +1019,47 @@ def _generate_candidate_locked(
             from .usage import record_reuse
             record_reuse(workspace, lecture_id, kind="candidate")
             return {"lecture_id": lecture_id, "status": "SKIPPED", "reason": "identical candidate already exists", "candidate": str(candidate_path)}
-        base = ProviderRequest(lecture_id, course, {}, requested, source_pack=pack, run_dir=run_dir, style=editorial_style)
+        from .generation_budget import PhaseBudget, GenerationBudgetError
+        checkpoint_dir = run_dir / "generation-checkpoints" / input_hash
+        # Current receipts carry an explicit generation identity. Legacy receipts
+        # require a hash-verified saved phase; never charge unrelated old work.
+        bound_attempts = set(); known_attempts = set()
+        for saved_path in (run_dir / "generation-checkpoints").glob("*/*.json"):
+            if saved_path.name == "phase-budget.json":
+                continue
+            try:
+                saved = json.loads(saved_path.read_text())
+                payload = saved["payload"]
+                if saved["sha256"] != _phase_fingerprint(payload):
+                    continue
+                attempt = Path(payload["response"]["attempt_path"])
+            except (ValueError, KeyError, TypeError):
+                continue
+            if not attempt.is_absolute() or not attempt.resolve().is_relative_to(run_dir.resolve()):
+                continue
+            known_attempts.add(attempt.resolve())
+            if saved_path.parent == checkpoint_dir:
+                bound_attempts.add(attempt.resolve())
+        uncertain_legacy = False
+        for attempt in (run_dir / "provider-attempts").glob("*.json"):
+            if attempt.name.endswith(".schema.json") or attempt.name.endswith(".final.json"):
+                continue
+            try:
+                record = json.loads(attempt.read_text())
+            except ValueError:
+                uncertain_legacy = True; continue
+            if record.get("generation_id") == input_hash:
+                bound_attempts.add(attempt.resolve())
+            elif record.get("generation_id") is None and attempt.resolve() not in known_attempts and record.get("invocation_started") is not False:
+                uncertain_legacy = True
+        try:
+            phase_budget = PhaseBudget(checkpoint_dir / "phase-budget.json", [lecture_id], receipt_paths=sorted(bound_attempts), permit_local_recovery=True)
+        except GenerationBudgetError as error:
+            raise WorkflowError(str(error)) from error
+        if uncertain_legacy:
+            phase_budget.block_model_calls("Unbound historical provider attempts have uncertain generation consumption; review saved work before another provider call")
+        base = ProviderRequest(lecture_id, course, {}, requested, source_pack=pack, run_dir=run_dir,
+                               style=editorial_style, generation_id=input_hash)
         previous: dict[str, Any] | None = None
         response: ProviderResponse | None = None
         editorial_diagnostics: list[dict[str, Any]] = []
@@ -1033,11 +1074,17 @@ def _generate_candidate_locked(
                     response = _load_generation_phase(returned, previous=previous)
                 reused = response is not None
                 if response is None:
-                    response = invoke_provider(request, provider_adapter)
+                    if uncertain_legacy:
+                        raise WorkflowError("Unbound historical provider attempts have uncertain generation consumption; review saved work before another provider call")
+                    with phase_budget.track(phase) as remaining:
+                        response = invoke_provider(replace(request, timeout_seconds=remaining), provider_adapter)
                     _save_generation_phase(returned, previous, response)
-                validated = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
-                                                     final_phase=phase == QUALITY_PHASES[requested.quality][-1][0],
-                                                     normalization_report_path=checkpoint.with_suffix(".normalization.json"))
+                with phase_budget.track("local_checks"):
+                    validated = _validate_candidate_notes(response.notes, lecture_id, pack, source_root=path.parent, style=editorial_style,
+                                                         final_phase=phase == QUALITY_PHASES[requested.quality][-1][0],
+                                                         normalization_report_path=checkpoint.with_suffix(".normalization.json"))
+                if phase_budget.remaining("local_checks") <= 0:
+                    raise WorkflowError("Local generation checks exceeded their 120-second allowance; successful provider content was preserved")
                 if not checkpoint.exists():
                     _save_generation_phase(checkpoint, previous, response)
                     state.record_attempt(lecture_id, requested, status=f"SUCCESS_{phase.upper()}", response=response)
@@ -1053,7 +1100,7 @@ def _generate_candidate_locked(
                 state.record_nonpublished(lecture_id, input_hash, requested, candidate_path, sources, "PAUSED_QUOTA")
                 _write_status_markdown(workspace, state.rows())
                 raise WorkflowError(f"Provider quota exhausted; no Word was changed: {error}") from error
-            except (ProviderError, WorkflowError) as error:
+            except (ProviderError, WorkflowError, GenerationBudgetError) as error:
                 state.record_attempt(lecture_id, requested, status=f"REJECTED_{phase.upper()}", response=response, error=str(error))
                 state.record_nonpublished(lecture_id, input_hash, requested, candidate_path, sources, "FAILED")
                 _write_status_markdown(workspace, state.rows())

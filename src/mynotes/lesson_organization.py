@@ -29,9 +29,17 @@ def provisional_choice(item, packs):
 
 
 def validate_links(choice, candidates, packs):
-    allowed = {"owner", "status", "anchor", "structural_review", "reason", "provisional", "uses"}
-    if not isinstance(choice, dict) or set(choice) - allowed or choice.get("owner") not in candidates or choice.get("status") not in {"taught", "supplement", "material"}:
-        raise WorkflowError("A slide choice needs an available owner and status taught, supplement or material")
+    allowed = {"owner", "status", "anchor", "structural_review", "reason", "provisional", "uses", "review_before"}
+    if not isinstance(choice, dict) or set(choice) - allowed or choice.get("owner") not in candidates or choice.get("status") not in {"taught", "supplement", "material", "deferred"}:
+        raise WorkflowError("A slide choice needs an available owner and status taught, supplement, material or deferred")
+    if choice.get("status") == "deferred":
+        target = choice.get("review_before")
+        if (not isinstance(choice.get("reason"), str) or not choice["reason"].strip()
+                or target not in packs or target <= choice["owner"]
+                or choice.get("uses") or choice.get("anchor") or choice.get("structural_review")):
+            raise WorkflowError("A deferred slide needs a reason and a later prepared review_before lesson, without claimed teaching uses")
+    elif "review_before" in choice:
+        raise WorkflowError("Only deferred slides may specify review_before")
     if "reason" in choice and (not isinstance(choice["reason"], str) or not choice["reason"].strip()):
         raise WorkflowError("Slide organization needs a nonempty reason")
     if "provisional" in choice and type(choice["provisional"]) is not bool:
@@ -74,3 +82,18 @@ def organization_revision(previous, plan):
             "fingerprint": plan["fingerprint"], "changes": changes, "affected_lessons": sorted(affected),
             "previous_contract": previous.get("contract"), "contract": plan["contract"],
             "reason": "Revalidate retained writing under revised organization; not an equivalent historical writing request."}
+
+
+def pending_organization(ownership, lectures, packs):
+    """Local coordinator review, never a second writing/model phase."""
+    pending = []
+    for canonical, choice in ownership.items():
+        target = choice.get("review_before")
+        if choice["status"] == "deferred" and target in lectures:
+            pending.append({"canonical_slide_id": canonical, "review_before": target,
+                            "reason": choice["reason"]})
+        elif (choice.get("provisional") and choice["owner"] in lectures
+              and any(row["id"].startswith("T") for row in packs[choice["owner"]]["evidence"])):
+            pending.append({"canonical_slide_id": canonical, "review_before": choice["owner"],
+                            "reason": "Read this lesson's complete transcript and review slide placement before writing."})
+    return pending

@@ -10,6 +10,7 @@ from mynotes.providers import (AgyAdapter,ClaudeAdapter,CodexAdapter,ProviderErr
     ProviderRequest,ProviderResponse,RequestedModel,_save_attempt)
 from mynotes.usage import lecture_usage
 from mynotes.workspace import Workspace
+from mynotes.execution import AttemptStart
 from mynotes.workflow import WorkflowError,generate_candidate
 from test_providers_quality import configured_workspace,source_pack,valid_notes
 
@@ -138,7 +139,7 @@ def test_reused_phases_and_whole_candidate_are_local_events_not_extra_usage(tmp_
             self.calls.append(req.phase)
             fail=req.phase=='scoped_review' and not self.failed
             usage={'input_tokens':5 if fail else 10}
-            attempt=_save_attempt(req,command=['fixture'],completed=subprocess.CompletedProcess(['fixture'],1 if fail else 0,json.dumps({'usage':usage}),''),started=time.monotonic(),error='quota reached' if fail else None)
+            attempt=_save_attempt(req,command=['fixture'],completed=subprocess.CompletedProcess(['fixture'],1 if fail else 0,json.dumps({'usage':usage}),''),started=AttemptStart(),error='quota reached' if fail else None)
             if fail:
                 self.failed=True;raise ProviderQuotaError('quota reached')
             return ProviderResponse(valid_notes(),'codex','','',usage,str(attempt))

@@ -243,7 +243,24 @@ status material) only for visually inspected non-teaching covers/dividers; never
 infer this from short text or exempt diagrams. Pages with code/data are not covers.
 This uses the same source review,
 not another writing/review phase. Then resume the same batch.
-Follow numeric lesson order with shared context.
+Follow numeric lesson order with shared context. A PDF may initially be linked only
+to L01; attachment is not proof that all pages were taught in L01. Review the
+current full transcript and relevant slides locally before writing. For pages
+not yet placed, save status="deferred", owner=current lesson, a reason and
+review_before=the next selected prepared lesson in --selection. Do not claim
+those pages covered or remove them from the course inventory. Finish the current
+candidate, then read the next transcript and resolve NEEDS_ORGANIZATION locally
+by revising --selection and resuming the same batch, without asking the user to
+map slides. No separate AI planning/review phase is needed. A new owner can be a
+later lesson even when the PDF was attached only to L01; MyNotes stages the exact
+source page with its original provenance without modifying prepared originals.
+Never defer a page beyond the selected prepared range to fake course completion.
+At each boundary verify the relevant full previous passages. Give every slide
+one main explanation, using references and distinct transcript-supported insights
+elsewhere. Integrate exam slide content never spoken in class as labelled
+supplementary material at its relevant topic. Reconcile affected prior lessons
+before updating the cumulative Word together; defer their Word candidates while
+their slide placement is pending.
 An untouched topic from slides belongs inline next to its related explanation,
 labelled as supplementary; preserve the lecturer's actual progression. Repeat
 references and distinct source-supported insights across any lesson, including
@@ -273,7 +290,7 @@ user's instruction. Requested settings are not proof of actual returned settings
 A successful writing transport retained after local validation failure must be
 reviewed locally instead of regenerated. Standard uses one writing phase.
 The writer permits only one automatic recovery from a temporary connection error,
-with the same model and checkpoints, within the lesson budget. Do not add another
+with the same model and checkpoints, within the durable 20-minute writing-phase allowance. Writing and one necessary managed correction each have an independent 20-minute allowance, plus 2 minutes for local checks and Word; resuming never resets consumption. Do not add another
 coordinator retry on top of it. Use `mynotes batch-status BATCH_ID --json` to read
 actual progress; do not inspect implementation files or issue repeated Python probes.
 Never say a process is running after its command failed unless batch-status shows
@@ -283,7 +300,7 @@ Never edit returned JSON, source citations or receipt hashes to satisfy coverage
 Only the managed, separately recorded hash-anchored targeted correction may fix
 a real gap or defective passage, including replacements and moves. At most one
 automatic correction per affected lesson and revision is allowed, within the
-existing time allowance and requested model settings; no nested paid retries.
+remaining independent 20-minute correction allowance and requested model settings; no nested paid retries.
 Before resuming a stopped batch, consult `mynotes recover-batch BATCH_ID --json`.
 This is local diagnosis, not another model call. Apply --apply only for a verified
 LOCALLY_RECOVERABLE result; a process failure stays preserved in a separate record.

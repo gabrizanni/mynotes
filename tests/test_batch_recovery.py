@@ -239,7 +239,12 @@ def test_saved_correction_can_use_reserved_local_build_time_without_another_prov
         generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,repair_missing=True)
     assert writer.calls==['writing','coverage_repair']
     monkeypatch.setattr(batch_recovery,'apply_correction',original)
-    monkeypatch.setattr(batch_recovery,'historical_active_seconds',lambda *args:1175)
+    # Exhausted model phases must still permit cached repair and the separate
+    # remaining local allowance; no fresh writing/correction is authorized.
+    for budget_path in (ws.runs_dir/'_batches').glob('*/active-budgets/*.json'):
+        value=json.loads(budget_path.read_text())
+        value['phases']={'writing':1200.,'coverage_repair':1200.,'local_checks':95.}
+        atomic_json_write(budget_path,value)
     def build(workspace,lecture,**kwargs):
         assert 0<kwargs['timeout_seconds']<=25
         path=workspace.runs_dir/lecture/'word.docx';path.write_bytes(b'isolated fake Word');return {'candidate':str(path)}

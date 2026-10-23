@@ -139,8 +139,14 @@ validation defect reuses the saved transport instead of automatically regenerati
 the lesson. Explicit count/percentage contradictions are blocked for targeted
 correction without an additional AI review call.
 
-The active lesson budget is 20 minutes after source preparation, including
-recovery and targeted correction, with the final 30 seconds reserved for Word.
+After source preparation, writing has its own 20-minute allowance. One necessary
+managed targeted correction has a separate 20-minute allowance, with 2 additional
+minutes for local validation and Word building. Standard quality still uses one
+writing phase. Neither resume, transport recovery nor an organization revision
+resets consumed time. Other explicitly selected quality phases are capped
+individually. Durable phase ledgers record an active marker before invocation and
+charge failures too. Uncertain interrupted consumption blocks a new paid call;
+legacy totals are separated only from bound attempt receipts, never guessed.
 The writer stops after 300 seconds without useful progress; repeated identical
 events do not reset that timer. A deadline is a failure bound, not
 a promise of successful completion or a word limit. Completed portions are
@@ -172,8 +178,9 @@ again. A durable attempt guard and inherited active-time budgets prevent paid
 retry loops or a new allowance from a changed checkpoint. Failed/unfinished
 transport never becomes certified success.
 
-`--build-word` builds/render-validates each lesson before advancing, without
-publishing. `--stop-after N` pauses at a selected lesson for inspection without
+`--build-word` builds/render-validates each settled lesson without publishing.
+A lesson with deferred slide placement retains its content candidate and waits
+for boundary review before Word building. `--stop-after N` pauses at a selected lesson for inspection without
 changing the batch selection. Read-only `batch-status` distinguishes content
 ready, Word ready, writing, retry wait, stopped and review-paused states. It
 checks candidate/Word hashes and never invokes discovery, ASR or generation.
@@ -306,7 +313,7 @@ quality or latency guarantee. A successful transport is saved before local valid
 rejection is retained for review without another automatic paid generation.
 Unvalidated returned responses do not count as completed phases.
 
-The writer uses a 19-minute CLI deadline and a 20-minute parent-process bound,
+The writer uses a 21-minute CLI ceiling and a 20-minute parent-process phase bound,
 with cleanup of its own process group on timeout/interruption. These bounds stop
 a stalled attempt; they are not a guarantee of successful lesson completion.
 The application never automatically retries a paid attempt, falls back to another
@@ -317,6 +324,50 @@ An ERROR envelope can never become a ready candidate, even with recoverable JSON
 Historical batch candidates referencing failed transports cannot be built or
 published to Word. Never edit the runtime or weaken coverage checks to bypass a
 failure. Keep content, transport success and actual Word completion distinct.
+
+### Progressive slide placement
+
+A PDF attached only to L01 is an input source, not evidence that every page was
+taught in L01. With transcript evidence, default provisional ownership requires
+local coordinator review before writing. This reuses normal source reading; it
+adds no AI review phase and does not ask the learner to assign pages.
+
+Review only the current lesson first. Keep relevant pages `taught` or `material`,
+and record pages awaiting the next transcript in the existing `--selection` JSON:
+
+```json
+{
+  "sha256:<actual-file-hash>:page:51": {
+    "owner": "RAI-L01",
+    "status": "deferred",
+    "reason": "The current transcript has not established this topic; inspect L02 next.",
+    "review_before": "RAI-L02"
+  }
+}
+```
+
+The identifier comes from the plan's canonical slide ledger, never a guessed hash.
+Deferred pages remain pending, not covered or exempted. They cannot have teaching
+uses or structural exemptions and must name a later selected prepared lesson.
+L01 can finish its content candidate without repairing their absence. Before L02
+writing, `NEEDS_ORGANIZATION` preserves L01 and asks the coordinator to read L02,
+review the full relevant previous passages, revise `--selection`, and resume.
+
+Assigning a page to L02 stages that exact slide, its visuals and source identity
+with original-lesson provenance, even if its PDF was attached only to L01. It
+does not import L01 speech as L02 speech or edit either original source pack.
+Changes retain before/after organization and revalidate saved SUCCESS writing.
+Each page gets one full main explanation; elsewhere use references or distinct
+`new_insight` blocks supported by the current transcript. Relevant exam material
+never discussed in class is placed inline as labelled `supplement`, not discarded.
+
+All deferred boundaries must be resolved before the selected batch is candidate
+ready. No final course coverage is claimed for an unfinished selected range.
+When prior published placement changes, include all affected lessons and use the
+existing coordinated `update L01 L02` operation: one cumulative Word, one backup,
+personal additions preserved, one atomic replacement. Standalone candidates do
+not publish automatically. Original receipts and failed correction guards remain
+immutable; organization changes do not grant another full writing attempt.
 
 ### Local recovery, speaker focus and independent Word candidates
 

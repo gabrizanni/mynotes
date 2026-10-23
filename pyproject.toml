@@ -1,6 +1,6 @@
 [project]
 name = "mynotes"
-version = "0.2.25"
+version = "0.2.27"
 description = "Local-first, workspace-separated lecture notes assistant"
 readme = "README.md"
 requires-python = ">=3.12"
