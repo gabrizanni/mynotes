@@ -308,6 +308,28 @@ def _boundaries(document: Document, lecture_id: str) -> tuple[int, int] | None:
     children = list(document._body._element)
     starts = [index for index, item in enumerate(children) if f"MYNOTES START {lecture_id}" in "".join(item.itertext())]
     ends = [index for index, item in enumerate(children) if f"MYNOTES END {lecture_id}" in "".join(item.itertext())]
+    # Older note tools used hidden, fully scoped START/END metadata. Accept
+    # only the exact paired grammar; a visible quote or a course title is not
+    # a writable lesson boundary. Never infer sections from headings alone.
+    legacy = []
+    code = lecture_id.rsplit('-L', 1)[0]
+    pattern = re.compile(r'\[([A-Z][A-Z0-9-]*)-(START|END) course=([A-Z0-9]+) lecture=([A-Z0-9]+-L\d+) revision=([^ ]+) created=([^\]]+)\]')
+    for index, item in enumerate(children):
+        if item.tag != qn('w:p'):
+            continue
+        text = ''.join(item.xpath('.//w:t/text()'))
+        match = pattern.fullmatch(text)
+        if not match or match[3] != code or match[4] != lecture_id:
+            continue
+        runs = item.findall('.//' + qn('w:r'))
+        if not runs or any(run.find('./' + qn('w:rPr') + '/' + qn('w:vanish')) is None
+                           or run.find('./' + qn('w:rPr') + '/' + qn('w:vanish')).get(qn('w:val')) in {'0','false','off'} for run in runs):
+            raise PublicationError('Historical lesson markers are not hidden, verified boundaries')
+        legacy.append((index, match[1], match[2], match[5]))
+    if legacy:
+        if starts or ends or len(legacy) != 2 or legacy[0][2] != 'START' or legacy[1][2] != 'END' or legacy[0][1] != legacy[1][1] or legacy[0][3] != legacy[1][3]:
+            raise PublicationError('Historical lesson boundaries are missing, duplicated or ambiguous')
+        return legacy[0][0], legacy[1][0]
     if not starts and not ends:
         return None
     if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:

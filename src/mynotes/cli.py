@@ -394,6 +394,11 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--contiguous-transcripts", action="store_true", help="stop before a missing or explicitly partial transcript; never skip a lesson")
     notes.add_argument("--plan-only", action="store_true", help="read existing sources without generation, writes or publication")
     notes.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
+    baseline = subparsers.add_parser('import-generated-baseline', help='import the last journal-certified generated Word for safe historical-section updates')
+    baseline.add_argument('course')
+    baseline.add_argument('--workspace')
+    baseline.add_argument('--journal', required=True, help='consistent original publication journal snapshot')
+    baseline.add_argument('--document', required=True, help='generated DOCX certified by that publication journal')
     batch_status = subparsers.add_parser("batch-status", help="read saved batch progress without generation or state changes")
     batch_status.add_argument("batch_id")
     batch_status.add_argument("--workspace")
@@ -877,9 +882,58 @@ def _generate_batch(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _notes_preparation(workspace, lectures, *, contiguous=False):
+    """Prepare from existing text only. A notes request never implicitly starts ASR."""
+    from .utils import file_sha256
+    from .recording_library import options
+    from .ingestion import parse_recording_name
+    configuration = workspace.configuration_store().load()
+    transcripts = None
+    pending = []
+    for lecture in lectures:
+        path = workspace.runs_dir / lecture / 'source_pack.json'
+        prior = _load_json(str(path)) if path.is_file() else None
+        changed = not prior or any(not Path(s['path']).is_file() or file_sha256(Path(s['path'])) != s['sha256']
+                                   for s in prior.get('sources', []))
+        if prior and not changed:
+            continue
+        sources = prior.get('sources', []) if prior else []
+        transcript = next((Path(s['path']) for s in sources if s.get('role') == 'imported_transcript' and Path(s['path']).is_file()), None)
+        if transcript is None:
+            if transcripts is None:
+                from .transcript_library import scan
+                transcripts = scan(workspace, persist=False) if options(workspace).get('folder') else []
+            code, number = lecture.rsplit('-L', 1)
+            matches = [row for row in transcripts if row.get('lecture_id') == lecture or (
+                not row.get('lecture_id') and parse_recording_name(Path(row['path']), configuration) == (code, int(number))
+                and row.get('course_code') in {None, code})]
+            if len(matches) > 1:
+                pending.append({'lecture_id': lecture, 'reason': 'AMBIGUOUS_TRANSCRIPT', 'paths': [row['path'] for row in matches]})
+                if contiguous: break
+                continue
+            if matches: transcript = Path(matches[0]['path'])
+        if transcript is None:
+            # A cached normalized transcript can be reused, without running an
+            # engine. Prefer explicitly selected/user TXT sources above.
+            cached = workspace.runs_dir / lecture / 'asr/transcript.json'
+            if cached.is_file(): transcript = cached
+        if transcript is None:
+            pending.append({'lecture_id': lecture, 'reason': 'MISSING_TRANSCRIPT', 'provider_invoked': False, 'asr_started': False})
+            if contiguous: break
+            continue
+        by_role = {}
+        for source in sources:
+            by_role.setdefault(source.get('role', 'lecture_material'), []).append(Path(source['path']))
+        build_source_pack(workspace, lecture, transcript_path=transcript,
+            materials=(by_role.get('lecture_material', []) + by_role.get('syllabus', [])) if prior else (),
+            personal_notes=next(iter(by_role.get('personal_notes', [])), None),
+            web_snapshots=by_role.get('web_snapshot', []))
+    return pending
+
+
 def _notes(arguments: argparse.Namespace) -> int:
     import sys
-    from .notes_run import run_notes, _transcript_boundary
+    from .notes_run import run_notes
     from .batch import load_batch_manifest
     workspace = Workspace.from_value(arguments.workspace)
     saved = load_batch_manifest(workspace, arguments.resume) if arguments.resume else {}
@@ -888,11 +942,11 @@ def _notes(arguments: argparse.Namespace) -> int:
         raise WorkflowError('Supply --lessons or --resume BATCH_ID')
     lectures = [f'{arguments.course.upper()}-L{n:02d}' for n in numbers]
     if not arguments.plan_only:
-        if arguments.contiguous_transcripts:
-            # The explicit no-gaps policy must not prepare a missing later
-            # lecture and accidentally initiate source work outside the prefix.
-            lectures, _ = _transcript_boundary(workspace, lectures)
-        _batch_preparation(workspace, lectures, plan_only=False)
+        pending = _notes_preparation(workspace, lectures, contiguous=arguments.contiguous_transcripts)
+        if pending and not arguments.contiguous_transcripts:
+            print(json.dumps({'status': 'NEEDS_TRANSCRIPT', 'lessons_needing_preparation': pending,
+                              'provider_invoked': False, 'asr_started': False}, ensure_ascii=False, indent=2))
+            return 2
     def progress(stage, detail):
         print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
     result = run_notes(workspace, arguments.course, numbers, resume=arguments.resume,
@@ -1014,6 +1068,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate_batch(arguments)
         if arguments.command == "notes":
             return _notes(arguments)
+        if arguments.command == 'import-generated-baseline':
+            from .generated_baseline import import_generated_baseline
+            result=import_generated_baseline(Workspace.from_value(arguments.workspace),arguments.course,
+                journal=arguments.journal,document=arguments.document)
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0
         if arguments.command == "recover-batch":
             from .local_recovery import recover_batch
             result=recover_batch(Workspace.from_value(arguments.workspace),arguments.batch_id,apply=arguments.apply)

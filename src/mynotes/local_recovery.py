@@ -142,31 +142,53 @@ def verify_local_receipt(path, root):
 
 
 def recover_batch(workspace,batch_id,*,apply=False):
-    from .batch import load_batch_manifest,_packs,_request,_continuity,_validate_group,_unchanged,generate_batch
+    from .batch import load_batch_manifest,_prepared_context,_request,_continuity,_validate_group,_unchanged,generate_batch
     from .batch_recovery import prompt_matches
     manifest=load_batch_manifest(workspace,batch_id)
     from .batch import BATCH_CONTRACT_VERSION
     if manifest.get('contract', 1) < BATCH_CONTRACT_VERSION:
         return _revalidate_organization(workspace, manifest, apply=apply)
-    packs,sources,inventory=_packs(workspace,manifest['lectures'])
+    packs,sources,inventory,context_sources=_prepared_context(workspace,manifest['lectures'],manifest.get('context_lessons'),
+        manifest.get('selection'),manifest.get('autonomous_organization',False))
     if sources!=manifest['sources']:raise ProviderError('Batch sources changed; recovery stopped')
+    if context_sources!=manifest.get('context_sources',{}):raise ProviderError('Batch context sources changed; recovery stopped')
     plan={**manifest,'packs':packs,'inventory':inventory,'requested':RequestedModel(**manifest['requested_model'])}
     _unchanged(plan)
     continuity=list(plan.get('prior_continuity',[]));diagnoses=[]
     for lessons in manifest['groups']:
         if all((workspace.runs_dir/l/'lecture_notes.candidate.json').exists() and json.loads((workspace.runs_dir/l/'lecture_notes.candidate.json').read_text()).get('batch_id') == batch_id for l in lessons):
             for lesson in lessons:
-                candidate=json.loads((workspace.runs_dir/lesson/'lecture_notes.candidate.json').read_text())
-                if candidate.get('source_pack_hash')!=sources[lesson]['sha256']:raise ProviderError('Existing candidate sources changed')
+                from .publication import _load_candidate
+                candidate,effective_pack=_load_candidate(workspace,lesson)
+                if candidate.get('source_pack_hash')!=sources[lesson]['sha256'] and effective_pack!=packs[lesson]:
+                    raise ProviderError('Existing candidate effective sources changed')
                 continuity.append(_continuity(lesson,candidate['notes']))
             continue
         from .batch_recovery import intent
         from .batch import _hash
         directory=workspace.runs_dir/'_batches'/batch_id/'generation-checkpoints'/_hash(intent(plan,lessons,continuity,reviewed=True))
+        if manifest.get('autonomous_organization'):
+            # A progressive ledger is updated after each writing result. Recover
+            # the original pre-writing source-bound intent, not that later ledger.
+            matches=[]
+            from .batch import _read
+            for snapshot in (workspace.runs_dir/'_batches'/batch_id/'generation-checkpoints').glob('*/request-intent.json'):
+                saved=_read(snapshot)
+                if (saved.get('lectures')==lessons and saved.get('sources')==sources
+                        and saved.get('continuity')==continuity
+                        and all(saved.get(k)==plan.get(k) for k in ('requested_model','style','course','context_sources'))):
+                    candidate_plan={**plan,'ownership':saved['ownership']}
+                    _,candidate_maps=_request(candidate_plan,lessons,snapshot.parent,continuity)
+                    if candidate_maps==saved.get('maps'):matches.append((snapshot.parent,candidate_plan))
+            if matches:
+                # Prefer the current recorded activity, otherwise the original
+                # bound checkpoint; repeated compatible receipts remain intact.
+                active=Path(manifest.get('activity',{}).get('checkpoint',''))
+                directory,plan=next((row for row in matches if row[0]==active),matches[0])
         if not directory.exists():
             diagnoses.append({'lessons':lessons,'status':'NOT_STARTED','next_action':'generate'});break
         request,maps=_request(plan,lessons,directory,continuity)
-        if not prompt_matches(directory,plan,plan,lessons,continuity):raise ProviderError('Original request identity cannot be verified')
+        if not manifest.get('autonomous_organization') and not prompt_matches(directory,plan,plan,lessons,continuity):raise ProviderError('Original request identity cannot be verified')
         response,receipt=recover_parts(request,directory,apply=False)
         parts_recovery = response is not None
         if response is None:
@@ -183,6 +205,10 @@ def recover_batch(workspace,batch_id,*,apply=False):
                 diagnoses.append({'lessons':lessons,'status':'NO_LOCAL_RECOVERY','next_action':'inspect_saved_result'});break
             receipt = {'transformations':[], 'active_seconds':None}
         started=__import__('time').monotonic()
+        if manifest.get('autonomous_organization'):
+            from .lesson_organization import integrate_decisions
+            ownership,_=integrate_decisions(response,plan,lessons[0],maps[lessons[0]])
+            plan={**plan,'ownership':ownership}
         from .generation_diagnostics import group_defects
         from .workflow import WorkflowError
         defects=group_defects(response,plan,lessons,maps)
@@ -230,6 +256,8 @@ def recover_batch(workspace,batch_id,*,apply=False):
             provider=manifest['requested_model']['provider'],quality=manifest['requested_model']['quality'],
             selection=manifest.get('selection'),budgets=manifest.get('budgets'),instructions=options.get('instructions',''),
             image_limit=options.get('image_limit'),speaker_focus=options.get('speaker_focus'),
+            context_lessons=manifest.get('context_lessons'),
+            autonomous_organization=manifest.get('autonomous_organization',False),
             batch_id=batch_id,provider_adapter=NoProvider(),pause_after=diagnoses[-1]['lessons'][-1],repair_missing=True)
         diagnoses[-1]['status']='CONTENT_RECOVERED'
     return {'batch_id':batch_id,'status':'CONTENT_RECOVERED' if apply and any(r['status']=='CONTENT_RECOVERED' for r in diagnoses) else 'DIAGNOSED',

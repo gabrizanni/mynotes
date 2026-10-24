@@ -127,6 +127,23 @@ def merge_section(base, current, generated, base_doc, current_doc, generated_doc
     for i, j, k, l in user:
         overlaps = [(x, y, z, w) for x, y, z, w in writer if _overlap(i, j, x, y)]
         if overlaps:
+            # A historical renderer may replace an entire XML section while
+            # retaining a paragraph's exact words. That uniquely unchanged
+            # paragraph is a deterministic anchor for the user's text/format
+            # additions, even though old/new paragraph styles differ. Never
+            # guess a corresponding paragraph from fuzzy topic similarity.
+            if len(overlaps) == 1 and j-i == l-k == 1:
+                x, y, z, w = overlaps[0]
+                original_text = _plain_text(base[i])
+                personal_text = _plain_text(current[k])
+                matches = [offset for offset, node in enumerate(generated[z:w])
+                           if original_text and _plain_text(node) == original_text]
+                if personal_text is not None and len(matches) == 1:
+                    replacement = next((nodes for left, right, nodes in operations if (left, right) == (x, y)), None)
+                    if replacement is not None:
+                        replacement[matches[0]] = deepcopy(current[k])
+                        preserved.append({'from': i, 'to': j, 'reason': 'Unique unchanged paragraph across renderer styles'})
+                        continue
             if len(overlaps) == 1 and j-i == l-k == 1:
                 x, y, z, w = overlaps[0]
                 if (i, j) == (x, y) and w-z == 1:
@@ -162,6 +179,17 @@ def _baseline(workspace, code, lecture, expected):
         path = Path(record['path'])
         if not path.is_file() or file_sha256(path) != record['sha256']:
             raise PublicationError('Generated Word baseline is missing or changed; personal edits cannot be compared safely')
+        if record.get('import_receipt'):
+            receipt_path=Path(record['import_receipt'])
+            if (not receipt_path.resolve().is_relative_to(workspace.archives_dir.resolve())
+                    or file_sha256(receipt_path)!=record.get('import_receipt_sha256')):
+                raise PublicationError('Generated baseline import receipt changed')
+            receipt=json.loads(receipt_path.read_text());journal=Path(receipt['journal'])
+            if (receipt.get('kind')!='verified_generated_baseline_import' or receipt.get('course_code')!=code
+                    or lecture not in receipt.get('lectures',[]) or receipt.get('document_sha256')!=record['sha256']
+                    or not journal.resolve().is_relative_to(workspace.archives_dir.resolve())
+                    or file_sha256(journal)!=receipt['journal_sha256']):
+                raise PublicationError('Generated baseline import provenance changed')
         return Document(path)
     target = _target(_course(workspace.configuration_store().load(), code), workspace)
     for transaction in _transactions(workspace, target):
@@ -189,6 +217,9 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
     baseline_hash = file_sha256(target) if target.is_file() else None
     current = Document(target) if target.is_file() else pub._new_document(course, pub.effective_style(workspace.configuration_store().load(), code))
     generated = Document(target) if target.is_file() else pub._new_document(course, pub.effective_style(workspace.configuration_store().load(), code))
+    # Existing handouts may predate the shared MyNotes style names. Configure
+    # the private generated copy exactly as the ordinary Word builder does.
+    pub._configure_document(generated, pub.effective_style(workspace.configuration_store().load(), code))
     sources, conflicts, preserved, applied = {}, {}, {}, []
     payloads = {}
     for lecture in lectures:

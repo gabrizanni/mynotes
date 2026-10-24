@@ -608,6 +608,18 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     requested = resolve_model(configuration, provider, quality)
     style = _style(configuration, code, instructions, image_limit)
     batch_id = code + "-" + _hash(lectures)[:12]
+    historical = workspace.runs_dir / '_batches' / batch_id / 'manifest.json'
+    if historical.is_file():
+        old_course = _read(historical).get('course')
+        def academic(value):
+            value = deepcopy(value)
+            value.pop('publication', None)
+            return value
+        if old_course and academic(old_course) == academic(course):
+            # Publication is an administrative choice read afresh by update.
+            # Keep the exact original writing snapshot, never invalidate paid
+            # content just because the user enabled review before delivery.
+            course = deepcopy(old_course)
     budget = budgets if isinstance(budgets, BatchBudget) else BatchBudget(**(budgets or {}))
     try:
         packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization)
@@ -1005,7 +1017,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                            "ownership": {key: choice for key, choice in plan["ownership"].items() if any(lecture in inventory[key]["occurrences"] for lecture in lectures)},
                                            "requested": plan["requested_model"], "style": plan["style"], "course": plan["course"],
                                            "budgets": plan["budgets"], "contract": plan["contract"], "generation_contract": plan["generation_contract"],
-                                           "prompt_contract": plan["prompt_contract"], "continuity": continuity})
+                                           "prompt_contract": plan["prompt_contract"], "continuity": continuity,
+                                           **({'autonomous_organization':True} if autonomous_organization else {})})
                 group_dir = root / "generation-checkpoints" / group_fingerprint
                 activity['checkpoint']=str(group_dir)
                 version_group = version_dir / f"group-{group_index:03d}"
@@ -1102,7 +1115,10 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         with phase_budget.track('local_checks'):
                             validated = _validate_group(response, runtime, lectures, maps, final_phase=phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
                     except (CoverageError, ContentRevisionError) as error:
-                        cached_repair = (group_dir/'coverage-repair/repair.json').is_file()
+                        retained_from = Path(origin['returned']).parent if origin and origin.get('returned') else None
+                        retained_repair = retained_from/'coverage-repair/repair.json' if retained_from else None
+                        cached_repair = ((group_dir/'coverage-repair/repair.json').is_file()
+                                         or bool(retained_repair and retained_repair.is_file()))
                         if not repair_missing or phase != "writing" or (phase_budget.remaining('coverage_repair') <= 0 and not cached_repair):raise
                         certified_base=group_dir/'certified-base.json'
                         if certified_base.exists():
@@ -1111,7 +1127,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         else:_save_generation_phase(certified_base,None,response)
                         activity={**activity,"status":"TARGETED_CORRECTION", "phase_budget":phase_budget.snapshot()};save_progress(problem={"kind":"COVERAGE","defects":error.defects})
                         with phase_budget.track('local_checks' if cached_repair else 'coverage_repair') as remaining:
-                            response,repair_lineage=repair_coverage(active,response,error.defects,maps,provider_adapter,remaining)
+                            response,repair_lineage=repair_coverage(active,response,error.defects,maps,provider_adapter,remaining,
+                                                                  retained_from=retained_from)
                         with phase_budget.track('local_checks'):
                             validated=_validate_group(response,runtime,lectures,maps,final_phase=True,continuity=continuity)
                         repair_lineage["base_response"]=str(certified_base)

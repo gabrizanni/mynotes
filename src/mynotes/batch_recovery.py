@@ -20,7 +20,9 @@ def intent(plan, lectures, continuity, *, reviewed=False):
     return {'lectures':lectures,'sources':{l:plan['sources'][l] for l in lectures},'ownership':ownership,
             'requested':plan['requested_model'],'style':plan['style'],'course':plan['course'],
             'budgets':plan['budgets'],'contract':plan['contract'],'generation_contract':plan['generation_contract'],
-            'prompt_contract':plan['prompt_contract'],'continuity':continuity, **({'context_sources':plan['context_sources']} if plan.get('context_sources') else {})}
+            'prompt_contract':plan['prompt_contract'],'continuity':continuity,
+            **({'autonomous_organization':True} if plan.get('autonomous_organization') else {}),
+            **({'context_sources':plan['context_sources']} if plan.get('context_sources') else {})}
 
 
 def equivalent_intent(old,plan,lectures,continuity):
@@ -401,7 +403,7 @@ def retained_correction(request, response, defects, maps):
     return replace(response, notes=apply_correction(response.notes, patch.notes, task)), receipt
 
 
-def repair_coverage(request,response,defects,maps,adapter,timeout):
+def repair_coverage(request,response,defects,maps,adapter,timeout,*,retained_from=None):
     """One hash-anchored correction of explicit defects, including replacements."""
     from .batch import _hash, _stage_visuals
     # A compatible response can bypass the new-writing branch that normally
@@ -409,6 +411,15 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
     _stage_visuals(request)
     directory=request.run_dir/'coverage-repair';directory.mkdir(parents=True,exist_ok=True)
     path=directory/'repair.json'
+    proof_directory = directory
+    if not path.exists() and retained_from is not None:
+        retained_from = Path(retained_from)
+        candidate = retained_from/'coverage-repair/repair.json'
+        if candidate.is_file():
+            if (retained_from.is_symlink() or not retained_from.resolve().is_relative_to(request.run_dir.parent.resolve())):
+                raise WorkflowError('Retained correction is outside its source-bound batch checkpoints')
+            path = candidate
+            proof_directory = candidate.parent
     task,schema,allowed=_correction_contract(request,response,defects,maps)
     base_hash=task["base_notes_sha256"]
     selected={'lecture_id':request.lecture_id,'course':request.source_pack.get('course',{}),
@@ -421,7 +432,7 @@ def repair_coverage(request,response,defects,maps,adapter,timeout):
                            response_schema=schema,run_dir=directory,timeout_seconds=timeout)
     if path.exists():
         saved=json.loads(path.read_text())
-        patch,normalization=_saved_correction(saved,repair_request,task,schema,directory)
+        patch,normalization=_saved_correction(saved,repair_request,task,schema,proof_directory)
     else:
         if (directory/'started.json').exists():raise WorkflowError('Targeted correction already attempted; inspect its retained attempt, no paid retry')
         revision = request.batch_context.get('revision_id')
@@ -529,7 +540,7 @@ def _notes_request_status(root):
     path=root/'notes-run.json'
     if not path.is_file():return None
     value=_read(path)
-    if value.get('status') in {'GENERATING','BUILDING_WORD','UPDATING_WORD','LOCAL_WORD_RETRY'}:
+    if value.get('status') in {'GENERATING','BUILDING_WORD','UPDATING_WORD','LOCAL_WORD_RETRY','RECOVERING_LOCALLY'}:
         try:os.kill(value['pid'],0)
         except (ProcessLookupError,KeyError):value={**value,'reported_status':value.get('status'),'status':'INTERRUPTED'}
         except PermissionError:value={**value,'reported_status':value.get('status'),'status':'STATUS_UNAVAILABLE','liveness':'permission_denied'}

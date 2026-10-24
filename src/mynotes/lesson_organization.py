@@ -76,11 +76,15 @@ def organization_revision(previous, plan):
             if choice:
                 affected.add(choice["owner"])
                 affected.update(choice.get("uses", {}))
-    if not changes and previous.get("contract") == plan.get("contract"):
+    integration_changed = bool(previous.get('autonomous_organization')) != bool(plan.get('autonomous_organization'))
+    if integration_changed:
+        affected.update(plan['lectures'])
+    if not changes and previous.get("contract") == plan.get("contract") and not integration_changed:
         return None
     return {"kind": "organization_revalidation", "previous_fingerprint": previous["fingerprint"],
             "fingerprint": plan["fingerprint"], "changes": changes, "affected_lessons": sorted(affected),
             "previous_contract": previous.get("contract"), "contract": plan["contract"],
+            "integrated_organization_migration": integration_changed,
             "reason": "Revalidate retained writing under revised organization; not an equivalent historical writing request."}
 
 

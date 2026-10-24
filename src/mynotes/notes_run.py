@@ -152,7 +152,9 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                   context_lessons=context_lessons if context_lessons is not None else saved.get('context_lessons'))
     # A settled legacy job keeps its exact historical writing request. New
     # requests integrate organization into the normal writing response.
-    autonomy = saved.get('autonomous_organization', not bool(saved))
+    # Explicit complete requests migrate unfinished historical placement too;
+    # generation retains and revalidates paid writing under a recorded revision.
+    autonomy = saved.get('autonomous_organization', True)
     plan = batch.plan_batch(workspace, code, numbers, autonomous_organization=autonomy, **kwargs)
     if plan_only:
         return {**plan, 'requested_lectures': original_lectures, 'warnings': boundary_warnings,
