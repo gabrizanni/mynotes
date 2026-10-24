@@ -57,8 +57,8 @@ def test_concrete_chat_request_retains_checks_and_recursion_guard(tmp_path, monk
     assert "Prepara OPS-L03" in prompt
     assert "For note generation run `mynotes doctor` and `mynotes status`" in prompt
     assert "the task's direct command for transcription" in prompt
-    assert "validate and visually inspect the word candidate" in prompt.lower()
-    assert "updates are automatic with safety backups unless the course publication mode is review" in prompt
+    assert "the user performs manual desktop and microsoft word checks" in prompt.lower()
+    assert "updates are automatic with safety backups unless the course publication mode is review" in prompt.lower()
     assert "mynotes undo CODE" in prompt
     assert "--notes-file" in prompt
     assert "show it to the user and obtain their approval before publication" not in prompt
@@ -76,7 +76,7 @@ def test_agy_agent_is_self_contained_without_fragile_skill_dependency(tmp_path) 
     assert "run_command" in frontmatter
     assert "`mynotes doctor`" in agent
     assert "`mynotes status`" in agent
-    assert "visually review the Word" in agent
+    assert "Manual desktop and Microsoft Word checks belong to the user" in agent
     assert (Path(installed["path"]) / "skills" / "mynotes" / "SKILL.md").is_file()
 
 

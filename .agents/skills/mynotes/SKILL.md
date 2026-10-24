@@ -20,9 +20,15 @@ or identity choices; do not start pending-course questionnaires before completin
 the request. Offer deferred context only afterwards when useful or when the user
 asks for course setup. These defaults never bypass source validation, preservation of personal
 Word edits, course review mode or an actual authorization requirement.
-For source preparation and candidate-only diagnostic work use these commands in MYNOTES_WORKSPACE:
-`mynotes prepare COURSE-LNN`, `mynotes generate COURSE-LNN`, then
-`mynotes update COURSE-LNN`. The final command creates missing output folders.
+For a complete notes request use `mynotes notes CODE --lessons RANGE` or
+`mynotes notes CODE --resume BATCH_ID` in MYNOTES_WORKSPACE. Use `prepare` only
+for missing or changed relevant sources. `generate` and `build` are diagnostic
+candidate commands; `update` publishes validated content to the course Word.
+Do not use Computer Use or operate desktop apps, terminal windows, browsers or
+microphones as a routine verification step. The user performs graphical and
+usability checks. Only a new explicit request for a specific graphical action
+changes this rule. Source-image inspection and automated headless DOCX/render
+checks remain part of normal source review; never claim a manual check was done.
 A source pack is at runs/COURSE-LNN/source_pack.json; its sources list identifies
 an imported_transcript path, reusable with `prepare COURSE-LNN --transcript PATH`.
 Inspect source inventory and freshness to route the task. Read the relevant
@@ -217,6 +223,23 @@ unknown evidence, invented citations and missing substantive content remain defe
 Do not stop merely to ask about recoverable technical steps, slide organization,
 or a saved preference. Deliver all verified requested work and report real remaining
 external blockers precisely. Keep the terminal/chat open while the job runs.
+An accepted request is owned through its full requested lesson range and Word
+delivery. A background launch, plan, checkpoint or first finished batch is not
+completion. Monitor the specific live job, consume its result and continue the
+next authorized batch; do not hand the task back after saying it was started.
+When an error occurs, inspect the same batch with `batch-status`, then use
+`recover-batch BATCH_ID --json`. Apply --apply only to LOCALLY_RECOVERABLE work
+and resume `notes CODE --resume BATCH_ID`. Reuse successful writing/corrections;
+a local metadata, validation or rendering exception does not prove the provider
+failed. Do not propose lowering effort, switching model, skipping uncovered
+slides or restarting whole-lesson writing as alternatives to local recovery.
+Resolve recoverable technical choices and slide placement yourself, report them
+briefly after delivery, and ask only for genuinely missing sources, an unresolved
+personal-content contradiction, explicit review-mode approval or a real access
+block. Never bypass these limits or loop paid attempts to promise completion.
+Manual application/Word checks belong to the user and do not require you to take
+control of their desktop. Finish the automated delivery and report which manual
+checks remain unperformed, without turning that into another permission menu.
 
 Courses created from Capture can be used for recording before their context is complete.
 After completing the operational request, or when the user asks for course setup,
@@ -252,9 +275,11 @@ as practice, not as questions attributed to the lecturer.
 If a requested link cannot be opened with available tools, disclose that precise
 limitation and continue with accessible local sources. Do not invent the linked
 content or make browser access a prerequisite for the whole task.
-Complete a guide only after content review, DOCX validation, actual page review
-and a real Microsoft Word check. Report missing checks explicitly. A failed
-render or shallow content is not a successful delivery. Preserve originals.
+Deliver the guide after content review and automated DOCX/render validation.
+The user performs the manual page/application and Microsoft Word checks; do not
+operate their desktop for those checks or claim they passed. Report their exact
+unverified status while still delivering the usable Word. A failed render or
+shallow content is not a successful delivery. Preserve originals.
 Use `mynotes study-verify PATH.docx` to render/validate the guide. Record
 --editorial-reviewed, --visual-reviewed and --word-verified only after those
 checks were actually performed; --no-render reuses an intact previous render.
@@ -315,15 +340,18 @@ they do not overwrite persistent course instructions. Image limits use
 --image-limit; inspecting a source figure for numeric table accuracy is still
 required even when the output has no figures. Keep standard quality as one
 writing phase, apply requested quality levels, and review only actual defects.
-Never edit MyNotes implementation files or the installed runtime to get past a
-failure. Never accept an Agy ERROR envelope, weaken slide-coverage checks or count
-a heading as an explanation. Preserve the attempt and report the precise error.
+Use supported local recovery for metadata, checkpoint and Word errors; do not
+edit MyNotes implementation, the installed runtime, raw responses or receipts
+to turn a failure into success. Never accept an Agy ERROR envelope, weaken
+slide-coverage checks or count a heading or unrelated citation as explanation.
+Preserve the attempt. Diagnosis is an intermediate step: continue the verified
+recovery path before reporting a genuinely unresolved external blocker.
 Do not restart paid generation repeatedly or change model/effort without the
 user's instruction. Requested settings are not proof of actual returned settings.
 A successful writing transport retained after local validation failure must be
 reviewed locally instead of regenerated. Standard uses one writing phase.
 The writer permits only one automatic recovery from a temporary connection error,
-with the same model and checkpoints, within the durable 20-minute writing-phase allowance. Writing and one necessary managed correction each have an independent 20-minute allowance, plus 2 minutes for local checks and Word; resuming never resets consumption. Do not add another
+with the same model and checkpoints, within the durable 20-minute writing-phase allowance. Writing and one necessary managed correction each have an independent 20-minute allowance; local validation has 2 minutes and Word rendering has its own separate local timeout. Resuming never resets consumption. Do not add another
 coordinator retry on top of it. Use `mynotes batch-status BATCH_ID --json` to read
 actual progress; do not inspect implementation files or issue repeated Python probes.
 Never say a process is running after its command failed unless batch-status shows

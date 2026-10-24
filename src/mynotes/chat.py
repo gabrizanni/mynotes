@@ -86,11 +86,10 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             context + style_guidance + "Handle this user request: " + message + ". Before taking action, run "
             "the task's direct command for transcription and course setup. For note generation run "
             "`mynotes doctor` and `mynotes status` through the command tool for this workspace; "
-            "if either cannot run, report that and stop. Then inspect only task-relevant files. "
+            "If a check cannot run, resolve the saved workspace or managed launcher locally first; do not bypass an unresolved required check. Then inspect only task-relevant files. "
             "Execute the requested task directly with sensible defaults; ask only for indispensable missing identification or sources; respect review mode and external-edit checks. "
-            "For ordinary complete lecture notes, prepare missing relevant sources then run mynotes notes CODE --lessons RANGE (or --resume BATCH_ID). The diagnostic candidate-only path is prepare -> generate -> update. For quiz/study guides use the standalone study path; "
-            "for transcription use only the direct transcription path. Validate and visually inspect the Word "
-            "candidate and the resulting Word; updates are automatic with safety backups unless the course publication mode is review. In review mode show the candidate and obtain explicit user approval before publication. Never launch `mynotes chat` recursively."
+            "For ordinary complete lecture notes, prepare missing relevant sources then run mynotes notes CODE --lessons RANGE (or --resume BATCH_ID). Candidate diagnostics use prepare/generate/build; update is publication. For quiz/study guides use the standalone study path; "
+            "for transcription use only the direct transcription path. Validate the sources and automated DOCX/render results; the user performs manual desktop and Microsoft Word checks. Do not use Computer Use for routine verification. Updates are automatic with safety backups unless the course publication mode is review. In review mode show the candidate and obtain explicit user approval before publication. Never launch `mynotes chat` recursively."
         )
     else:
         prompt = (
@@ -99,11 +98,10 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             "or explore the repository before the user asks. When a concrete task arrives, execute it directly with sensible defaults without asking unnecessary onboarding questions. Use "
             "the task's direct command for transcription or course setup. For note generation use "
             "the command tool to run `mynotes doctor` and `mynotes status` for this workspace; "
-            "if either cannot run, report that and stop. Inspect only relevant sources, then for lecture work follow "
-            "mynotes notes CODE --lessons RANGE (or --resume BATCH_ID) through verified Word delivery and course update. Use prepare -> generate -> update only for explicit diagnostic/candidate-only tasks. Ask for explicit user approval only in course publication mode review; otherwise update directly. "
+            "If a check cannot run, resolve the saved workspace or managed launcher locally first; do not bypass an unresolved required check. Inspect only relevant sources, then for lecture work follow "
+            "mynotes notes CODE --lessons RANGE (or --resume BATCH_ID) through verified Word delivery and course update. Candidate diagnostics use prepare/generate/build; update is publication. The user performs manual desktop checks; do not use Computer Use for routine verification. Ask for explicit user approval only in course publication mode review; otherwise update directly. "
             "Never launch `mynotes chat` recursively."
         )
-    prompt += TASK_PRIORITY_GUIDANCE
     overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
     if selected == "agy":
         command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]

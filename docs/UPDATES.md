@@ -261,3 +261,15 @@ including checks of historical prepared packs before a contiguous notes run.
 This entry describes the local implementation; it does not certify hosted CI,
 public release, a personal installation or completed real-provider runs.
 
+
+## Agent instructions correction after the local 0.2.28 update
+
+Complete notes requests stay with the coordinator through their requested lesson
+range and Word delivery. Recoverable transport/render errors route through saved
+status and local recovery, without offering model downgrades, slide omissions or
+whole-lesson paid rewrites. Candidate creation and publication are distinguished.
+Manual application and Microsoft Word checks belong to the user; routine Computer
+Use is excluded. The writer checks actual slide explanations within its existing
+writing phase rather than treating unrelated citations as coverage. Startup text
+and managed exports carry the same instructions without the duplicate priority block.
+This is an instructions-only correction, not a new generation or public release.
