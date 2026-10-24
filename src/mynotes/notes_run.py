@@ -64,6 +64,9 @@ def _transcript_boundary(workspace, lectures):
         # TXT remains usable, but its length is not an audio completeness test.
         descriptors = [pack, pack.get('transcript', {}), pack.get('transcription', {}),
                        *pack.get('sources', [])]
+        from .sourcepack import _recording_coverage
+        descriptors.extend(_recording_coverage(workspace, Path(row['path'])) or {}
+                           for row in pack.get('sources', []) if row.get('role') == 'imported_transcript')
         partial = any(isinstance(row, dict) and (
             row.get('partial') is True or row.get('coverage_complete') is False
             or row.get('coverage_warning') or row.get('coverage_warnings')) for row in descriptors)

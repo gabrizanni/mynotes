@@ -253,6 +253,10 @@ Successful Agy corrections containing descriptive finish-tool metadata can be
 recovered locally without another paid call. Raw responses, original attempts,
 model allowances, personal edits and publication approval preferences remain
 protected. Rendering timeouts are independent of the model phase allowances.
+Cached speech must retain a verified binding to the current original audio;
+changed recordings never trigger implicit ASR. Explicit partial-coverage metadata
+and known Capture interruptions survive TXT edits and source-pack preparation,
+including checks of historical prepared packs before a contiguous notes run.
 
 This entry describes the local implementation; it does not certify hosted CI,
 public release, a personal installation or completed real-provider runs.

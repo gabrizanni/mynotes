@@ -153,6 +153,67 @@ def test_missing_transcript_does_not_start_asr(tmp_path, monkeypatch):
     assert pending[0]['reason'] == 'MISSING_TRANSCRIPT' and not pending[0]['asr_started']
 
 
+@pytest.mark.parametrize('changed', [False, True])
+def test_cached_transcript_requires_current_audio_identity(tmp_path, monkeypatch, changed):
+    from mynotes.cli import _notes_preparation
+    from mynotes.utils import file_sha256
+    ws, _, _ = workspace_and_deck(tmp_path, lessons=1, slides=2)
+    pack_path = ws.runs_dir / 'OPS-L01/source_pack.json'
+    pack = json.loads(pack_path.read_text())
+    material = tmp_path / 'material.txt'
+    material.write_text('Inventory buffers replenishment delays.')
+    pack['sources'] = [{'role': 'lecture_material', 'path': str(material), 'sha256': file_sha256(material)}]
+    audio = tmp_path / 'OPS_L01.wav'
+    audio.write_bytes(b'original synthetic recording')
+    digest = file_sha256(audio)
+    pack['sources'].append({'role': 'recording', 'path': str(audio), 'sha256': digest})
+    atomic_json_write(pack_path, pack)
+    cached = ws.runs_dir / 'OPS-L01/asr/transcript.json'
+    atomic_json_write(cached, {'status': 'COMPLETED', 'lecture_id': 'OPS-L01', 'audio_path': str(audio),
+        'audio_sha256': digest, 'segments': [{'id': 'T001', 'text': 'Inventory buffers replenishment delays.',
+                                            'start_seconds': 0, 'end_seconds': 3, 'speaker': 'UNKNOWN'}]})
+    # Force preparation while retaining the same selected sources.
+    pack['sources'][0]['sha256'] = 'stale material hash'
+    atomic_json_write(pack_path, pack)
+    before = pack_path.read_bytes()
+    if changed: audio.write_bytes(b'a different recording')
+    monkeypatch.setattr('mynotes.sourcepack.transcribe_audio', lambda *a, **k: pytest.fail('Notes cannot start ASR'))
+    pending = _notes_preparation(ws, ['OPS-L01'])
+    if changed:
+        assert pending[0]['reason'] == 'UNBOUND_CACHED_TRANSCRIPT' and not pending[0]['asr_started']
+        assert pack_path.read_bytes() == before
+    else:
+        assert pending == []
+        rebuilt = json.loads(pack_path.read_text())
+        assert any(s['role'] == 'recording' and s['sha256'] == digest for s in rebuilt['sources'])
+
+
+def test_import_preserves_declared_partial_coverage_boundary(tmp_path):
+    from mynotes.sourcepack import build_source_pack
+    ws, _, _ = workspace_and_deck(tmp_path, lessons=1, slides=2)
+    transcript = tmp_path / 'partial.json'
+    atomic_json_write(transcript, {'lecture_id': 'OPS-L01', 'partial': True, 'coverage_complete': False,
+        'coverage_warning': 'Opening thirty minutes missing', 'segments': [{'id': 'T001',
+        'text': 'Inventory buffers replenishment delays.', 'start_seconds': 0, 'end_seconds': 3}]})
+    build_source_pack(ws, 'OPS-L01', transcript_path=transcript)
+    usable, warnings = nr._transcript_boundary(ws, ['OPS-L01'])
+    assert usable == [] and warnings[0]['code'] == 'PARTIAL_TRANSCRIPT'
+
+
+def test_edited_capture_txt_retains_known_partial_recording_coverage(tmp_path, monkeypatch):
+    from mynotes.sourcepack import build_source_pack
+    ws, _, _ = workspace_and_deck(tmp_path, lessons=1, slides=2)
+    transcript = tmp_path / 'renamed.txt'
+    transcript.write_text('Edited user transcript of a recovered partial recording.')
+    monkeypatch.setattr('mynotes.recording_library.options', lambda _: {'folder': str(tmp_path)})
+    monkeypatch.setattr('mynotes.transcript_library.scan', lambda *a, **k: [
+        {'path': str(transcript), 'recording_id': 'partial-recording'}])
+    monkeypatch.setattr('mynotes.recording_library.records', lambda _: {
+        'partial-recording': {'id': 'partial-recording', 'partial': True, 'capture_reason': 'Recovered after interruption'}})
+    build_source_pack(ws, 'OPS-L01', transcript_path=transcript)
+    assert nr._transcript_boundary(ws, ['OPS-L01'])[0] == []
+
+
 def test_autonomous_recovery_accepts_bound_effective_context_without_writes(tmp_path):
     from test_autonomous_organization import prepared, IntegratedWriter
     from mynotes.local_recovery import recover_batch

@@ -179,6 +179,21 @@ def validate_source_pack(pack: dict[str, Any]) -> None:
             raise SourcePackError("Transcript timestamps must be ordered and non-negative")
 
 
+def _recording_coverage(workspace, transcript_path):
+    """Read known coverage without altering transcripts or the catalogue."""
+    from .recording_library import records as audio_records, options as library_options
+    known_recordings = audio_records(workspace)
+    coverage_recording = next((row for row in known_recordings.values() if any(
+        value and Path(value).resolve() == transcript_path.resolve()
+        for value in (row.get('export_text'), row.get('transcript_json')))), None)
+    if coverage_recording is None and transcript_path.suffix.casefold() == '.txt' and library_options(workspace).get('folder'):
+        from .transcript_library import scan as scan_transcripts
+        match = next((row for row in scan_transcripts(workspace, persist=False)
+                      if Path(row['path']).resolve() == transcript_path.resolve()), None)
+        coverage_recording = known_recordings.get(match.get('recording_id')) if match else None
+    return coverage_recording
+
+
 def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str | None = None) -> dict[str, Any]:
     """Import a normalized transcript without running ASR or changing its source."""
     if not path.is_file():
@@ -241,7 +256,8 @@ def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str |
         "source_path": str(path),
         "source_sha256": descriptor["sha256"],
         "segments": segments,
-        **{key: payload[key] for key in ('quality_summary', 'quality_warnings', 'completion_policy', 'human_verified', 'timestamp_quality') if key in payload},
+        **{key: payload[key] for key in ('quality_summary', 'quality_warnings', 'completion_policy', 'human_verified', 'timestamp_quality',
+                                        'partial', 'coverage_complete', 'coverage_warning', 'coverage_warnings') if key in payload},
     }
 
 
@@ -385,6 +401,12 @@ def _build_source_pack_locked(
         original = json.loads(transcript_path.read_text()) if bound_recording_id else None
         origin_id = original.get("lecture_id", "").removeprefix("_recordings/") if original else None
         transcript_manifest = _import_transcript(transcript_path, lecture_id, bound_recording_id=origin_id)
+        # TXT edits do not erase known recording coverage loss.
+        coverage_recording = _recording_coverage(workspace, transcript_path)
+        if coverage_recording and coverage_recording.get('partial') is True:
+            transcript_manifest.update(partial=True, coverage_complete=False,
+                coverage_warning=coverage_recording.get('capture_reason') or 'Recording has partial coverage',
+                coverage_recording_id=coverage_recording['id'])
         if bound_recording_id:
             transcript_manifest["capture_recording_id"] = bound_recording_id
             transcript_manifest['association'] = {key:recording.get(key) for key in

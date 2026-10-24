@@ -912,11 +912,25 @@ def _notes_preparation(workspace, lectures, *, contiguous=False):
                 if contiguous: break
                 continue
             if matches: transcript = Path(matches[0]['path'])
-        if transcript is None:
+        bound_audio = None
+        cached = workspace.runs_dir / lecture / 'asr/transcript.json'
+        if transcript is None or transcript.resolve() == cached.resolve():
             # A cached normalized transcript can be reused, without running an
-            # engine. Prefer explicitly selected/user TXT sources above.
-            cached = workspace.runs_dir / lecture / 'asr/transcript.json'
-            if cached.is_file(): transcript = cached
+            # engine, only while its original audio identity is still proven.
+            # Prefer explicitly selected/user TXT sources above.
+            if cached.is_file():
+                payload = _load_json(str(cached))
+                recordings = [Path(s['path']) for s in sources if s.get('role') == 'recording']
+                candidate = recordings[0] if len(recordings) == 1 else Path(payload.get('audio_path') or '')
+                if (len(recordings) <= 1 and payload.get('status') == 'COMPLETED'
+                        and payload.get('lecture_id') == lecture and candidate.is_file()
+                        and payload.get('audio_sha256') == file_sha256(candidate)):
+                    transcript, bound_audio = cached, candidate
+                else:
+                    pending.append({'lecture_id': lecture, 'reason': 'UNBOUND_CACHED_TRANSCRIPT',
+                                    'provider_invoked': False, 'asr_started': False})
+                    if contiguous: break
+                    continue
         if transcript is None:
             pending.append({'lecture_id': lecture, 'reason': 'MISSING_TRANSCRIPT', 'provider_invoked': False, 'asr_started': False})
             if contiguous: break
@@ -924,7 +938,7 @@ def _notes_preparation(workspace, lectures, *, contiguous=False):
         by_role = {}
         for source in sources:
             by_role.setdefault(source.get('role', 'lecture_material'), []).append(Path(source['path']))
-        build_source_pack(workspace, lecture, transcript_path=transcript,
+        build_source_pack(workspace, lecture, audio=bound_audio, transcript_path=transcript,
             materials=(by_role.get('lecture_material', []) + by_role.get('syllabus', [])) if prior else (),
             personal_notes=next(iter(by_role.get('personal_notes', [])), None),
             web_snapshots=by_role.get('web_snapshot', []))
