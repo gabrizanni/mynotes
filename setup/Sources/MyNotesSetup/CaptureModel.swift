@@ -27,6 +27,28 @@ import Combine
     private var revision: UInt64 = 0
     private var libraryDirty = false
     private var lastPoll = Date.distantPast
+    private var recoveryAttempted = false
+    @Published private(set) var recorderRecoveryBlocked = false
+    private let examIsRunning: () -> Bool
+
+    init(examIsRunning: @escaping () -> Bool = {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.digiexam.student" }
+    }) {
+        self.examIsRunning = examIsRunning
+    }
+
+    // Restore only from the foreground UI. Never compete with an exam app or
+    // repeatedly bootstrap a broken service; a deliberate retry remains available.
+    @discardableResult func restoreRecorderIfNeeded(retry: Bool = false) async -> Bool {
+        guard !isPreview, !busy, !queueBusy, !stopping, refreshWarning == nil, let snapshot else { return false }
+        let blocked = examIsRunning()
+        if recorderRecoveryBlocked != blocked { recorderRecoveryBlocked = blocked }
+        guard !blocked else { return false }
+        if snapshot.running == true { recoveryAttempted = false; return true }
+        guard snapshot.enabled, snapshot.running == false, retry || !recoveryAttempted else { return false }
+        recoveryAttempted = true
+        return await perform("enable")
+    }
 
     var pollingInterval: TimeInterval {
         if pendingRequest != nil || snapshot?.isRecording == true || snapshot?.isExporting == true
@@ -197,7 +219,18 @@ import Combine
         }
     }
     @discardableResult func perform(_ action: String, arguments: [String] = [], payload: [String: Any]? = nil) async -> Bool {
-        guard !busy, !queueBusy, !isPreview else { return false }
+        guard !busy, !queueBusy, !stopping, !isPreview else { return false }
+        if ["enable", "start"].contains(action) && examIsRunning() {
+            recorderRecoveryBlocked = true
+            error = "Chiudi Digiexam prima di riattivare Capture. Il calendario e gli audio restano conservati."
+            return false
+        }
+        if action == "start", snapshot?.running == false {
+            guard await restoreRecorderIfNeeded(retry: true) else {
+                if error == nil { error = "Impossibile riavviare Capture. Usa Riavvia Capture nelle opzioni e riprova." }
+                return false
+            }
+        }
         invalidateReads(); let version = revision
         busy = true; error = nil; notice = nil
         defer { busy = false; if version != revision { refreshAfterCommand() } }

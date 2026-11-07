@@ -24,9 +24,20 @@ destra. Il logo Capture, i colori MyNotes e i controlli macOS restano coerenti.
 - **Registra ora:** corso, numero e durata; invio del comando al registratore.
   Una richiesta PENDING viene mostrata come non confermata, senza simulare REC.
 
-I pulsanti di attivazione, pausa, ripresa e stop agiscono solo quando premuti.
-Aprire la scheda non abilita il registratore né avvia acquisizioni. Le richieste
-lunghe sono asincrone; polling locale ogni 15 secondi soltanto con scheda attiva.
+Alla riapertura o riattivazione di MyNotes, anche nella scheda principale,
+il servizio Capture viene ripristinato se era già abilitato ma risulta fermo.
+Una disattivazione esplicita resta rispettata e il calendario in pausa resta in
+pausa. Con Digiexam aperto il ripristino è sospeso: chiuderlo e tornare a MyNotes
+consente il recupero. Nessun processo aggiuntivo tenta di tenere Capture aperto
+in background; il polling della scheda legge soltanto lo stato.
+
+**Riavvia Capture** nelle opzioni permette di riprovare dopo un errore.
+**Registra ora** può riavviare un servizio fermo prima di inviare la richiesta;
+i vecchi flag di registrazione di un processo terminato non bloccano il pulsante.
+Un errore di avvio conserva la precedente preferenza di attivazione. Il recupero
+non ricrea audio di lezioni perse: registra soltanto nelle finestre ancora valide,
+secondo il calendario esistente. Le richieste lunghe sono asincrone; polling
+locale ogni 15 secondi soltanto con scheda attiva.
 
 ## Contratto e persistenza
 
