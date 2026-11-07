@@ -13,6 +13,7 @@ repeat only after a relevant configuration change or failure. For a complete not
 silently drop evidence, overwrite an externally edited Word, or launch `mynotes chat`
 from inside this session. Use `redo` only when the user explicitly requests a rewrite.
 Private recordings, notes, paths and credentials must remain in the private workspace.
+PROGRESS CHECK / LOOP RECOVERY: Continue while making useful progress; elapsed time alone is not a reason to stop. If you notice repeated identical reads, plans, tool errors or reasoning without new source-grounded content, break that loop now: identify the last completed section/checkpoint, choose a different permitted approach and continue with the next missing topic. Preserve valid completed work; do not restart the whole lesson, repeat paid generation, change model, weaken validation or omit required sources. If a real external blocker remains after a different approach, preserve the checkpoint and report the specific blocker. This is a progress reminder, not permission for extra tools or retries; keep the required response schema.
 
 A concrete operational request takes precedence over optional setup. Reuse saved
 courses, folders, languages and style. Ask only for indispensable missing source
@@ -351,7 +352,7 @@ user's instruction. Requested settings are not proof of actual returned settings
 A successful writing transport retained after local validation failure must be
 reviewed locally instead of regenerated. Standard uses one writing phase.
 The writer permits only one automatic recovery from a temporary connection error,
-with the same model and checkpoints, within the durable 20-minute writing-phase allowance. Writing and one necessary managed correction each have an independent 20-minute allowance; local validation has 2 minutes and Word rendering has its own separate local timeout. Resuming never resets consumption. Do not add another
+with the same model and checkpoints. Writing and one necessary managed correction have no fixed elapsed-time cutoff: continue while making useful progress. If repeated actions stop producing progress, use the loop-recovery reminder and continue from the last valid checkpoint with a different permitted approach. Local validation retains its 2-minute limit and Word rendering its separate local timeout. Resuming preserves actual consumption. Do not add another
 coordinator retry on top of it. Use `mynotes batch-status BATCH_ID --json` to read
 actual progress; do not inspect implementation files or issue repeated Python probes.
 Never say a process is running after its command failed unless batch-status shows
@@ -361,7 +362,7 @@ Never edit returned JSON, source citations or receipt hashes to satisfy coverage
 Only the managed, separately recorded hash-anchored targeted correction may fix
 a real gap or defective passage, including replacements and moves. At most one
 automatic correction per affected lesson and revision is allowed, within the
-remaining independent 20-minute correction allowance and requested model settings; no nested paid retries.
+same saved correction checkpoint and requested model settings; no nested paid retries.
 Before resuming a stopped batch, consult `mynotes recover-batch BATCH_ID --json`.
 This is local diagnosis, not another model call. Apply --apply only for a verified
 LOCALLY_RECOVERABLE result; a process failure stays preserved in a separate record.
