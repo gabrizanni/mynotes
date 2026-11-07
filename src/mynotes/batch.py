@@ -765,7 +765,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 notes['evidence_coverage'].append({'evidence_id': identifier, 'disposition': 'excluded', 'reason': reason})
             if identifier in available_visuals and identifier not in visuals:
                 notes['visual_decisions'].append({'evidence_id': identifier, 'decision': 'exclude', 'reason': reason, 'inspected': False})
-        notes = _validate_candidate_notes(notes, lecture, pack, source_root=Path(plan["sources"][lecture]["path"]).parent,
+        notes = _validate_candidate_notes(notes, lecture, pack, source_root=Path(plan["sources"][lecture]["path"]).parent.parent,
                                           style=plan["style"], final_phase=final_phase)
         if plan["style"].get("image_limit") is not None and sum(v.get("decision") == "include" for v in notes["visual_decisions"]) > plan["style"]["image_limit"]:
             raise WorkflowError("Batch lesson exceeds its image limit")
