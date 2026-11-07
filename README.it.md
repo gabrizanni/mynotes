@@ -78,3 +78,7 @@ Gli strumenti di compilazione servono solo sul computer che crea il pacchetto. I
 Il flusso abituale è `prepare → generate → update`; `build` e `publish` restano disponibili separatamente per la modalità con anteprima. Il sistema conserva provenienza delle fonti, usa contratti JSON per i candidati, crea formule Word modificabili e protegge la pubblicazione da modifiche concorrenti e lezioni duplicate. [Script](scripts/README.md) · [Verifiche effettuate e mancanti](docs/VALIDATION.md) · [Aggiornamenti e rollback](docs/UPDATES.md).
 
 [Licenza MIT](LICENSE) · [Licenze di terze parti](THIRD_PARTY_NOTICES.md) · [Gabriele Zanni](https://github.com/gabrizanni)
+
+## Flusso di sviluppo
+
+[Contributing](CONTRIBUTING.md) · [Git and GitHub](docs/GIT_WORKFLOW.md)

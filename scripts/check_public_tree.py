@@ -12,6 +12,11 @@ from zipfile import BadZipFile, ZipFile
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_FILES = (
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    ".github/pull_request_template.md",
+    "docs/GIT_WORKFLOW.md",
+    "docs/SOFT_PROGRESS_POLICY.md",
     ".github/workflows/ci.yml",
     ".agents/skills/mynotes/SKILL.md",
     ".agents/skills/mynotes/.mynotes-integration.json",
