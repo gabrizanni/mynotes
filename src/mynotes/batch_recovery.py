@@ -617,9 +617,9 @@ def batch_status(workspace,batch_id):
                     blocked.extend(value.get('model_block_reasons',[]))
         if has_phases:
             from .generation_budget import MODEL_PHASE_SECONDS, LOCAL_CHECK_SECONDS
-            row['phase_budget']={'used_seconds':phases, 'phase_limit_seconds':MODEL_PHASE_SECONDS,
+            row['phase_budget']={'used_seconds':phases, 'phase_limit_seconds':None, 'model_timeout_policy':'soft_progress',
                 'local_check_limit_seconds':LOCAL_CHECK_SECONDS, 'model_block_reasons':sorted(set(blocked)),
-                'remaining_from_saved_accounting':{phase:0 if blocked and phase!='local_checks' else max(0,limit-phases.get(phase,0))
+                'remaining_from_saved_accounting':{phase:0 if blocked and phase!='local_checks' else (None if phase!='local_checks' else max(0,limit-phases.get(phase,0)))
                     for phase,limit in [('writing',MODEL_PHASE_SECONDS),('coverage_repair',MODEL_PHASE_SECONDS),('local_checks',LOCAL_CHECK_SECONDS)]}}
         row['active_seconds']=max([v for v in [*budgets,row.get('active_seconds')] if v is not None],default=None)
     notes_request=_notes_request_status(root)

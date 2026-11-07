@@ -170,7 +170,7 @@ def test_correction_attachments_need_real_narrative_and_preserve_text():
     {'event':'step_update','step_update':{'step_index':1,'step_type':'tool','state':'DONE'}},
     {'event':'init','conversation_id':'same-conversation'},
 ])
-def test_duplicate_activity_does_not_reset_idle_watchdog(tmp_path,event):
+def test_duplicate_activity_triggers_one_soft_reminder_without_hiding_bad_exit(tmp_path,event):
     code='''import sys,json,time
 sys.stdin.readline()
 for i in range(25):
@@ -178,7 +178,10 @@ for i in range(25):
  time.sleep(.02)
 '''.replace('EVENT',repr(event))
     start=time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=2,first_seconds=.12)
+    events=[]
+    with pytest.raises(a.ProviderError,match='without a complete terminal result'):
+        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=2,first_seconds=.12,on_event=events.append)
+    assert len([e for e in events if e['event']=='progress_reminder']) == 1
     assert time.monotonic()-start<1
 
 

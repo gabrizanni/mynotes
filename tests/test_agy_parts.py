@@ -255,3 +255,22 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
     assert result.returncode==0 and time.monotonic()-start<2
     status=subprocess.run(['ps','-p',pid.read_text(),'-o','stat='],capture_output=True,text=True).stdout.strip()
     assert not status or status.startswith('Z')
+
+
+
+def test_idle_reminder_does_not_queue_an_extra_model_turn(tmp_path):
+    code = "import json,sys,time,select\nsys.stdin.readline()\ntime.sleep(.5)\nassert not select.select([sys.stdin],[],[],0)[0], 'Reminder queued paid work'\nprint(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)\n"
+    events=[]
+    result=a.run_session([sys.executable,'-u','-c',code],'first',lambda value:None,
+        cwd=str(tmp_path),env=dict(os.environ),first_seconds=.1,on_event=events.append)
+    assert result.returncode == 0
+    assert len([event for event in events if event['event']=='progress_reminder']) == 1
+
+
+def test_explicit_total_deadline_still_cleans_up_and_preserves_reminder(tmp_path):
+    code = 'import sys,time;sys.stdin.readline();time.sleep(60)'
+    events=[]
+    with pytest.raises(subprocess.TimeoutExpired):
+        a.run_session([sys.executable,'-u','-c',code],'first',lambda value:None,
+            cwd=str(tmp_path),env=dict(os.environ),first_seconds=.1,total_seconds=.6,on_event=events.append)
+    assert any(event['event']=='progress_reminder' for event in events)

@@ -9,6 +9,7 @@ validating academic evidence before any result can be published to Word.
 from __future__ import annotations
 
 import json
+import math
 import hashlib
 import os
 import re
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from .execution import AttemptStart, timestamp
-from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout
+from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout, SOFT_PROGRESS_MESSAGE
 from .utils import atomic_json_write, now_compact_utc
 from .provider_limits import CommandSizeError, validate_command_size
 
@@ -274,6 +275,10 @@ def _context(request: ProviderRequest) -> str:
 
 
 def _prompt(request: ProviderRequest, *, context: str | None = None) -> str:
+    return SOFT_PROGRESS_MESSAGE + "\n" + _prompt_body(request, context=context)
+
+
+def _prompt_body(request: ProviderRequest, *, context: str | None = None) -> str:
     if request.phase == "coverage_repair":
         return ("Correct ONLY the explicit source or organization defects in the supplied repair task. "
                 "Return hash-anchored insertions/attachments or replacements, moves and deletions of explicitly editable blocks via finish. Preserve every unrelated passage; do not rewrite the whole lesson. "
@@ -606,7 +611,7 @@ class CodexAdapter:
         try:
             environment = provider_environment()
             validate_command_size(command, environment)
-            completed = subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False,
+            completed = subprocess.run(command, text=True, capture_output=True, timeout=None if math.isinf(timeout) else timeout, check=False,
                 cwd=str(request.run_dir.resolve()) if request.run_dir is not None else None, env=environment)
         except CommandSizeError as error:
             self._raise(request, command, None, started, str(error), invocation_started=False)
@@ -762,7 +767,7 @@ def _run_agy_worker(command: list[str], *, timeout: float, cwd: str, env: dict[s
                 raise ProviderCancelledError("Note generation interrupted by user")
             previous = signal.signal(signal.SIGTERM, interrupted)
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            stdout, stderr = process.communicate(timeout=None if math.isinf(timeout) else timeout)
             return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         except BaseException as error:
             try:
@@ -898,7 +903,7 @@ class ClaudeAdapter:
         try:
             environment = provider_environment()
             validate_command_size(command, environment)
-            completed = subprocess.run(command, text=True, capture_output=True, timeout=timeout,
+            completed = subprocess.run(command, text=True, capture_output=True, timeout=None if math.isinf(timeout) else timeout,
                 check=False, cwd=str(request.run_dir.resolve()) if request.run_dir is not None else None,
                 env=environment)
         except CommandSizeError as error:
