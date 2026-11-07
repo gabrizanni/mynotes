@@ -34,3 +34,22 @@ workspace/
 /setup/.build/
 /setup/output/
 /.packaging/
+
+# Credentials and personal runtime artifacts
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.m4a
+*.mp3
+*.wav
+/.mynotes/
+/backups/
+/evidence/
+/local-recovery/

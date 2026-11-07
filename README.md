@@ -72,3 +72,7 @@ Build tools are required only on the packaging machine. The release builder comp
 The usual pipeline is `prepare → generate → update`; `build` and `publish` remain available separately for preview-first work. It retains source provenance, uses JSON contracts for candidates, writes editable Word equations, and guards publication against concurrent changes and duplicate lectures. [Models and coordinated generation](docs/GENERATION.md) · [Script reference](scripts/README.md) · [Validation evidence and pending acceptance](docs/VALIDATION.md) · [Updates and rollback](docs/UPDATES.md).
 
 [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Gabriele Zanni](https://github.com/gabrizanni)
+
+## Development workflow
+
+[Contributing](CONTRIBUTING.md) · [Git and GitHub](docs/GIT_WORKFLOW.md)
