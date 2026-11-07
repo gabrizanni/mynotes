@@ -357,12 +357,23 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
 }
 
 private struct MyNotesRootView: View {
+    @StateObject private var captureModel = CaptureModel()
+    @Environment(\.scenePhase) private var scenePhase
     @CaptureViewState<String> private var section = ProcessInfo.processInfo.environment["MYNOTES_INITIAL_SECTION"] == "capture" ? "capture" : "notes"
     var body: some View {
         TabView(selection: $section) {
             MyNotesHomeView(active: section == "notes").tabItem { Label("MyNotes", systemImage: "book.closed") }.tag("notes")
-            CaptureView(active: section == "capture").tabItem { Label("Capture", systemImage: "mic") }.tag("capture")
+            CaptureView(model: captureModel, active: section == "capture").tabItem { Label("Capture", systemImage: "mic") }.tag("capture")
         }.frame(minWidth: 1000, minHeight: 700).background(CaptureWindowLease().frame(width: 0, height: 0))
+        .task { await restoreCapture() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await restoreCapture() } }
+        }
+    }
+    private func restoreCapture() async {
+        guard ProcessInfo.processInfo.environment["MYNOTES_UI_PREVIEW"] != "1" else { return }
+        await captureModel.refresh(silent: captureModel.snapshot != nil)
+        await captureModel.restoreRecorderIfNeeded(retry: true)
     }
 }
 @main struct MyNotesSetup: App {
