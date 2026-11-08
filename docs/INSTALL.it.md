@@ -6,7 +6,7 @@ Il setup DMG richiede **Apple Silicon e macOS 14+**. Include Capture. La version
 
 1. Scarica il DMG desiderato da [GitHub Releases](https://github.com/gabrizanni/mynotes/releases).
 2. Aprilo, trascina **MyNotes** in **Applicazioni** e apri **MyNotes** da lì.
-3. Segui la preparazione dei componenti, scegli l’agente e premi **Apri la chat**.
+3. Apri **Impostazioni → Agenti AI**, prepara i componenti e scegli l’agente. Poi usa **Apri chat esterna** nella sidebar.
 
 Il setup prepara Python, pacchetti bloccati, trascrizione locale e strumenti Word nelle cartelle gestite da MyNotes. Non servono prima Python, Homebrew, Xcode o un agente ereditato da un altro progetto. La preparazione richiede internet e mostra l’avanzamento. Se chiudi l’app, i passaggi completati restano salvati; dopo un problema di rete o spazio puoi riprovare.
 

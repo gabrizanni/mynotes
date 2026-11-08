@@ -18,6 +18,7 @@ import Combine
     @Published var recordingFolder: String?
     @Published var folderConfigured = false
     @Published var createdCourse: String?
+    @Published var importedRecordingID: String?
     let context = CaptureContext()
     let preview = ProcessInfo.processInfo.environment["MYNOTES_CAPTURE_PREVIEW"].map { URL(fileURLWithPath: $0) }
     var isPreview: Bool { preview != nil }
@@ -27,6 +28,28 @@ import Combine
     private var revision: UInt64 = 0
     private var libraryDirty = false
     private var lastPoll = Date.distantPast
+    private var recoveryAttempted = false
+    @Published private(set) var recorderRecoveryBlocked = false
+    private let examIsRunning: () -> Bool
+
+    init(examIsRunning: @escaping () -> Bool = {
+        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == "com.digiexam.student" }
+    }) {
+        self.examIsRunning = examIsRunning
+    }
+
+    // Restore only from the foreground UI. Never compete with an exam app or
+    // repeatedly bootstrap a broken service; a deliberate retry remains available.
+    @discardableResult func restoreRecorderIfNeeded(retry: Bool = false) async -> Bool {
+        guard !isPreview, !busy, !queueBusy, !stopping, refreshWarning == nil, let snapshot else { return false }
+        let blocked = examIsRunning()
+        if recorderRecoveryBlocked != blocked { recorderRecoveryBlocked = blocked }
+        guard !blocked else { return false }
+        if snapshot.running == true { recoveryAttempted = false; return true }
+        guard snapshot.enabled, snapshot.running == false, retry || !recoveryAttempted else { return false }
+        recoveryAttempted = true
+        return await perform("enable")
+    }
 
     var pollingInterval: TimeInterval {
         if pendingRequest != nil || snapshot?.isRecording == true || snapshot?.isExporting == true
@@ -52,7 +75,7 @@ import Combine
         if !Self.equal(snapshot, Optional(next)) { snapshot = next }
     }
 
-    fileprivate nonisolated static func invoke(_ executable: URL, _ workspace: String, _ action: String, _ arguments: [String], _ payload: Data?, group: String = "capture") throws -> Data {
+    nonisolated static func invoke(_ executable: URL, _ workspace: String, _ action: String, _ arguments: [String], _ payload: Data?, group: String = "capture") throws -> Data {
         var args = [group, action, "--workspace", workspace] + arguments
         var directory: URL?
         defer { if let directory { try? FileManager.default.removeItem(at: directory) } }
@@ -150,6 +173,7 @@ import Combine
         var next = try await fetch()
         guard version == revision else { return }
         if isPreview {
+            if let values = next.transcripts, !Self.equal(transcripts, values) { transcripts = values }
             publish(next, recordings: next.recordings ?? [], queue: next.queue)
             resolvePending(); return
         }
@@ -197,7 +221,18 @@ import Combine
         }
     }
     @discardableResult func perform(_ action: String, arguments: [String] = [], payload: [String: Any]? = nil) async -> Bool {
-        guard !busy, !queueBusy, !isPreview else { return false }
+        guard !busy, !queueBusy, !stopping, !isPreview else { return false }
+        if ["enable", "start"].contains(action) && examIsRunning() {
+            recorderRecoveryBlocked = true
+            error = "Chiudi Digiexam prima di riattivare Capture. Il calendario e gli audio restano conservati."
+            return false
+        }
+        if action == "start", snapshot?.running == false {
+            guard await restoreRecorderIfNeeded(retry: true) else {
+                if error == nil { error = "Impossibile riavviare Capture. Usa Riavvia Capture nelle opzioni e riprova." }
+                return false
+            }
+        }
         invalidateReads(); let version = revision
         busy = true; error = nil; notice = nil
         defer { busy = false; if version != revision { refreshAfterCommand() } }
@@ -271,7 +306,7 @@ import Combine
 
     private func fetchLibrary(version: UInt64) async throws -> [CaptureRecording] {
         let executable = context.launcher, workspace = context.workspace
-        let library = try await Task.detached { try Self.invoke(executable, workspace, "library", ["--sync"], nil, group: "transcription-queue") }.value
+        let library = try await Task.detached { try Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue") }.value
         let value = try JSONDecoder().decode(CaptureLibrary.self, from: library)
         if version == revision {
             let nextTranscripts = value.transcripts ?? []
@@ -282,14 +317,15 @@ import Combine
         return value.recordings
     }
 
-    func queueAction(_ action: String, arguments: [String] = []) async {
+    func queueAction(_ action: String, arguments: [String] = [], payload: [String: Any]? = nil) async {
         guard !queueBusy, !busy, !isPreview else { return }
         invalidateReads(); let version = revision
         queueBusy = true; error = nil; notice = nil
         defer { queueBusy = false; if version != revision { refreshAfterCommand() } }
         do {
             let executable = context.launcher, workspace = context.workspace
-            let data = try await Task.detached { try Self.invoke(executable, workspace, action, arguments, nil, group: "transcription-queue") }.value
+            let input = try payload.map { try JSONSerialization.data(withJSONObject: $0) }
+            let data = try await Task.detached { try Self.invoke(executable, workspace, action, arguments, input, group: "transcription-queue") }.value
             let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
             let status = result["status"] as? String ?? ""
             guard !status.isEmpty else { throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Risposta della coda non valida. Aggiorna MyNotes e riprova."]) }
@@ -327,6 +363,7 @@ import Combine
                 if !messages.isEmpty { notice = (notice ?? "") + " " + messages.sorted().joined(separator: " ") }
             }
             try await reconcile(version: version, includeLibrary: true)
+            if let imported = result["imported"] as? [[String: Any]], let id = imported.first?["recording_id"] as? String { importedRecordingID = id }
         } catch { if version == revision { self.notice = nil; self.error = error.localizedDescription } }
     }
 
@@ -470,3 +507,44 @@ struct CaptureWindowLease: NSViewRepresentable {
 }
 private final class CaptureErrorBytes: @unchecked Sendable { var data = Data() }
 private struct CaptureStatus: Decodable { var running: Bool?; var runtime: CaptureRuntime; var enabled: Bool; var paused: Bool }
+
+struct CaptureAudioInspection: Decodable, Identifiable {
+    var path: String
+    var name: String
+    var duration: Double?
+    var size: Int64
+    var id: String { path }
+}
+
+extension CaptureModel {
+    func inspectAudio(_ urls: [URL]) async throws -> [CaptureAudioInspection] {
+        let executable = context.launcher, workspace = context.workspace
+        let payload = try JSONSerialization.data(withJSONObject: ["paths": urls.map(\.path)])
+        let data = try await Task.detached { try Self.invoke(executable, workspace, "inspect-audio", [], payload, group: "transcription-queue") }.value
+        struct Inspection: Decodable { var files: [CaptureAudioInspection] }
+        return try JSONDecoder().decode(Inspection.self, from: data).files
+    }
+    func trashAudio(_ audio: CaptureRecording) async {
+        guard !busy, !queueBusy, !isPreview else { return }
+        invalidateReads(); let version = revision
+        queueBusy = true; error = nil; notice = nil
+        defer { queueBusy = false }
+        let executable = context.launcher, workspace = context.workspace
+        var restore = false
+        do {
+            let data = try await Task.detached { try Self.invoke(executable, workspace, "prepare-trash", ["--recording", audio.id], nil, group: "transcription-queue") }.value
+            let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            guard result["status"] as? String == "OK", let path = result["path"] as? String else {
+                throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Impossibile preparare lo spostamento nel Cestino."])
+            }
+            restore = result["was_excluded"] as? Bool != true
+            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+            restore = false
+            notice = "Audio spostato nel Cestino. Trascrizioni e altri audio sono conservati."
+            try await reconcile(version: version, includeLibrary: true)
+        } catch {
+            if restore { _ = try? await Task.detached { try Self.invoke(executable, workspace, "restore-audio", ["--recording", audio.id], nil, group: "transcription-queue") }.value }
+            self.error = error.localizedDescription
+        }
+    }
+}
