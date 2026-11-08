@@ -471,6 +471,10 @@ def calendar_events(data: bytes, source: dict, old: list[dict], courses: set[str
     if any(component.errors for component in calendar.walk()):
         raise CaptureError("Calendar contains malformed properties")
     start, end = timestamp(source["periodStart"]), timestamp(source["periodEnd"])
+    from .capture_calendar import prepare_event_timezones
+    for component in calendar.walk("VEVENT"):
+        if any(m["match"].casefold() in str(component.get("SUMMARY", "")).casefold() for m in source["mappings"]):
+            prepare_event_timezones(component, source["timezone"])
     expanded = recurring_ical_events.of(calendar).between(start, end)
     recurring_uids = {str(e.get("UID", "")) for e in calendar.walk("VEVENT") if "RRULE" in e or "RDATE" in e}
     previous = {e["id"]: e for e in old}
@@ -507,7 +511,7 @@ def calendar_events(data: bytes, source: dict, old: list[dict], courses: set[str
         if str(component.get("STATUS", "")).upper() == "CANCELLED" or uid in cancelled_uids or (uid, iso(timestamp(original, source["timezone"]))) in cancelled_instances:
             eligibility, reason = "CANCELLED", "Calendar cancellation"
         raw = {"id": identity, "courseCode": course, "lessonNumber": number, "startsAt": dtstart,
-               "endsAt": dtend, "timezone": source["timezone"], "title": title, "eligibility": eligibility, "reason": reason}
+               "endsAt": dtend, "timezone": prepare_event_timezones(component, source["timezone"]), "title": title, "eligibility": eligibility, "reason": reason}
         event = normalize_event(raw, courses, source["sourceID"])
         events.append(event)
     ids = {e["id"] for e in events}

@@ -15,7 +15,7 @@ Branch: `fix/calendar-timezones`. Prerequisite: installed UI 0.3.3, retained by 
 
 - [x] C0: Clean tree inspected; dedicated topic branch created from develop with installed UI prerequisite merged.
 - [x] C1: Consistent local display, live timezone/day updates and original-time detail; native regression checks.
-- [ ] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
+- [x] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
 - [ ] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
 - [ ] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
 - [ ] C5: 0.3.4 build/install with private backup and rollback; real UI and launched-path verification.
@@ -33,3 +33,5 @@ Inspect `git status`, this checklist and the latest focused commits. Do not assu
 C1 evidence: release SwiftUI build passed; both workspace native tests passed, including India/New York day boundaries and original Rome time. Added system timezone/clock/day notification handling and a bounded 30-second visible-clock refresh. Real UI verification remains C5.
 
 Additional C2 reproductions: a floating 19:00 Kolkata event inside the UTC subscription window was omitted before localization; an unknown explicit TZID was silently interpreted as Kolkata. Both require regression coverage.
+
+C2 evidence: 83 focused ingestion/calendar tests passed. Floating DTSTART/DTEND/RECURRENCE-ID/RDATE/EXDATE are localized before recurrence expansion and period filtering, in both import modes. Explicit event TZID is preserved; unknown TZID and ambiguous/skipped local times are rejected/reported; existing invalid events remain reviewable with their identity retained.
