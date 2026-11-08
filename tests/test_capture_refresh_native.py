@@ -126,6 +126,13 @@ import Combine
   precondition(prepared && model.snapshot?.nextNumber("MATH") == 9, "Forms must include archived lesson numbers")
   precondition(calls("transcription-queue library") == 1)
   precondition(model.lessons.count == 1 && model.lesson(withID: model.lessons[0].id)?.audio.first?.id == "historical")
+  let beforeTranscript = model.lessonProjectionRevision
+  let libraryPath = root.appendingPathComponent("library.json")
+  var libraryData = try JSONSerialization.jsonObject(with: Data(contentsOf: libraryPath)) as! [String: Any]
+  libraryData["transcripts"] = [["id":"new-transcript", "path":"/synthetic/transcript.txt", "title":"New transcript", "status":"COMPLETED", "recording_id":"historical", "lecture_id":"MATH-L08", "course_code":"MATH", "created_at":"2026-10-01T00:00:00Z"]]
+  try JSONSerialization.data(withJSONObject: libraryData).write(to: libraryPath, options: .atomic)
+  await model.refresh(silent: true, includeLibrary: true)
+  precondition(model.lessonProjectionRevision > beforeTranscript && model.lessons[0].transcripts.first?.id == "new-transcript", "Caching must not hide newly available transcripts")
   let projectedRevision = model.lessonProjectionRevision
   let queue = "{\"parallel\":1,\"paused\":false,\"ui_open\":false,\"jobs\":[{\"id\":\"q\",\"recording_id\":\"historical\",\"title\":\"Test\",\"status\":\"RUNNING\"}]}"
   try Data(queue.utf8).write(to: root.appendingPathComponent("queue.json"))
