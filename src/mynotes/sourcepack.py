@@ -352,6 +352,12 @@ def _build_source_pack_locked(
         from .recording_library import options as library_options
         if library_options(workspace).get('folder'):
             matches = [t for t in scan_transcripts(workspace) if t.get('lecture_id') == lecture_id]
+            from .audio_sources import policy
+            from .transcription_queue import library as audio_library
+            preferred_ids = set(policy(workspace)['preferred'].values())
+            preferred = [r for r in audio_library(workspace) if r.get('lecture_id') == lecture_id and r['id'] in preferred_ids and r.get('source_selected')] if preferred_ids else []
+            if len(preferred) == 1:
+                matches = [t for t in matches if t.get('recording_id') == preferred[0]['id']]
             if len(matches) > 1:
                 raise SourcePackError('Più trascrizioni per questa lezione: seleziona il TXT da usare')
             if matches:

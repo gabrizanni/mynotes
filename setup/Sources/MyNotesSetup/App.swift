@@ -228,7 +228,10 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
               let launcherText = try? String(contentsOf: launcher, encoding: .utf8), launcherText.contains("MyNotes managed launcher"),
               let data = try? Data(contentsOf: runtime.appendingPathComponent("setup.json")),
               let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return receipt["version"] as? String == Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        // A local app update can retain an older setup receipt. Read the actual
+        // selected runtime rather than making an installed app look unprepared.
+        let installed = runtime.appendingPathComponent("app/current/installation.json")
+        return receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path)
     }
     func readProgress() {
         guard busy, let startedAt,
@@ -356,17 +359,22 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
     }
 }
 
-private struct MyNotesRootView: View {
-    @CaptureViewState<String> private var section = ProcessInfo.processInfo.environment["MYNOTES_INITIAL_SECTION"] == "capture" ? "capture" : "notes"
-    var body: some View {
-        TabView(selection: $section) {
-            MyNotesHomeView(active: section == "notes").tabItem { Label("MyNotes", systemImage: "book.closed") }.tag("notes")
-            CaptureView(active: section == "capture").tabItem { Label("Capture", systemImage: "mic") }.tag("capture")
-        }.frame(minWidth: 1000, minHeight: 700).background(CaptureWindowLease().frame(width: 0, height: 0))
-    }
-}
 @main struct MyNotesSetup: App {
+    @StateObject private var state = WorkspaceState()
+    private var compactPreview: Bool { ProcessInfo.processInfo.environment["MYNOTES_UI_PREVIEW"] == "1" && ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_SIZE"] == "compact" }
+    private var previewAppearance: ColorScheme? {
+        guard ProcessInfo.processInfo.environment["MYNOTES_UI_PREVIEW"] == "1" else { return nil }
+        switch ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_APPEARANCE"] {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
     var body: some Scene {
-        Window("MyNotes", id: "mynotes-main") { MyNotesRootView() }.defaultSize(width: 1040, height: 780).windowResizability(.contentMinSize)
+        Window("MyNotes", id: compactPreview ? "mynotes-preview-compact" : "mynotes-main") {
+            MyNotesWorkspaceView(state: state, model: state.capture, setup: state.setup)
+                .preferredColorScheme(previewAppearance)
+        }.defaultSize(width: compactPreview ? 900 : 1120, height: compactPreview ? 620 : 780).windowResizability(.contentMinSize)
+        Settings { WorkspaceSettingsView(model: state.capture, setup: state.setup).preferredColorScheme(previewAppearance) }
     }
 }
