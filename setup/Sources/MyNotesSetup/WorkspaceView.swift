@@ -265,10 +265,10 @@ struct MyNotesWorkspaceView: View {
             GeometryReader { container in
                 if container.size.width >= 740 {
                 HSplitView {
-                    lessonList.frame(minWidth: 280, idealWidth: 310, maxWidth: 370)
+                    lessonList.frame(minWidth: 280, idealWidth: 310, maxWidth: 370, maxHeight: .infinity, alignment: .topLeading)
                     if let lesson = selectedLessonID.flatMap({ model.lesson(withID: $0) }) {
-                        WorkspaceLessonDetail(model: model, lesson: lesson, courseName: courseName(lesson.courseCode)).frame(minWidth: 410)
-                    } else { ContentUnavailableView("Tutto parte da una lezione", systemImage: "waveform", description: Text("Scegli una lezione per ascoltare l’audio e leggere la trascrizione.")).frame(minWidth: 410) }
+                        WorkspaceLessonDetail(model: model, lesson: lesson, courseName: courseName(lesson.courseCode)).frame(minWidth: 410, maxHeight: .infinity, alignment: .topLeading)
+                    } else { ContentUnavailableView("Tutto parte da una lezione", systemImage: "waveform", description: Text("Scegli una lezione per ascoltare l’audio e leggere la trascrizione.")).frame(minWidth: 410, maxWidth: .infinity, maxHeight: .infinity) }
                 }.frame(width: container.size.width, height: container.size.height)
                 } else {
                 VStack(spacing: 0) {
