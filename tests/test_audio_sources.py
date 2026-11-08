@@ -179,3 +179,19 @@ def test_lecture_cli_uses_explicit_external_source_among_alternatives(setup):
     result = run_transcription(ws, lecture_id=b['lecture_id'], engines={'argmax': engine})
     assert result['recording_id'] == b['id'] and engine.calls == 1
     assert transcription_status(ws, b['lecture_id'])['recording_id'] == b['id']
+
+
+def test_readonly_poll_does_not_hash_audio_with_changed_metadata(setup, monkeypatch):
+    ws, folder, _ = setup
+    audio(folder); library.sync(ws)
+    identifier = queue.library(ws)[0]['id']
+    result = transcribe(ws, identifier)
+    assert result['status'] == 'COMPLETED'
+    item = queue.library(ws)[0]; path = Path(item['path']); stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 3_000_000))
+    def no_hash(*args): raise AssertionError('Polling must not read full audio')
+    monkeypatch.setattr(queue, 'file_sha256', no_hash)
+    monkeypatch.setattr(library, 'file_sha256', no_hash)
+    observed = queue.library(ws)[0]
+    assert observed['transcription_status'] == 'OUTDATED'
+    assert Path(observed['export_text']).is_file() and path.is_file()

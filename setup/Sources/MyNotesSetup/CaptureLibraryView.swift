@@ -10,7 +10,7 @@ private func captureStateLabel(_ status: String) -> String {
     case "FAILED": return "Trascrizione non riuscita"
     case "INTERRUPTED": return "Trascrizione interrotta"
     case "NEEDS_REVIEW": return "Trascrizione non riuscita"
-    case "OUTDATED": return "Audio modificato: trascrizione da aggiornare"
+    case "OUTDATED": return "Audio da verificare rispetto alla trascrizione"
     case "WAITING": return "Audio non ancora disponibile"
     case "CANCELLED": return "Rimossa dalla coda"
     case "CANCELLING": return "Interruzione in corso"

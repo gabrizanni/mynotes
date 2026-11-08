@@ -36,7 +36,10 @@ conserva l’audio completo e riconoscibile nella scansione successiva.
 
 Le scansioni periodiche includono i file aggiunti direttamente alla cartella,
 anche senza corso; non scaricano i placeholder e non calcolano hash completi.
-Le verifiche onerose sono limitate a importazione e preparazione ASR.
+Le verifiche onerose sono limitate a importazione, preparazione ASR e al comando
+esplicito **Verifica file della raccolta** nel menu dei filtri. Una modifica alla
+data del file richiede questa verifica prima di confermare il legame con il TXT;
+non invalida o cancella la trascrizione precedente.
 
 Due audio per la stessa lezione richiedono una scelta esplicita. **Usa per
 trascrivere** seleziona la sorgente; le altre restano in Audio alternativi.

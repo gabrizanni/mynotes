@@ -152,14 +152,16 @@ def library(workspace, *, query=None, date=None, course=None):
                     if item["audio_available"] and item["id"] not in active_ids and item.get("event_id") not in active_ids:
                         audio_stat = Path(item['path']).stat()
                         verified = item.get('verified_audio') == [audio_stat.st_mtime_ns, audio_stat.st_size] and item.get('audio_sha256') == saved.get('audio_sha256')
-                        state = "COMPLETED" if verified or file_sha256(Path(item["path"])) == saved.get("audio_sha256") else "OUTDATED"
+                        # Polling only reads metadata. Full audio validation belongs to
+                        # explicit sync, import and transcription preparation.
+                        state = "COMPLETED" if verified else "OUTDATED"
                         if state == "COMPLETED":
                             if path.with_suffix(".txt").is_file():
                                 item["transcript_text"] = str(path.with_suffix(".txt"))
                             item["transcript_json"] = str(path)
                             item['quality_summary'] = saved.get('quality_summary')
                         else:
-                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio è cambiato dopo la trascrizione. Verifica la sorgente prima di ritrascrivere."})
+                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio richiede una verifica rispetto alla trascrizione salvata. Verifica la sorgente prima di riutilizzarla."})
                 else:
                     state = "NEEDS_REVIEW"
                     item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione salvata non supera i controlli di integrità. Controlla il risultato prima di riutilizzarlo."})
@@ -828,7 +830,7 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "run", "worker"):
+    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "verify-library", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
@@ -886,6 +888,10 @@ def run_cli(args):
     elif action in {'prefer-audio', 'exclude-audio', 'restore-audio', 'prepare-trash'}:
         from .audio_sources import choose
         value = choose(ws, args.recording, action)
+    elif action == "verify-library":
+        from .recording_library import sync
+        sync(ws)
+        value = {"status": "OK", "message": "File della raccolta verificati. Nessuna nuova trascrizione avviata."}
     elif action == "rename-transcript":
         from .transcript_library import rename
         value = rename(ws, args.transcript, args.name)

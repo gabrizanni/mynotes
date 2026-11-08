@@ -402,7 +402,7 @@ enum CaptureProblem {
         switch status {
         case "NEEDS_REVIEW": return "Il tentativo non ha salvato una trascrizione. Usa Riprova; l’audio è conservato."
         case "INTERRUPTED", "CANCELLED": return "La trascrizione è stata interrotta. Audio e tentativi precedenti sono conservati."
-        case "OUTDATED": return "L’audio è cambiato rispetto alla trascrizione salvata. Verifica la sorgente prima di riprovare."
+        case "OUTDATED": return "Verifica che l’audio corrisponda alla trascrizione salvata. I risultati precedenti sono conservati."
         case "WAITING": return "L’audio non è ancora pronto: potrebbe essere in salvataggio, assente o disponibile soltanto nel cloud."
         default: return "La trascrizione non è riuscita. L’audio è conservato; controlla i dettagli e riprova."
         }

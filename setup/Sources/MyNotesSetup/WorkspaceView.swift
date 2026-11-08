@@ -257,6 +257,8 @@ struct MyNotesWorkspaceView: View {
                     Button("Trascrivi audio selezionati per le lezioni") { Task { await model.queueAction("enqueue", arguments: ["--all-untranscribed"]) } }
                         .disabled(model.queueBusy || model.busy || model.isPreview)
                     Button("Aggiorna raccolta") { Task { await model.refresh(includeLibrary: true) } }
+                    Button("Verifica file della raccolta") { Task { await model.queueAction("verify-library") } }
+                        .disabled(model.queueBusy || model.busy || model.isPreview)
                 } label: { Image(systemName: "line.3.horizontal.decrease") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Filtra e gestisci raccolta")
             }.padding(20)
             Divider()

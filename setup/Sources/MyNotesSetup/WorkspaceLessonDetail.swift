@@ -167,28 +167,38 @@ struct WorkspaceLessonDetail: View {
             }
         }
     }
+    private func audioSubtitle(_ audio: CaptureRecording, selected: Bool) -> String {
+        let duration: String
+        if let seconds = audio.duration { duration = Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)) }
+        else { duration = "Durata non disponibile" }
+        let role = selected ? "In uso" : (audio.sourceExcluded == true ? "Escluso" : "Alternativo")
+        return [audio.origin ?? "Audio", duration, role].joined(separator: " · ")
+    }
+    private func audioMenu(_ audio: CaptureRecording) -> some View {
+        Menu {
+            Button("Ascolta con QuickTime") { model.openAudio(audio.path) }.disabled(audio.audioAvailable == false)
+            Button("Mostra nel Finder") { model.revealFile(audio.path) }
+            if audio.actions?.contains("finish") == true {
+                Button(audio.archiveStatus == "PENDING" ? "Completa salvataggio" : "Ricrea copia TXT") { Task { await model.recordingAction("finish", item: audio) } }
+            }
+            Button("Rinomina…") { sheet = .rename(audio) }
+            Button("Associa a corso e lezione…") { sheet = .associate(audio) }
+            if audio.actions?.contains("download") == true { Button("Scarica audio sul Mac") { Task { await model.recordingAction("download", item: audio) } } }
+            Divider()
+            Button(audio.sourceExcluded == true ? "Ripristina audio" : "Escludi dalla trascrizione") { Task { await model.queueAction(audio.sourceExcluded == true ? "restore-audio" : "exclude-audio", arguments: ["--recording", audio.id]) } }
+            Button("Sposta nel Cestino…", role: .destructive) { trashCandidate = audio }
+        } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Azioni audio " + audio.title)
+    }
     private func audioRow(_ audio: CaptureRecording, selected: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 Image(systemName: selected ? "checkmark.circle.fill" : "waveform").foregroundStyle(selected ? Color.accentColor : Color.secondary)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(audio.originalName ?? URL(fileURLWithPath: audio.path).lastPathComponent).font(.callout.weight(.medium)).textSelection(.enabled)
-                    Text((audio.origin ?? "Audio") + " · " + (audio.duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) } ?? "Durata non disponibile") + (selected ? " · In uso" : audio.sourceExcluded == true ? " · Escluso" : " · Alternativo")).font(.caption).foregroundStyle(.secondary)
+                    Text(audioSubtitle(audio, selected: selected)).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Menu {
-                    Button("Ascolta con QuickTime") { model.openAudio(audio.path) }.disabled(audio.audioAvailable == false)
-                    Button("Mostra nel Finder") { model.revealFile(audio.path) }
-                    if audio.actions?.contains("finish") == true {
-                        Button(audio.archiveStatus == "PENDING" ? "Completa salvataggio" : "Ricrea copia TXT") { Task { await model.recordingAction("finish", item: audio) } }
-                    }
-                    Button("Rinomina…") { sheet = .rename(audio) }
-                    Button("Associa a corso e lezione…") { sheet = .associate(audio) }
-                    if audio.actions?.contains("download") == true { Button("Scarica audio sul Mac") { Task { await model.recordingAction("download", item: audio) } } }
-                    Divider()
-                    Button(audio.sourceExcluded == true ? "Ripristina audio" : "Escludi dalla trascrizione") { Task { await model.queueAction(audio.sourceExcluded == true ? "restore-audio" : "exclude-audio", arguments: ["--recording", audio.id]) } }
-                    Button("Sposta nel Cestino…", role: .destructive) { trashCandidate = audio }
-                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Azioni audio " + audio.title)
+                audioMenu(audio)
             }
             if !selected {
                 HStack {
