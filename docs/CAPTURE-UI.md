@@ -278,3 +278,43 @@ still archive byte-identically to processate. A probable course link is explicit
 marked estimated, with a reason and alternatives, and can be corrected without
 ASR. Explicit user assignments take precedence over estimates. Occupied lesson
 identities are never overwritten.
+
+
+## Prestazioni e piano di correzione (0.3.2)
+
+Problemi riprodotti: apertura del dettaglio da Oggi e del selettore Importa audio
+in circa 6–7 secondi nella prova nativa; navigazione rallentata. Il campionamento
+locale del processo identifica `WorkspaceLesson.build` e la costruzione ripetuta
+di `ISO8601DateFormatter` sul thread principale. Il dettaglio chiamava il builder
+per ogni lettura della proprietà `lesson`; il builder ordinava date ricalcolate e
+cercava associazioni scorrendo gli eventi per ogni elemento.
+
+Piano applicato:
+
+1. Riutilizzare due parser ISO (con/senza frazioni), una cache limitata a 4096
+   date e al massimo 64 formatter per fuso/formato. Serializzare l’accesso ai
+   formatter per mantenere corretti decoding in background e rendering.
+2. Indicizzare eventi per lezione e calcolare una volta le date della proiezione.
+   Pubblicare la proiezione nel modello soltanto quando cambiano eventi, audio o
+   trascrizioni; usare un dizionario per il dettaglio. Un avanzamento della coda
+   o un heartbeat del registratore non deve ricostruire la navigazione.
+3. Non aprire/preparare l’audio quando si apre la lezione. Preparare il player
+   in background soltanto su Play, mostrare il caricamento e ignorare il risultato
+   se nel frattempo il dettaglio viene chiuso. Il selettore file nativo rimane
+   utilizzabile senza attese su CLI o letture degli audio.
+4. Confrontare prima/dopo lo stesso benchmark e le stesse azioni native; controllare
+   importazione, annullamento, cambi di sezione, stato della coda e recupero Capture.
+   Aggiungere regressioni per tempi del modello, concorrenza delle date e assenza
+   di ricostruzioni durante aggiornamenti della sola coda. Compilare e aggiornare
+   l’app con backup, verificando percorso del processo e versione del runtime.
+
+Misure iniziali sui metadati locali di 72 lezioni (nessun audio letto):
+
+| Operazione | 0.3.1 | Modello ottimizzato |
+| --- | ---: | ---: |
+| Cinque proiezioni complete | 2344 ms | 12,6 ms |
+| Venti filtri/ordinamenti | 2863 ms | 3,4 ms |
+
+Queste misure riguardano il modello dati; la reattività finale va verificata anche
+nell’app nativa. Le fixture pubbliche usano soltanto metadati artificiali. Sample,
+fixture personali e ricevute di installazione rimangono fuori dal repository.

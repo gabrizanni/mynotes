@@ -125,10 +125,13 @@ import Combine
   let prepared = await model.prepareLesson()
   precondition(prepared && model.snapshot?.nextNumber("MATH") == 9, "Forms must include archived lesson numbers")
   precondition(calls("transcription-queue library") == 1)
+  precondition(model.lessons.count == 1 && model.lesson(withID: model.lessons[0].id)?.audio.first?.id == "historical")
+  let projectedRevision = model.lessonProjectionRevision
   let queue = "{\"parallel\":1,\"paused\":false,\"ui_open\":false,\"jobs\":[{\"id\":\"q\",\"recording_id\":\"historical\",\"title\":\"Test\",\"status\":\"RUNNING\"}]}"
   try Data(queue.utf8).write(to: root.appendingPathComponent("queue.json"))
   await model.refresh(silent: true)
   precondition(model.pollingInterval == 5)
+  precondition(model.lessonProjectionRevision == projectedRevision, "Queue-only changes must not rebuild lesson navigation")
   changes = 0
   precondition(model.claimPoll(at: clock, force: true))
   precondition(!model.claimPoll(at: clock.addingTimeInterval(4)))
@@ -199,7 +202,7 @@ import Combine
     result = subprocess.run([
         'swiftc', '-parse-as-library', '-swift-version', '5', '-target', 'arm64-apple-macosx14.0',
         '-module-cache-path', str(tmp_path / 'module-cache'), str(source / 'CaptureDashboard.swift'),
-        str(source / 'CaptureModel.swift'), str(driver), '-o', str(binary)
+        str(source / 'WorkspaceModels.swift'), str(source / 'CaptureModel.swift'), str(driver), '-o', str(binary)
     ], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     environment = {**os.environ, 'MYNOTES_PREFIX': str(prefix), 'MYNOTES_WORKSPACE': str(store.workspace.root),

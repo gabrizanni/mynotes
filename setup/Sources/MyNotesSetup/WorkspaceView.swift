@@ -44,7 +44,7 @@ struct MyNotesWorkspaceView: View {
     @Environment(\.openSettings) private var openSettings
     private let poll = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     private var now: Date { ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_DATE"].flatMap(CaptureDates.read) ?? Date() }
-    private var lessons: [WorkspaceLesson] { WorkspaceLesson.build(snapshot: model.snapshot, audio: model.recordings, transcripts: model.transcripts) }
+    private var lessons: [WorkspaceLesson] { model.lessons }
     private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: model.snapshot?.events.first?.timezone ?? TimeZone.current.identifier) }
     private var collection: [WorkspaceLesson] {
         lessons.filter {
@@ -158,7 +158,7 @@ struct MyNotesWorkspaceView: View {
                 case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID)
                 case .detail(let id):
                     NavigationStack {
-                        if let lesson = lessons.first(where: { $0.id == id }) {
+                        if let lesson = model.lesson(withID: id) {
                             WorkspaceLessonDetail(model: model, lesson: lesson, courseName: courseName(lesson.courseCode))
                         } else { ContentUnavailableView("Lezione non disponibile", systemImage: "doc.questionmark") }
                     }.toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fine") { sheet = nil } } }
@@ -266,13 +266,13 @@ struct MyNotesWorkspaceView: View {
                 if container.size.width >= 740 {
                 HSplitView {
                     lessonList.frame(minWidth: 280, idealWidth: 310, maxWidth: 370)
-                    if let lesson = lessons.first(where: { $0.id == selectedLessonID }) {
+                    if let lesson = selectedLessonID.flatMap({ model.lesson(withID: $0) }) {
                         WorkspaceLessonDetail(model: model, lesson: lesson, courseName: courseName(lesson.courseCode)).frame(minWidth: 410)
                     } else { ContentUnavailableView("Tutto parte da una lezione", systemImage: "waveform", description: Text("Scegli una lezione per ascoltare l’audio e leggere la trascrizione.")).frame(minWidth: 410) }
                 }.frame(width: container.size.width, height: container.size.height)
                 } else {
                 VStack(spacing: 0) {
-                    if let lesson = lessons.first(where: { $0.id == selectedLessonID }) {
+                    if let lesson = selectedLessonID.flatMap({ model.lesson(withID: $0) }) {
                         HStack {
                             Button { selectedLessonID = nil } label: { Label("Raccolta", systemImage: "chevron.left") }
                                 .buttonStyle(.plain).foregroundStyle(.tint).keyboardShortcut("[", modifiers: .command)

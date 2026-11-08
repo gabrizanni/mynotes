@@ -19,7 +19,8 @@ struct WorkspaceLesson: Identifiable {
     var transcripts: [CaptureTranscript] = []
     var title: String { event?.title ?? audio.first?.title ?? transcripts.first?.title ?? "Registrazione" }
     var courseCode: String? { event?.courseCode ?? audio.first?.courseCode ?? transcripts.first?.courseCode }
-    var date: Date { event?.start ?? CaptureDates.read(audio.first?.createdAt ?? transcripts.first?.createdAt) ?? .distantPast }
+    private var resolvedDate: Date?
+    var date: Date { resolvedDate ?? event?.start ?? CaptureDates.read(audio.first?.createdAt ?? transcripts.first?.createdAt) ?? .distantPast }
     var timezone: String { event?.timezone ?? TimeZone.current.identifier }
     var selectedAudio: CaptureRecording? {
         audio.first { $0.sourceSelected == true && $0.sourceExcluded != true }
@@ -71,14 +72,17 @@ struct WorkspaceLesson: Identifiable {
     static func build(snapshot: CaptureSnapshot?, audio: [CaptureRecording], transcripts: [CaptureTranscript]) -> [Self] {
         let events = snapshot?.events ?? []
         var values: [String: Self] = Dictionary(uniqueKeysWithValues: events.map { ("event:" + $0.id, Self(id: "event:" + $0.id, event: $0)) })
+        var eventKeysByLecture: [String: [String]] = [:]
+        for event in events {
+            if let code = event.courseCode, let number = event.lessonNumber {
+                eventKeysByLecture[String(format: "%@-L%02d", code, number), default: []].append("event:" + event.id)
+            }
+        }
         func key(lectureID: String?, recordingID: String, eventID: String? = nil) -> String {
             if let eventID, values["event:" + eventID] != nil { return "event:" + eventID }
             if let lectureID {
-                let matches = events.filter { event in
-                    guard let code = event.courseCode, let number = event.lessonNumber else { return false }
-                    return String(format: "%@-L%02d", code, number) == lectureID
-                }
-                if matches.count == 1 { return "event:" + matches[0].id }
+                let matches = eventKeysByLecture[lectureID] ?? []
+                if matches.count == 1 { return matches[0] }
                 if matches.isEmpty { return "lesson:" + lectureID }
             }
             return "audio:" + recordingID
@@ -95,7 +99,9 @@ struct WorkspaceLesson: Identifiable {
             if values[identifier] == nil { values[identifier] = Self(id: identifier) }
             values[identifier]?.transcripts.append(transcript)
         }
-        return values.values.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        var result = Array(values.values)
+        for index in result.indices { result[index].resolvedDate = result[index].date }
+        return result.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
     }
 }
 
@@ -123,11 +129,9 @@ struct WorkspaceCalendar {
         return (components.hour ?? 0) * 60 + (components.minute ?? 0)
     }
     func clock(_ date: Date) -> String {
-        let format = DateFormatter(); format.locale = Locale(identifier: "it_IT"); format.timeZone = calendar.timeZone; format.dateFormat = "HH:mm"
-        return format.string(from: date)
+        CaptureDates.format(date, zone: calendar.timeZone, pattern: "HH:mm")
     }
     func label(_ date: Date, format pattern: String) -> String {
-        let format = DateFormatter(); format.locale = Locale(identifier: "it_IT"); format.timeZone = calendar.timeZone; format.dateFormat = pattern
-        return format.string(from: date)
+        CaptureDates.format(date, zone: calendar.timeZone, pattern: pattern)
     }
 }

@@ -20,7 +20,7 @@ struct WorkspaceLessonDetail: View {
     @CaptureViewState<String> private var transcript = ""
     init(model: CaptureModel, lesson: WorkspaceLesson, courseName: String) { self.model = model; self.fallback = lesson; self.courseName = courseName }
     private var lesson: WorkspaceLesson {
-        WorkspaceLesson.build(snapshot: model.snapshot, audio: model.recordings, transcripts: model.transcripts).first { $0.id == fallback.id } ?? fallback
+        model.lesson(withID: fallback.id) ?? fallback
     }
     var body: some View {
         ScrollView {
@@ -150,7 +150,7 @@ struct WorkspaceLessonDetail: View {
             } else {
                 if let audio = lesson.selectedAudio {
                     audioRow(audio, selected: true)
-                    if audio.audioAvailable != false { WorkspaceAudioPlayer(url: URL(fileURLWithPath: audio.path)).id(audio.id) }
+                    if audio.audioAvailable != false { WorkspaceAudioPlayer(url: URL(fileURLWithPath: audio.path), duration: audio.duration ?? 0).id(audio.id) }
                 } else {
                     Label(lesson.needsChoice ? "Scegli quale registrazione usare per questa lezione." : "Gli audio di questa lezione sono esclusi. Puoi ripristinarli qui sotto.", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                 }
@@ -211,25 +211,56 @@ struct WorkspaceLessonDetail: View {
     }
 }
 
+// Opening a lesson does not touch the audio file. Prepare only on Play, away
+// from the main actor; a slow disk/cloud file cannot freeze navigation.
+private final class PreparedAudio: @unchecked Sendable {
+    let player: AVAudioPlayer
+    init(url: URL) throws {
+        player = try AVAudioPlayer(contentsOf: url)
+        guard player.prepareToPlay() else { throw NSError(domain: "Audio", code: 1) }
+    }
+}
 @MainActor private final class AudioPlayback: NSObject, ObservableObject, AVAudioPlayerDelegate {
     @Published var playing = false
+    @Published var loading = false
     @Published var position = 0.0
     @Published var failure: String?
+    private let url: URL
+    private let knownDuration: Double
     private var player: AVAudioPlayer?
-    var duration: Double { player?.duration ?? 0 }
-    init(url: URL) {
-        super.init()
-        do { player = try AVAudioPlayer(contentsOf: url); player?.delegate = self; player?.prepareToPlay() }
-        catch { failure = "Anteprima non disponibile. Apri l’audio con QuickTime dal menu." }
-    }
+    private var loadTask: Task<Void, Never>?
+    private var generation = 0
+    var duration: Double { player?.duration ?? knownDuration }
+    init(url: URL, duration: Double) { self.url = url; self.knownDuration = duration; super.init() }
     func toggle() {
-        guard let player else { return }
-        if player.isPlaying { player.pause(); playing = false }
-        else { if position >= duration { player.currentTime = 0 }; playing = player.play() }
+        if let player {
+            if player.isPlaying { player.pause(); playing = false }
+            else { if position >= duration { player.currentTime = 0 }; playing = player.play() }
+            return
+        }
+        guard !loading else { return }
+        loading = true; generation += 1
+        let expected = generation, location = url
+        loadTask = Task {
+            do {
+                let prepared = try await Task.detached(priority: .userInitiated) { try PreparedAudio(url: location) }.value
+                guard !Task.isCancelled, generation == expected else { return }
+                player = prepared.player; player?.delegate = self
+                player?.currentTime = position; loading = false
+                playing = player?.play() ?? false
+                if !playing { failure = "Impossibile riprodurre l’audio. Aprilo con QuickTime dal menu." }
+            } catch {
+                guard !Task.isCancelled, generation == expected else { return }
+                loading = false; failure = "Anteprima non disponibile. Apri l’audio con QuickTime dal menu."
+            }
+        }
     }
     func seek(_ value: Double) { player?.currentTime = value; position = value }
     func tick() { position = player?.currentTime ?? 0; playing = player?.isPlaying == true }
-    func stop() { player?.pause(); playing = false }
+    func stop() {
+        generation += 1; loadTask?.cancel(); loadTask = nil; loading = false
+        player?.pause(); playing = false
+    }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in self.playing = false; self.position = self.duration }
     }
@@ -238,12 +269,15 @@ struct WorkspaceLessonDetail: View {
 private struct WorkspaceAudioPlayer: View {
     @StateObject private var playback: AudioPlayback
     private let timer = Timer.publish(every: 0.3, on: .main, in: .common).autoconnect()
-    init(url: URL) { _playback = StateObject(wrappedValue: AudioPlayback(url: url)) }
+    init(url: URL, duration: Double) { _playback = StateObject(wrappedValue: AudioPlayback(url: url, duration: duration)) }
     var body: some View {
         if let failure = playback.failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
         else {
             HStack(spacing: 12) {
-                Button { playback.toggle() } label: { Image(systemName: playback.playing ? "pause.fill" : "play.fill").frame(width: 28, height: 28) }.buttonStyle(.plain).accessibilityLabel(playback.playing ? "Pausa audio" : "Ascolta audio")
+                Button { playback.toggle() } label: {
+                    if playback.loading { ProgressView().controlSize(.small).frame(width: 28, height: 28) }
+                    else { Image(systemName: playback.playing ? "pause.fill" : "play.fill").frame(width: 28, height: 28) }
+                }.buttonStyle(.plain).disabled(playback.loading).accessibilityLabel(playback.loading ? "Caricamento audio" : playback.playing ? "Pausa audio" : "Ascolta audio")
                 Text(Duration.seconds(playback.position).formatted(.time(pattern: .minuteSecond))).font(.caption.monospacedDigit())
                 Slider(value: Binding(get: { playback.position }, set: { playback.seek($0) }), in: 0...max(1, playback.duration)).accessibilityLabel("Posizione audio")
                 Text(Duration.seconds(playback.duration).formatted(.time(pattern: .minuteSecond))).font(.caption.monospacedDigit()).foregroundStyle(.secondary)

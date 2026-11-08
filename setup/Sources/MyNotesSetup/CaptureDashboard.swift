@@ -1,14 +1,10 @@
 import Foundation
 
 enum CaptureDates {
-    static func read(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions.insert(.withFractionalSeconds)
-        return formatter.date(from: value)
-    }
-    static func write(_ value: Date) -> String { ISO8601DateFormatter().string(from: value) }
+    private static let cache = CaptureDateCache()
+    static func read(_ value: String?) -> Date? { value.flatMap { cache.read($0) } }
+    static func write(_ value: Date) -> String { cache.write(value) }
+    static func format(_ date: Date, zone: TimeZone, pattern: String) -> String { cache.format(date, zone: zone, pattern: pattern) }
     static func calendarPeriod(_ from: Date, _ through: Date, zone: String) -> (Date, Date)? {
         guard let timeZone = TimeZone(identifier: zone) else { return nil }
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
@@ -18,9 +14,47 @@ enum CaptureDates {
     }
     static func label(_ value: String?, zone: String? = nil) -> String {
         guard let date = read(value) else { return "Non disponibile" }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "it_IT")
-        formatter.timeZone = zone.flatMap(TimeZone.init(identifier:)) ?? .current
-        formatter.dateFormat = "dd MMM, HH:mm z"
+        return format(date, zone: zone.flatMap(TimeZone.init(identifier:)) ?? .current, pattern: "dd MMM, HH:mm z")
+    }
+}
+
+// Foundation formatters are expensive to construct. Serialize their use and bound
+// both caches; background decoding and main-thread rendering share the same dates.
+private final class CaptureDateCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let plain = ISO8601DateFormatter()
+    private let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter
+    }()
+    private var dates: [String: Date] = [:]
+    private var formatters: [String: DateFormatter] = [:]
+    func read(_ value: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        if let date = dates[value] { return date }
+        let date = value.contains(".") ? fractional.date(from: value) ?? plain.date(from: value) : plain.date(from: value) ?? fractional.date(from: value)
+        if let date {
+            if dates.count >= 4096 { dates.removeAll(keepingCapacity: true) }
+            dates[value] = date
+        }
+        return date
+    }
+    func write(_ value: Date) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return plain.string(from: value)
+    }
+    func format(_ date: Date, zone: TimeZone, pattern: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = zone.identifier + "|" + pattern
+        let formatter: DateFormatter
+        if let existing = formatters[key] { formatter = existing }
+        else {
+            formatter = DateFormatter(); formatter.locale = Locale(identifier: "it_IT")
+            formatter.timeZone = zone; formatter.dateFormat = pattern
+            if formatters.count >= 64 { formatters.removeAll(keepingCapacity: true) }
+            formatters[key] = formatter
+        }
         return formatter.string(from: date)
     }
 }

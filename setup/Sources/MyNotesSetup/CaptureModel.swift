@@ -13,6 +13,18 @@ import Combine
     @Published var lastEventID: String?
     @Published var recordings: [CaptureRecording] = []
     @Published var transcripts: [CaptureTranscript] = []
+    @Published private(set) var lessons: [WorkspaceLesson] = []
+    private var lessonsByID: [String: WorkspaceLesson] = [:]
+    private var lessonProjectionDirty = true
+    private(set) var lessonProjectionRevision = 0
+    func lesson(withID id: String) -> WorkspaceLesson? { lessonsByID[id] }
+    private func rebuildLessons(snapshot: CaptureSnapshot?) {
+        let next = WorkspaceLesson.build(snapshot: snapshot, audio: recordings, transcripts: transcripts)
+        lessonsByID = Dictionary(uniqueKeysWithValues: next.map { ($0.id, $0) })
+        lessons = next
+        lessonProjectionDirty = false
+        lessonProjectionRevision += 1
+    }
     @Published var queue: CaptureQueue?
     @Published var queueBusy = false
     @Published var recordingFolder: String?
@@ -70,7 +82,11 @@ import Combine
         return a == b
     }
     private func publish(_ next: CaptureSnapshot, recordings nextRecordings: [CaptureRecording]?, queue nextQueue: CaptureQueue?) {
-        if let nextRecordings, !Self.equal(recordings, nextRecordings) { recordings = nextRecordings }
+        let changedEvents = !Self.equal(snapshot?.events, Optional(next.events))
+        if let nextRecordings, !Self.equal(recordings, nextRecordings) {
+            recordings = nextRecordings; lessonProjectionDirty = true
+        }
+        if changedEvents || lessonProjectionDirty { rebuildLessons(snapshot: next) }
         if !Self.equal(queue, nextQueue) { queue = nextQueue }
         if !Self.equal(snapshot, Optional(next)) { snapshot = next }
     }
@@ -123,10 +139,9 @@ import Combine
         return String(text.prefix(600))
     }
     private func fetch() async throws -> CaptureSnapshot {
-        if let preview { return try CaptureSnapshot.decode(Data(contentsOf: preview)) }
+        if let preview { return try await Task.detached { try CaptureSnapshot.decode(Data(contentsOf: preview)) }.value }
         let executable = context.launcher, workspace = context.workspace
-        let data = try await Task.detached { try Self.invoke(executable, workspace, "dashboard", [], nil) }.value
-        return try CaptureSnapshot.decode(data)
+        return try await Task.detached { try CaptureSnapshot.decode(Self.invoke(executable, workspace, "dashboard", [], nil)) }.value
     }
     // A timer read never becomes an operation: controls and the current view stay usable.
     // A foreground request can share an existing read; a library request waits for a
@@ -154,7 +169,7 @@ import Combine
                     ? "Impossibile leggere lo stato di Capture. Premi Aggiorna per riprovare."
                     : "Aggiornamento dello stato non riuscito. I dati visualizzati restano disponibili; premi Aggiorna per riprovare."
                 if error.localizedDescription.contains("Cartella") {
-                    self.recordings = []; self.transcripts = []
+                    self.recordings = []; self.transcripts = []; self.rebuildLessons(snapshot: self.snapshot)
                     self.refreshWarning = error.localizedDescription
                     return
                 }
@@ -173,13 +188,14 @@ import Combine
         var next = try await fetch()
         guard version == revision else { return }
         if isPreview {
-            if let values = next.transcripts, !Self.equal(transcripts, values) { transcripts = values }
+            if let values = next.transcripts, !Self.equal(transcripts, values) { transcripts = values; lessonProjectionDirty = true }
             publish(next, recordings: next.recordings ?? [], queue: next.queue)
             resolvePending(); return
         }
         let executable = context.launcher, workspace = context.workspace
-        let stateData = try await Task.detached { try Self.invoke(executable, workspace, "status", [], nil, group: "transcription-queue") }.value
-        let nextQueue = try JSONDecoder().decode(CaptureQueue.self, from: stateData)
+        let nextQueue = try await Task.detached {
+            try JSONDecoder().decode(CaptureQueue.self, from: Self.invoke(executable, workspace, "status", [], nil, group: "transcription-queue"))
+        }.value
         guard version == revision else { return }
         let priorFinished = Set((snapshot?.runtime.sessions ?? []).filter { ["COMPLETED", "PARTIAL"].contains($0.status) }.map(\.id))
         let newFinished = Set((next.runtime.sessions ?? []).filter { ["COMPLETED", "PARTIAL"].contains($0.status) }.map(\.id))
@@ -306,11 +322,12 @@ import Combine
 
     private func fetchLibrary(version: UInt64) async throws -> [CaptureRecording] {
         let executable = context.launcher, workspace = context.workspace
-        let library = try await Task.detached { try Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue") }.value
-        let value = try JSONDecoder().decode(CaptureLibrary.self, from: library)
+        let value = try await Task.detached {
+            try JSONDecoder().decode(CaptureLibrary.self, from: Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue"))
+        }.value
         if version == revision {
             let nextTranscripts = value.transcripts ?? []
-            if !Self.equal(transcripts, nextTranscripts) { transcripts = nextTranscripts }
+            if !Self.equal(transcripts, nextTranscripts) { transcripts = nextTranscripts; lessonProjectionDirty = true }
             if recordingFolder != value.folder { recordingFolder = value.folder }
             if folderConfigured != (value.folderConfigured ?? false) { folderConfigured = value.folderConfigured ?? false }
         }

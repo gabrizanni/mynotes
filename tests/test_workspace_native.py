@@ -50,3 +50,50 @@ print("PASS")
     result=subprocess.run([str(binary),str(fixture)],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     assert 'PASS' in result.stdout
+
+
+def test_projection_and_concurrent_date_formatting_stay_within_interaction_budget(store, tmp_path):
+    """Synthetic archive catches formatter construction and quadratic joins."""
+    from datetime import datetime, timedelta, timezone
+    capture.import_schedule(store, [event()])
+    snapshot = capture_dashboard.dashboard(store)
+    template = snapshot['events'][0]
+    base = datetime(2026, 1, 1, 10, tzinfo=timezone.utc)
+    snapshot['events'] = []
+    for number in range(1, 301):
+        start = base + timedelta(days=number)
+        end = start + timedelta(hours=1)
+        iso = lambda value: value.isoformat().replace('+00:00', 'Z')
+        snapshot['events'].append({**template, 'id': f'event-{number}', 'lessonNumber': number,
+                                   'startsAt': iso(start), 'recordAt': iso(start),
+                                   'endsAt': iso(end), 'stopAt': iso(end)})
+    fixture = tmp_path / 'fixture.json'
+    fixture.write_text(json.dumps(snapshot))
+    driver = tmp_path / 'main.swift'
+    driver.write_text(r'''import Foundation
+let snapshot = try CaptureSnapshot.decode(Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+let start = Date()
+for _ in 0..<50 {
+ let lessons = WorkspaceLesson.build(snapshot: snapshot, audio: [], transcripts: [])
+ precondition(lessons.count == 300 && lessons.first!.date >= lessons.last!.date)
+}
+let elapsed = Date().timeIntervalSince(start)
+precondition(elapsed < 4, "Projection regressed to work measured in seconds per interaction")
+DispatchQueue.concurrentPerform(iterations: 1000) { index in
+ let value = index % 2 == 0 ? "2026-11-07T08:00:00.123Z" : "2026-11-07T08:00:00+00:00"
+ let date = CaptureDates.read(value)!
+ precondition(CaptureDates.write(date) == "2026-11-07T08:00:00Z")
+ precondition(CaptureDates.format(date, zone: TimeZone(identifier: "Asia/Kolkata")!, pattern: "HH:mm") == "13:30")
+}
+precondition(CaptureDates.read("invalid") == nil)
+print("PASS projection_50_ms", elapsed * 1000)
+''')
+    source = Path(__file__).parents[1] / 'setup/Sources/MyNotesSetup'
+    binary = tmp_path / 'performance'
+    built = subprocess.run(['swiftc', '-O', '-module-cache-path', str(tmp_path / 'cache'),
+                            str(source / 'CaptureDashboard.swift'), str(source / 'WorkspaceModels.swift'),
+                            str(driver), '-o', str(binary)], capture_output=True, text=True)
+    assert built.returncode == 0, built.stderr
+    result = subprocess.run([str(binary), str(fixture)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert 'PASS' in result.stdout

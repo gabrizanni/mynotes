@@ -122,7 +122,7 @@ print(json.dumps(out))
     source = Path(__file__).parents[1] / 'setup/Sources/MyNotesSetup'
     binary = tmp_path / 'recovery-test'
     build = subprocess.run(['swiftc', '-parse-as-library', '-swift-version', '5', '-module-cache-path', str(tmp_path / 'cache'),
-                            str(source / 'CaptureDashboard.swift'), str(source / 'CaptureModel.swift'), str(driver), '-o', str(binary)], capture_output=True, text=True)
+                            str(source / 'CaptureDashboard.swift'), str(source / 'WorkspaceModels.swift'), str(source / 'CaptureModel.swift'), str(driver), '-o', str(binary)], capture_output=True, text=True)
     assert build.returncode == 0, build.stderr
     env = {**os.environ, 'MYNOTES_PREFIX': str(prefix), 'MYNOTES_WORKSPACE': str(store.workspace.root),
            'MYNOTES_HOME': str(tmp_path / 'home'), 'RECOVERY_TEST_ROOT': str(tmp_path)}
