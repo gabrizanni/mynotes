@@ -194,6 +194,9 @@ struct CaptureSnapshot: Codable {
         return events.filter { $0.eligibility != "CANCELLED" && $0.end > now && !saved.contains($0.id) }
             .sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }.first
     }
+    var canStartManualRecording: Bool {
+        enabled && running != nil && !isRecording && !isExporting
+    }
     var runtimeFailed: Bool {
         runtime.title == "Configuration error" || runtime.title == "Recording failed" || runtime.title?.hasPrefix("Could not start ") == true
     }
@@ -216,6 +219,9 @@ struct CaptureSnapshot: Codable {
     }
     var stateLabel: String { stateLabel(at: Date()) }
     func stateDetail(at now: Date) -> String? {
+        if enabled && running == false {
+            return "Il registratore è fermo. Riapri MyNotes per riattivarlo oppure scegli Riavvia Capture nelle opzioni. Le registrazioni precedenti restano conservate."
+        }
         if runtimeFailed && !isRecording && !isExporting && running == true {
             return runtime.title == "Configuration error" ? "Il registratore non può leggere la configurazione. Correggi la configurazione prima della prossima lezione." : "Il registratore ha segnalato un errore. Controlla il microfono e la registrazione interessata prima di riprovare."
         }
