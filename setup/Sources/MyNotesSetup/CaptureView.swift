@@ -268,7 +268,7 @@ struct CaptureView: View {
     }
 }
 
-private struct CaptureLessonForm: View {
+struct CaptureLessonForm: View {
     @ObservedObject var model: CaptureModel
     let snapshot: CaptureSnapshot
     let event: CaptureEvent?
@@ -368,7 +368,7 @@ private struct CaptureMappingDraft: Identifiable {
     var courseCode: String
     var firstLesson = 1
 }
-private struct CaptureCalendarForm: View {
+struct CaptureCalendarForm: View {
     @ObservedObject var model: CaptureModel
     let snapshot: CaptureSnapshot
     let repairing: String?

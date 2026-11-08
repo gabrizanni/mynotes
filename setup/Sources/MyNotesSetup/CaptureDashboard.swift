@@ -47,6 +47,7 @@ struct CaptureEvent: Codable, Identifiable {
     var eligibility: String; var reason: String; var localChanges: Bool; var recordingEnabled: Bool
     var sourceEligibility: String; var special: Bool
     var reasonCode: String? = nil
+    var recordingID: String? = nil
     var courseLabel: String { if let code = courseCode { if let number = lessonNumber { return "\(code) · Lezione \(number)" }; return code }; return "Corso da associare" }
     var start: Date { CaptureDates.read(startsAt) ?? .distantFuture }
     var end: Date { CaptureDates.read(endsAt) ?? .distantFuture }
@@ -132,6 +133,7 @@ struct CaptureSnapshot: Codable {
     var calendarRecordingsSupported: Bool?
     var recordings: [CaptureRecording]?
     var queue: CaptureQueue?
+    var transcripts: [CaptureTranscript]?
     var isRecording: Bool { running == true && runtime.recording == true }
     var isExporting: Bool { running == true && runtime.exporting == true }
     static func decode(_ data: Data) throws -> Self {
@@ -283,13 +285,25 @@ struct CaptureRecording: Codable, Identifiable {
     var transcriptionStatus: String?
     var canTranscribe: Bool?
     var audioAvailable: Bool?
+    var eventID: String?
+    var lessonKey: String?
+    var origin: String?
+    var originalName: String?
+    var sourceSelected: Bool?
+    var sourceExcluded: Bool?
+    var sourceSelectionRequired: Bool?
+    var sourceCount: Int?
+    var partial: Bool?
     var warnings: [CaptureRecordingMessage]?
     var blockingReasons: [CaptureRecordingMessage]?
     var transcriptionState: String { transcriptionStatus ?? status }
     var isTranscribed: Bool { transcriptionState == "COMPLETED" }
     var transcriptionAllowed: Bool { canTranscribe ?? (transcriptionState == "NOT_STARTED") }
     enum CodingKeys: String, CodingKey {
-        case id, path, title, status, duration
+        case id, path, title, status, duration, origin, partial
+        case eventID = "event_id", lessonKey = "lesson_key", originalName = "original_name"
+        case sourceSelected = "source_selected", sourceExcluded = "source_excluded"
+        case sourceSelectionRequired = "source_selection_required", sourceCount = "source_count"
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
         case associationState = "association_state", associationReason = "association_reason", associationConflict = "association_conflict"
         case transcriptionStatus = "transcription_status", canTranscribe = "can_transcribe", audioAvailable = "audio_available"
