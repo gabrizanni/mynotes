@@ -10,6 +10,7 @@ private enum LessonSheet: Identifiable {
 }
 
 struct WorkspaceLessonDetail: View {
+    @Environment(\.timeZone) private var displayTimeZone
     @ObservedObject var model: CaptureModel
     let fallback: WorkspaceLesson
     let courseName: String
@@ -29,7 +30,10 @@ struct WorkspaceLessonDetail: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(lesson.title).font(.title2.weight(.semibold)).textSelection(.enabled)
                         Text(courseName).foregroundStyle(.secondary)
-                        Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: lesson.timezone)).font(.callout).foregroundStyle(.secondary)
+                        Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).font(.callout).foregroundStyle(.secondary)
+                        if let original = WorkspaceCalendar(timezone: displayTimeZone.identifier).originalTimeLabel(lesson.date, timezone: lesson.timezone) {
+                            Text("Orario originale · " + original).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                     Menu {

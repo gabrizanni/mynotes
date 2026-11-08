@@ -40,12 +40,14 @@ struct MyNotesWorkspaceView: View {
     @CaptureViewState<String> private var query = ""
     @CaptureViewState<String> private var course = "all"
     @CaptureViewState<Bool> private var attentionOnly = false
+    @CaptureViewState<String> private var displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
+    @CaptureViewState<Date> private var clockInstant = Date()
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openSettings) private var openSettings
     private let poll = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
-    private var now: Date { ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_DATE"].flatMap(CaptureDates.read) ?? Date() }
+    private var now: Date { ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_DATE"].flatMap(CaptureDates.read) ?? clockInstant }
     private var lessons: [WorkspaceLesson] { model.lessons }
-    private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: model.snapshot?.events.first?.timezone ?? TimeZone.current.identifier) }
+    private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: displayTimezoneID) }
     private var collection: [WorkspaceLesson] {
         lessons.filter {
             ($0.hasContent || ($0.event?.end ?? .distantFuture) < now)
@@ -134,8 +136,16 @@ struct MyNotesWorkspaceView: View {
             if let route = ProcessInfo.processInfo.environment["MYNOTES_INITIAL_ROUTE"].flatMap(WorkspaceRoute.init(rawValue:)) { state.route = route }
             await refresh(recover: true)
         }
+        .environment(\.timeZone, TimeZone(identifier: displayTimezoneID) ?? .autoupdatingCurrent)
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+            displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
+            clockInstant = Date()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemClockDidChange)) { _ in clockInstant = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in clockInstant = Date() }
         .onChange(of: scenePhase) { _, phase in if phase == .active && sheet == nil { Task { await refresh(recover: true) } } }
         .onReceive(poll) { date in
+            if abs(date.timeIntervalSince(clockInstant)) >= 30 { clockInstant = date }
             guard scenePhase == .active, sheet == nil, model.claimPoll(at: date) else { return }
             Task { await model.refresh(silent: true, includeLibrary: true) }
         }
@@ -206,7 +216,7 @@ struct MyNotesWorkspaceView: View {
                         VStack(alignment: .leading, spacing: 16) {
                             Text("Oggi non ci sono lezioni in calendario.").foregroundStyle(.secondary)
                             if let next {
-                                Text("La prossima è " + next.title + " · " + CaptureDates.label(next.event?.startsAt, zone: next.timezone)).font(.callout)
+                                Text("La prossima è " + next.title + " · " + CaptureDates.label(next.event?.startsAt, zone: displayTimezoneID)).font(.callout)
                                 Button("Vedi lezione") { sheet = .detail(next.id) }
                             } else { Button("Importa un audio") { importAudio() } }
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(20).background(WorkspaceStyle.subtle, in: RoundedRectangle(cornerRadius: 10))
@@ -310,6 +320,7 @@ struct MyNotesWorkspaceView: View {
 }
 
 struct WorkspaceLessonRow: View {
+    @Environment(\.timeZone) private var displayTimeZone
     let lesson: WorkspaceLesson
     let subtitle: String
     let snapshot: CaptureSnapshot?
@@ -320,7 +331,7 @@ struct WorkspaceLessonRow: View {
                 Text(lesson.title).font(.body.weight(.medium)).lineLimit(2)
                 Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 8) {
-                    Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: lesson.timezone)).lineLimit(1)
+                    Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).lineLimit(1)
                     if lesson.hasContent { Text("· " + lesson.transcriptionLabel).lineLimit(1) }
                 }.font(.caption).foregroundStyle(.secondary)
                 if let event = lesson.event, !lesson.hasContent { Text(snapshot?.eventStatusLabel(event) ?? event.statusLabel).font(.caption).foregroundStyle(lesson.needsAttention ? Color.orange : Color.secondary) }

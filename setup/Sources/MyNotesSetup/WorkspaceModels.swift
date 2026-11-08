@@ -107,10 +107,14 @@ struct WorkspaceLesson: Identifiable {
 
 struct WorkspaceCalendar {
     var calendar: Calendar
-    init(timezone: String = TimeZone.current.identifier) {
+    init(timezone: String = TimeZone.autoupdatingCurrent.identifier) {
         calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: timezone) ?? .current
         calendar.firstWeekday = 2
+    }
+    func originalTimeLabel(_ date: Date, timezone: String) -> String? {
+        guard let source = TimeZone(identifier: timezone), source.identifier != calendar.timeZone.identifier else { return nil }
+        return CaptureDates.format(date, zone: source, pattern: "dd MMM, HH:mm z") + " · " + source.identifier
     }
     func week(_ date: Date) -> [Date] {
         let day = calendar.startOfDay(for: date)

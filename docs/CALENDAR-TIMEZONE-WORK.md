@@ -14,7 +14,7 @@ Branch: `fix/calendar-timezones`. Prerequisite: installed UI 0.3.3, retained by 
 ## Checkpoints
 
 - [x] C0: Clean tree inspected; dedicated topic branch created from develop with installed UI prerequisite merged.
-- [ ] C1: Consistent local display, live timezone/day updates and original-time detail; native regression checks.
+- [x] C1: Consistent local display, live timezone/day updates and original-time detail; native regression checks.
 - [ ] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
 - [ ] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
 - [ ] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
@@ -29,3 +29,7 @@ Confirmed gaps: Today/Calendar use the first event timezone, library/detail use 
 ## Resume procedure
 
 Inspect `git status`, this checklist and the latest focused commits. Do not assume a build/install process stopped: check its live handle/log before restarting. Until C5 is verified, the installed app remains 0.3.3. Build and install helpers from previous updates are private temporary files and must be inspected before reuse. Keep installation receipts and personal paths outside this public document.
+
+C1 evidence: release SwiftUI build passed; both workspace native tests passed, including India/New York day boundaries and original Rome time. Added system timezone/clock/day notification handling and a bounded 30-second visible-clock refresh. Real UI verification remains C5.
+
+Additional C2 reproductions: a floating 19:00 Kolkata event inside the UTC subscription window was omitted before localization; an unknown explicit TZID was silently interpreted as Kolkata. Both require regression coverage.

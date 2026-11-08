@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct WorkspaceCalendarView: View {
+    @Environment(\.timeZone) private var displayTimeZone
     @ObservedObject var model: CaptureModel
     let lessons: [WorkspaceLesson]
     let now: Date
@@ -9,7 +10,7 @@ struct WorkspaceCalendarView: View {
     @CaptureViewState<Bool> private var monthly = false
     @CaptureViewState<String> private var course = "all"
     private let hourHeight: CGFloat = 56
-    private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: model.snapshot?.events.first?.timezone ?? TimeZone.current.identifier) }
+    private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: displayTimeZone.identifier) }
     private var days: [Date] { monthly ? clock.month(anchor) : clock.week(anchor) }
     private var entries: [WorkspaceLesson] { lessons.filter { $0.event != nil && (course == "all" || $0.courseCode == course) } }
     var body: some View {
@@ -27,7 +28,7 @@ struct WorkspaceCalendarView: View {
                 Picker("Vista calendario", selection: $monthly) { Text("Settimana").tag(false); Text("Mese").tag(true) }.pickerStyle(.segmented).labelsHidden().frame(width: 170)
             }.padding(20)
             HStack {
-                Text(clock.calendar.timeZone.identifier).font(.caption).foregroundStyle(.secondary)
+                Text("Orari del Mac · " + clock.calendar.timeZone.identifier).font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Label("Audio", systemImage: "waveform").font(.caption).foregroundStyle(.secondary)
                 Label("Trascrizione", systemImage: "doc.text").font(.caption).foregroundStyle(.secondary)
