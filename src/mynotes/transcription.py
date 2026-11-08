@@ -18,9 +18,13 @@ def transcription_status(workspace: Workspace, lecture_id: str | None = None, *,
     """Observe persisted state without creating files or invoking a tool."""
     if recording_id is None and lecture_id is not None and workspace.is_initialized():
         from .transcription_queue import library
-        candidates = [item for item in library(workspace) if item.get("storage_recording_id") and item.get("lecture_id") == lecture_id.upper()]
+        from .recording_library import options
+        managed_folder = options(workspace).get("folder")
+        candidates = [item for item in library(workspace) if (item.get("storage_recording_id") or managed_folder) and item.get("lecture_id") == lecture_id.upper()]
         if len(candidates) > 1:
-            raise ASRError("AMBIGUOUS_RECORDING: più registrazioni indicano questa lezione; seleziona il recording ID")
+            selected = [item for item in candidates if item.get('source_selected')]
+            if len(selected) == 1: candidates = selected
+            else: raise ASRError("AMBIGUOUS_RECORDING: scegli la sorgente audio della lezione")
         if candidates:
             recording_id = candidates[0]["id"]
     if recording_id is not None:
@@ -201,14 +205,20 @@ def run_transcription(workspace: Workspace, lecture_id: str | None = None, audio
     elif audio is not None:
         matches = [item for item in records if item.get("storage_recording_id") and Path(item["path"]).resolve() == Path(audio).expanduser().resolve()]
     else:
-        matches = [item for item in records if item.get("storage_recording_id") and item.get("lecture_id") == lecture_id]
+        from .recording_library import options
+        managed_folder = options(workspace).get("folder")
+        matches = [item for item in records if (item.get("storage_recording_id") or managed_folder) and item.get("lecture_id") == lecture_id]
         if len(matches) > 1:
-            raise ASRError("AMBIGUOUS_RECORDING: più registrazioni indicano questa lezione; seleziona il recording ID")
+            chosen = [item for item in matches if item.get('source_selected')]
+            if len(chosen) == 1: matches = chosen
+            else: raise ASRError("AMBIGUOUS_RECORDING: scegli la sorgente audio della lezione prima di trascrivere")
     if not matches and audio is None and lecture_id is not None:
         from .recording_library import options
         if options(workspace).get('folder'):
             matches = [r for r in records if r.get('lecture_id') == lecture_id]
             if len(matches) > 1: raise ASRError('AMBIGUOUS_RECORDING: seleziona una registrazione per questa lezione')
+    if matches and not matches[0].get('source_selected', True):
+        raise ASRError("SOURCE_SELECTION: scegli questa sorgente audio prima di trascriverla")
     if matches and (matches[0].get("storage_recording_id") or recording_id is not None or audio is None):
         return _run_recording_transcription(workspace, matches[0], engines=engines, progress=progress)
     if recording_id is not None:

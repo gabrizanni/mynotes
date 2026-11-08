@@ -43,8 +43,8 @@
 <h2 id="tre-passaggi" style="border:0;padding:0;margin:0 0 16px">Inizia in tre passaggi</h2>
 <ol class="steps">
 <li><strong>Trascina MyNotes in Applicazioni.</strong>Apri il DMG e trascina l’app sulla cartella Applicazioni. Poi apri MyNotes da Applicazioni.</li>
-<li><strong>Scegli l’agente e prepara MyNotes.</strong>Seleziona Codex, Agy o Claude Code e premi <b>Prepara MyNotes</b>. Se l’agente manca, segui <b>Installa…</b>, completa l’accesso con il suo provider e premi <b>Ho installato, ricontrolla</b>.</li>
-<li><strong>Premi Apri la chat.</strong>MyNotes si presenta brevemente nel Terminale e ti chiede il tuo background. Poi raccoglie contesto e stile del corso con due domande insieme.</li>
+<li><strong>Scegli l’agente e prepara MyNotes.</strong>Apri <b>Impostazioni → Agenti AI</b>, seleziona Codex, Agy o Claude Code e premi <b>Prepara MyNotes</b>. Se l’agente manca, segui <b>Installa…</b>, completa l’accesso con il suo provider e premi <b>Ho installato, ricontrolla</b>.</li>
+<li><strong>Premi Apri chat esterna.</strong>MyNotes si presenta brevemente nel Terminale e ti chiede il tuo background. Poi raccoglie contesto e stile del corso con due domande insieme.</li>
 </ol>
 <p><strong>Ora puoi chiedere direttamente all’agente:</strong> “Aiutami a configurare il primo corso” oppure “Prepara gli appunti usando questo audio e queste slide”. Non serve leggere tutto il manuale prima.</p>
 <p class="jump"><a href="#istruzioni-complete">Istruzioni complete</a><a href="#prima-conversazione">Prima conversazione</a><a href="#apri-comunque">Se macOS blocca l’app</a><a href="#problemi">Se qualcosa non funziona</a></p>
@@ -78,9 +78,9 @@
 <ol>
 <li>Apri il DMG e trascina <strong>MyNotes</strong> in <strong>Applicazioni</strong>.</li>
 <li>Apri MyNotes dalla cartella Applicazioni. Se macOS impedisce l’apertura, segui <a href="#apri-comunque">Apri comunque</a>.</li>
-<li>Scegli il tuo agente. Puoi completarne installazione e accesso con i pulsanti del setup, poi ricontrollare.</li>
+<li>Apri <strong>Impostazioni → Agenti AI</strong> e scegli il tuo agente. Puoi completarne installazione e accesso con i pulsanti del setup, poi ricontrollare.</li>
 <li>Premi <strong>Prepara MyNotes</strong>. Attendi download, installazione e verifiche dei componenti.</li>
-<li>Quando la preparazione è completa e l’agente risulta utilizzabile, premi <strong>Apri la chat</strong>.</li>
+<li>Quando la preparazione è completa e l’agente risulta utilizzabile, premi <strong>Apri chat esterna</strong>.</li>
 </ol>
 <p>Il setup prepara un Python privato, pacchetti con versioni bloccate, il modello per la trascrizione locale e gli strumenti per costruire e verificare il Word. Include LibreOffice completo: serve a renderizzare il documento Word in PDF per controllarne l’impaginazione. Non installa Microsoft Office; il download di LibreOffice occupa centinaia di MB. La chat si apre nella cartella privata corretta; le registrazioni e i documenti del corso possono restare nelle cartelle che scegli.</p>
 <h3>Durante la preparazione</h3>
@@ -163,7 +163,7 @@
 <li>Fornisci un documento, testo o collegamento ICS/iCal, più periodo, fuso orario, corsi e numeri ufficiali delle lezioni quando mancano.</li>
 <li>Controlla il piano proposto: lezioni riconosciute, numerazione, orari, eventi ambigui e sovrapposizioni.</li>
 <li>Conferma sia la pianificazione sia l’attivazione.</li>
-<li>Consenti l’accesso al microfono. Dal menu Capture esegui la prova di 60 secondi, riascolta il file e conferma che il suono atteso si sente.</li>
+<li>Consenti l’accesso al microfono. Da Impostazioni → Registrazione → Test e recupero esegui la prova di 60 secondi, riascolta il file e conferma che il suono atteso si sente.</li>
 </ol>
 <p>Se hai negato il permesso, apri <strong>Impostazioni di Sistema → Privacy e sicurezza → Microfono</strong> e abilita <strong>MyNotes Capture</strong>, poi ripeti la prova. Le notifiche sono facoltative.</p>
 <div class="note"><strong>Per registrare una lezione:</strong> il Mac deve essere acceso e sveglio, con il coperchio aperto. Capture impedisce lo stop per inattività mentre registra, ma non accende il Mac e non programma il risveglio hardware. Un’app in esecuzione o un file valido non sostituiscono la prova con riascolto.</div>
@@ -172,7 +172,10 @@
 </section>
 <section aria-labelledby="uso-quotidiano">
 <h2 id="uso-quotidiano">Tornare a MyNotes ogni giorno</h2>
-<p>Apri l’app e premi <strong>Apri la chat</strong>, oppure usa un nuovo Terminale:</p>
+<p>MyNotes si apre su <strong>Oggi</strong>. Usa <strong>Calendario</strong> per settimana e mese, <strong>Raccolta</strong> per lezioni, audio e trascrizioni, <strong>Attività</strong> per coda ed errori. <strong>Registra</strong> è nella toolbar; <strong>Aggiungi</strong> raccoglie importazione e programmazione.</p>
+<p>Per un audio registrato altrove, scegli <strong>Aggiungi → Importa audio</strong> o trascina il file nella finestra. La copia entra nella raccolta e l’originale resta intatto. Puoi associarla alla lezione anche dopo. Con più audio, ascolta le alternative e scegli <strong>Usa per trascrivere</strong>. Escludi un’alternativa reversibilmente oppure usa separatamente <strong>Sposta nel Cestino</strong>. Le trascrizioni precedenti rimangono disponibili.</p>
+<p>Gli audio aggiunti direttamente alla cartella configurata compaiono senza riavvio; se sono ancora in copia o nel cloud, attendi il completamento. Le preferenze sopravvivono a scansioni e archiviazione. Gestisci calendari, cartelle e strumenti nelle <strong>Impostazioni</strong>.</p>
+<p>Per gli appunti usa <strong>Apri chat esterna</strong> nella sidebar, oppure un nuovo Terminale:</p>
 <pre><code>mynotes
 mynotes codex
 mynotes agy
@@ -475,7 +478,9 @@ uv run python scripts/build_release.py</code></pre>
 </section>
 <section aria-labelledby="en-uso-quotidiano">
 <h2 id="en-uso-quotidiano">Return to MyNotes every day</h2>
-<p>Open the app and click <strong>Open chat</strong>, or use a new Terminal:</p>
+<p>The app opens on <strong>Today</strong>. Calendar shows weeks and months, Library joins lessons, audio and transcripts, and Activity holds jobs and history. Record stays in the toolbar; Add groups audio import and manual scheduling. Settings holds calendars, folders, transcription and agents.</p>
+<p>Import or drop external audio to copy it into the library while keeping the original. Association is optional. For multiple sources, listen and explicitly choose the audio to transcribe. Alternatives can be reversibly excluded or separately moved to the macOS Trash; earlier transcripts are preserved. Files added directly to the configured folder appear without restarting, once local and stable.</p>
+<p>Use <strong>Open external chat</strong> in the sidebar for notes, or a new Terminal:</p>
 <pre><code>mynotes
 mynotes codex
 mynotes agy

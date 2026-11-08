@@ -674,6 +674,7 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
         if active and state["running"] is not False:
             return {"status": "ENABLED", "alreadyRunning": state["running"]}
         config = store.config()
+        was_enabled = config["enabled"]
         if not store.config_path.exists() or not store.schedule_path.exists():
             raise CaptureError("Configure Capture and import or synchronize a calendar first")
         log_dir = runtime_home() / "logs"
@@ -696,7 +697,8 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
         completed = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], capture_output=True, text=True)
         if completed.returncode:
             with store.lock():
-                config["enabled"] = False
+                config = store.config()
+                config["enabled"] = was_enabled
                 store.save_config(config)
             raise CaptureError("LaunchAgent bootstrap failed: " + completed.stderr.strip())
         atomic_json_write(active_path, {"workspace": str(store.workspace.root)})
