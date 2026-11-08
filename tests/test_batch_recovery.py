@@ -181,8 +181,9 @@ Path('duplicate-stream-finished').write_text('done')
 '''.replace('EVENT',repr(event))
     events=[]
     with pytest.raises(a.ProviderError,match='without a complete terminal result'):
-        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=2,first_seconds=.12,on_event=events.append)
+        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=10,first_seconds=.12,on_event=events.append)
     assert len([e for e in events if e['event']=='progress_reminder']) == 1
+    # The ten-second outer guard permits slow hosted Python startup.
     # Completion proves the soft reminder did not kill the stream. A wall-clock
     # bound also measures Python startup and scheduler load on hosted macOS.
     assert (tmp_path / 'duplicate-stream-finished').read_text() == 'done'
