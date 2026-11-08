@@ -238,7 +238,8 @@ def discover(ws):
             item['file_identity'] = [stat.st_dev, stat.st_ino]
         if identifier not in found or item['audio_available'] or not found[identifier]['audio_available']:
             found[identifier] = item
-    return list(found.values())
+    from .audio_sources import project
+    return project(ws, list(found.values()))
 
 
 @locked
