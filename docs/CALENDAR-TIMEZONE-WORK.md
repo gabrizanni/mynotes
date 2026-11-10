@@ -17,7 +17,7 @@ Branch: `fix/calendar-timezones`. Prerequisite: installed UI 0.3.3, retained by 
 - [x] C1: Consistent local display, live timezone/day updates and original-time detail; native regression checks.
 - [x] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
 - [x] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
-- [ ] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
+- [x] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
 - [ ] C5: 0.3.4 build/install with private backup and rollback; real UI and launched-path verification.
 
 ## Baseline evidence
@@ -41,3 +41,5 @@ C3 in progress: UI release build and workspace native checks passed for day-clip
 C3 evidence: final UI release build passed. Workspace native tests passed for split midnight spans, exclusive day-end boundaries, 23/25-hour grids and distinct positions for the repeated local hour. Standalone scheduler regressions passed after clock notifications were dispatched to the main actor; no microphone acquisition or system-clock changes were used. Equivalent XCTest assertions are retained for hosts with XCTest, but could not be run here. Full integration suite is running; C4/C5 remain incomplete.
 
 C4 in progress: full pytest integration run exited successfully (no failures). Preparing 0.3.4 and an actionable localized INVALID_TIMEZONE explanation. The changed native dashboard case is being checked separately; no broad suite rerun is needed for the version bump/UI copy. New Capture code changes its ad-hoc signature, so C5 must explicitly verify microphone permission and must not assume authorization survived.
+
+C4 evidence: all local integration/native/dashboard checks passed, public-tree audit and staged diff checks passed, universal release and signed UI app built. Isolated native UI preview verified Rome DST fallback (02 CEST and 02 CET), a spanning lesson on both month dates, and the same lesson at 06:00 India with original 02:30 CEST detail. Focused commits are pushed; draft PR: https://github.com/gabrizanni/mynotes/pull/6. C5 installation and its permission check remain outstanding.
