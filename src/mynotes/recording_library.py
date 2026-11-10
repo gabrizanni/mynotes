@@ -117,6 +117,8 @@ def discover(ws):
     config = ws.configuration_store().load()
     store = CaptureStore(ws)
     known = records(ws)
+    verification_path = ws.state_dir / 'recording-library/verified-audio.json'
+    verifications = json.loads(verification_path.read_text()) if verification_path.exists() else {}
     by_path = {x['path']: x for x in known.values()}
     for x in known.values():
         if x.get('pending_destination') and not Path(x['path']).exists():
@@ -234,11 +236,15 @@ def discover(ws):
             'association_reason': (link or {}).get('reason'),
             'association_alternatives': (link or {}).get('alternatives', []),
             'association_conflict': (link or {}).get('conflict')}
+        proof = verifications.get(identifier)
+        if proof and (not item.get('verified_audio') or stat and proof.get('verified_audio') == [stat.st_mtime_ns, stat.st_size]):
+            item.update(proof)
         if stat:
             item['file_identity'] = [stat.st_dev, stat.st_ino]
         if identifier not in found or item['audio_available'] or not found[identifier]['audio_available']:
             found[identifier] = item
-    return list(found.values())
+    from .audio_sources import project
+    return project(ws, list(found.values()))
 
 
 @locked
@@ -326,11 +332,26 @@ def _move_original(source, destination, digest):
 def finish(ws, item, manifest_path):
     """Export TXT, then archive original. Failure never invalidates valid ASR."""
     from .asr import validate_transcript, segments_digest, write_transcript_text
-    if not options(ws).get('folder') or not allowed(ws, Path(item['path'])):
+    if not allowed(ws, Path(item['path'])):
         return {}
     saved = json.loads(Path(manifest_path).read_text())
     if saved.get('status') != 'COMPLETED' or validate_transcript(saved, saved.get('audio_duration_seconds')) or saved.get('segments_sha256') != segments_digest(saved.get('segments')):
         raise ValueError('Trascrizione non valida: originale conservato')
+    if not options(ws).get('folder'):
+        # Explicit ASR completion verifies once, so later UI reads need only stat.
+        source = Path(item['path'])
+        before = source.stat()
+        if file_sha256(source) != saved.get('audio_sha256'):
+            return {}
+        after = source.stat()
+        if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+            return {}
+        verification_path = ws.state_dir / 'recording-library/verified-audio.json'
+        verifications = json.loads(verification_path.read_text()) if verification_path.exists() else {}
+        verifications[item['id']] = {'audio_sha256': saved['audio_sha256'],
+                                     'verified_audio': [after.st_mtime_ns, after.st_size]}
+        atomic_json_write(verification_path, verifications)
+        return {}
     sync(ws)
     current = records(ws).get(item['id'], item)
     current['transcript_json'] = str(manifest_path)
@@ -400,8 +421,6 @@ def finish(ws, item, manifest_path):
 
 
 def finish_audio(ws, audio, manifest_path):
-    if not options(ws).get('folder'):
-        return {}
     matches = [x for x in discover(ws) if x['path'] == str(Path(audio).resolve())]
     if len(matches) != 1:
         return {}

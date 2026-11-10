@@ -471,6 +471,10 @@ def calendar_events(data: bytes, source: dict, old: list[dict], courses: set[str
     if any(component.errors for component in calendar.walk()):
         raise CaptureError("Calendar contains malformed properties")
     start, end = timestamp(source["periodStart"]), timestamp(source["periodEnd"])
+    from .capture_calendar import prepare_event_timezones
+    for component in calendar.walk("VEVENT"):
+        if any(m["match"].casefold() in str(component.get("SUMMARY", "")).casefold() for m in source["mappings"]):
+            prepare_event_timezones(component, source["timezone"])
     expanded = recurring_ical_events.of(calendar).between(start, end)
     recurring_uids = {str(e.get("UID", "")) for e in calendar.walk("VEVENT") if "RRULE" in e or "RDATE" in e}
     previous = {e["id"]: e for e in old}
@@ -507,7 +511,7 @@ def calendar_events(data: bytes, source: dict, old: list[dict], courses: set[str
         if str(component.get("STATUS", "")).upper() == "CANCELLED" or uid in cancelled_uids or (uid, iso(timestamp(original, source["timezone"]))) in cancelled_instances:
             eligibility, reason = "CANCELLED", "Calendar cancellation"
         raw = {"id": identity, "courseCode": course, "lessonNumber": number, "startsAt": dtstart,
-               "endsAt": dtend, "timezone": source["timezone"], "title": title, "eligibility": eligibility, "reason": reason}
+               "endsAt": dtend, "timezone": prepare_event_timezones(component, source["timezone"]), "title": title, "eligibility": eligibility, "reason": reason}
         event = normalize_event(raw, courses, source["sourceID"])
         events.append(event)
     ids = {e["id"] for e in events}
@@ -674,6 +678,7 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
         if active and state["running"] is not False:
             return {"status": "ENABLED", "alreadyRunning": state["running"]}
         config = store.config()
+        was_enabled = config["enabled"]
         if not store.config_path.exists() or not store.schedule_path.exists():
             raise CaptureError("Configure Capture and import or synchronize a calendar first")
         log_dir = runtime_home() / "logs"
@@ -696,7 +701,8 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
         completed = subprocess.run(["launchctl", "bootstrap", domain, str(plist_path)], capture_output=True, text=True)
         if completed.returncode:
             with store.lock():
-                config["enabled"] = False
+                config = store.config()
+                config["enabled"] = was_enabled
                 store.save_config(config)
             raise CaptureError("LaunchAgent bootstrap failed: " + completed.stderr.strip())
         atomic_json_write(active_path, {"workspace": str(store.workspace.root)})
