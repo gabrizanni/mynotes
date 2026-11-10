@@ -152,7 +152,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                   selection=selection if selection is not None else saved.get('selection'),
                   budgets=budgets if budgets is not None else saved.get('budgets'),
                   speaker_focus=speaker_focus or options.get('speaker_focus'),
-                  context_lessons=context_lessons if context_lessons is not None else saved.get('context_lessons'))
+                  context_lessons=context_lessons if context_lessons is not None else saved.get('context_lessons'),
+                  writing_snapshot=saved if saved.get('course') and saved.get('style') else None)
     # A settled legacy job keeps its exact historical writing request. New
     # requests integrate organization into the normal writing response.
     # Explicit complete requests migrate unfinished historical placement too;
@@ -164,6 +165,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                 'provider_invoked': False, 'published_to_word': False, 'delivery': 'standalone_and_course_update'}
     if plan['status'] != 'PLANNED':
         return {**plan, 'warnings': boundary_warnings, 'published_to_word': False}
+    # Keep only the fields that define writing, not progress or source revisions.
+    kwargs['writing_snapshot'] = {key: plan[key] for key in ('course_code', 'lectures', 'course', 'style', 'requested_model')}
     root = workspace.runs_dir / '_batches' / (resume or plan['batch_id'])
     state_path = root / 'notes-run.json'
     observer = progress or (lambda *_: None)

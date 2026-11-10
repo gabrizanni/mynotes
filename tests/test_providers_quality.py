@@ -138,6 +138,25 @@ def test_style_change_invalidates_candidate_cache(tmp_path) -> None:
     assert adapter.calls == ["writing", "writing"]
 
 
+def test_dialogue_change_reuses_paid_candidate_but_note_rule_creates_new_request(tmp_path):
+    from mynotes.memory import snapshot, update_memory
+    workspace = configured_workspace(tmp_path)
+    source_pack(workspace)
+    adapter = CandidateProvider()
+    generate_candidate(workspace, "OPS7-L01", provider_adapter=adapter)
+    def change(area, code, text):
+        scope = "course" if code else "global"
+        revision = snapshot(workspace.configuration_store().load(), scope=scope, area=area, course=code)["revision"]
+        update_memory(workspace, scope=scope, area=area, course=code, expected_revision=revision, set_rules={"examples": text})
+    change("dialogue", None, "Ask one question at a time.")
+    change("dialogue", "OPS7", "Keep questions together for this course.")
+    assert generate_candidate(workspace, "OPS7-L01", provider_adapter=adapter)["status"] == "SKIPPED"
+    assert adapter.calls == ["writing"]
+    change("notes", "OPS7", "Explain the numerical examples.")
+    assert generate_candidate(workspace, "OPS7-L01", provider_adapter=adapter)["status"] == "CANDIDATE_READY"
+    assert adapter.calls == ["writing", "writing"]
+
+
 def test_generation_passes_effective_course_style_to_provider(tmp_path) -> None:
     workspace = configured_workspace(tmp_path)
     source_pack(workspace)
@@ -630,8 +649,8 @@ def test_imported_attacks_are_quoted_data_through_candidate_pipeline(tmp_path):
             boundary = lines.index(marker)
             saved = json.loads(lines[boundary - 1])
             sources = json.loads(lines[-1])
-            assert saved["course"]["preferences"]["persistent_instructions"] == ["Use short connected prose."]
-            assert saved["global_note_style"]["freeform_preferences"] == "Explain the trade-off concisely."
+            assert saved["course"]["preferences"] == {}
+            assert saved["global_note_style"]["freeform_preferences"] == "Explain the trade-off concisely.\nUse short connected prose."
             assert sources["untrusted_evidence"] is True
             assert all(item["untrusted_evidence"] is True for item in sources["evidence"])
             assert {item["id"][0] for item in sources["evidence"]} == {"T", "S", "H", "W"}

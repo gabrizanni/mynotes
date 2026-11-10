@@ -228,7 +228,8 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
         related = set(payload.get('related_lessons', [])) - set(lectures)
         if related:
             raise pub.PublicationError('Related published lessons require the same coordinated revision: ' + ', '.join(sorted(related)))
-        profile = pub.effective_style(workspace.configuration_store().load(), code)
+        from .memory import candidate_style
+        profile = candidate_style(workspace.configuration_store().load(), code, payload)
         limit = payload.get('request_options', {}).get('image_limit')
         if limit is None: limit = profile.get('image_limit')
         count = sum(v.get('decision') == 'include' for v in payload['notes'].get('visual_decisions', []))
@@ -236,7 +237,7 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
             raise pub.PublicationError('Candidate exceeds the effective image policy; review it before cumulative update')
         payloads[lecture] = (payload, pack)
         sources[lecture] = file_sha256(path)
-        pub._replace_or_append(generated, payload['notes'], pack, language=course.get('languages', {}).get('notes', 'en'), recap_language=pub.effective_style(workspace.configuration_store().load(), code).get('recap_language', 'it'))
+        pub._replace_or_append(generated, payload['notes'], pack, language=profile.get('notes_language') or course.get('languages', {}).get('notes', 'en'), recap_language=profile.get('recap_language', 'it'))
     directory = workspace.runs_dir / '_course_updates' / code / uuid.uuid4().hex
     directory.mkdir(parents=True, exist_ok=True)
     raw = directory / 'generated.docx'; generated.save(raw)

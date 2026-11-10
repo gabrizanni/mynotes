@@ -36,7 +36,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mynotes"]
-artifacts = ["src/mynotes/resources/*.json", "src/mynotes/resources/*.docx"]
+artifacts = ["src/mynotes/resources/*.json", "src/mynotes/resources/*.docx", "src/mynotes/resources/prompts/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

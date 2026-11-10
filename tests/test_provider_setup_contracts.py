@@ -128,7 +128,7 @@ def test_claude_integration_is_managed_and_protects_edits(tmp_path):
     from mynotes.integrations import IntegrationError
     installed = install_integration("claude", tmp_path)
     skill = Path(installed["path"]) / "SKILL.md"
-    assert "course add --name" in skill.read_text()
+    assert "context --activity" in skill.read_text()
     skill.write_text("user edit")
     with pytest.raises(IntegrationError, match="edited locally"):
         install_integration("claude", tmp_path)

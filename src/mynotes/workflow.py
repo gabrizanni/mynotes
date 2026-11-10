@@ -426,13 +426,13 @@ def process(
     """Publish one generic lecture and safely skip identical inputs on rerun."""
     course_code, _ = parse_lecture_id(lecture_id)
     configuration = workspace.configuration_store().load()
-    course = _course(configuration, course_code)
+    from .memory import writing_configuration
+    course, profile = writing_configuration(configuration, course_code)
     requested = resolve_model(configuration, provider, quality)
-    profile = effective_style(configuration, course_code)
     sources, texts = _sources(transcript, materials, personal_notes, web_source, course)
     input_hash = hashlib.sha256(
         json.dumps(
-            {"texts": texts, "quality": requested.quality, "course": course, "provider": requested.__dict__},
+            {"texts": texts, "quality": requested.quality, "course": course, "style": profile, "provider": requested.__dict__},
             sort_keys=True,
         ).encode()
     ).hexdigest()
@@ -965,7 +965,11 @@ def _generate_candidate_locked(
     lecture_id = lecture_id.upper()
     course_code, _ = parse_lecture_id(lecture_id)
     configuration = workspace.configuration_store().load()
-    course = dict(_course(configuration, course_code))
+    from .memory import writing_configuration
+    try:
+        course, editorial_style = writing_configuration(configuration, course_code, instructions=instructions, image_limit=image_limit)
+    except ConfigurationError as error:
+        raise WorkflowError(str(error)) from error
     if speaker_focus is not None:
         if speaker_focus not in {"lecture","professor"}:raise WorkflowError("Invalid speaker_focus")
         course['speaker_focus']=speaker_focus
@@ -994,21 +998,6 @@ def _generate_candidate_locked(
             raise WorkflowError("Cannot verify source-pack freshness; run prepare again") from error
         if stale.get("transcription_cache_key") != (pack.get("transcription") or {}).get("cache_key"):
             raise WorkflowError("Transcription changed after preparation; run prepare again before generation")
-    editorial_style = effective_style(configuration, course_code)
-    if image_limit is not None:
-        if isinstance(image_limit, bool) or not isinstance(image_limit, int) or image_limit < 0:
-            raise WorkflowError("image_limit must be a non-negative integer")
-        editorial_style["image_limit"] = image_limit
-    if not isinstance(instructions, str):
-        raise WorkflowError("Lesson instructions must be text")
-    if instructions.strip():
-        editorial_style["lesson_instructions"] = instructions.strip()
-    editorial_style["question_language"] = str(configuration.get("personal", {}).get("interface_language") or course.get("languages", {}).get("notes", "en"))
-    # Existing free-form instructions remain part of the editorial request
-    # until the user chooses to replace them in the guided style editor.
-    editorial_style["freeform_preferences"] = configuration["style"].get("freeform_preferences", "")
-    if configuration.get("personal", {}).get("background"):
-        editorial_style["learner_background"] = configuration["personal"]["background"]
     input_hash = hashlib.sha256(json.dumps({"source_pack": pack_hash, "requested": requested.__dict__, "quality": requested.quality, "style": editorial_style, "course": course, "generation_contract": GENERATION_CONTRACT_VERSION}, sort_keys=True).encode()).hexdigest()
     run_dir = workspace.runs_dir / lecture_id
     candidate_path = run_dir / "lecture_notes.candidate.json"

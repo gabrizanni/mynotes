@@ -272,7 +272,8 @@ def _revalidate_organization(workspace, manifest, *, apply=False):
     options = manifest.get('request_options', {})
     kwargs = dict(provider=manifest['requested_model']['provider'], quality=manifest['requested_model']['quality'],
         selection=manifest.get('selection'), budgets=manifest.get('budgets'), instructions=options.get('instructions',''),
-        image_limit=options.get('image_limit'), speaker_focus=options.get('speaker_focus'), context_lessons=manifest.get('context_lessons'))
+        image_limit=options.get('image_limit'), speaker_focus=options.get('speaker_focus'), context_lessons=manifest.get('context_lessons'),
+        writing_snapshot=manifest)
     numbers = [int(l.rsplit('-L',1)[1]) for l in manifest['lectures']]
     plan = plan_batch(workspace, manifest['course_code'], numbers, **kwargs)
     if plan['status'] != 'PLANNED':

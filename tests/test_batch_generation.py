@@ -75,6 +75,20 @@ class Adapter:
 VERIFIED = BatchBudget(verified_for_model="test-model", context_tokens=1_000_000, output_tokens=100_000, output_reserve_per_lesson=4000)
 
 
+def test_resume_keeps_original_writing_preferences_after_memory_change(tmp_path):
+    from mynotes.memory import snapshot, update_memory
+    workspace, _, selection = workspace_and_deck(tmp_path)
+    adapter = Adapter()
+    first = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter, pause_after="OPS-L01")
+    revision = snapshot(workspace.configuration_store().load(), scope="global", area="notes")["revision"]
+    update_memory(workspace, scope="global", area="notes", expected_revision=revision,
+                  set_rules={"examples": "New preference for future requests."})
+    resumed = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter, batch_id=first["batch_id"])
+    assert resumed["status"] == "CANDIDATE_READY"
+    assert all("New preference" not in request.style["freeform_preferences"] for request in adapter.calls)
+    assert "New preference" in plan_batch(workspace, "OPS", [1, 2], selection=selection)["style"]["freeform_preferences"]
+
+
 def test_structural_slide_exemption_requires_trusted_image_bound_review(tmp_path):
     from PIL import Image
     workspace, deck, selection = workspace_and_deck(tmp_path)

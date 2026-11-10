@@ -289,8 +289,8 @@ def test_resume_never_silently_rewrites_saved_candidate_after_real_context_chang
     first=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer)
     path=Path(first['candidates'][0]['candidate']);before=path.read_bytes()
     config=ws.configuration_store().load();config['courses'][0]['context']='A different requested teaching objective.';ws.configuration_store().save(config)
-    with pytest.raises(WorkflowError,match='Resume would rewrite an existing batch candidate'):
-        generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    resumed=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    assert resumed['fingerprint']==first['fingerprint']
     assert len(writer.calls)==1 and path.read_bytes()==before
 
 

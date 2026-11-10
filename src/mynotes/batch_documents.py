@@ -29,7 +29,9 @@ def build_batch_documents(workspace,batch_id,*,mode='both'):
             rows.append((lesson,candidate,pack))
         sources={l:file_sha256(workspace.runs_dir/l/'lecture_notes.candidate.json') for l,_,_ in rows}
         configuration=workspace.configuration_store().load();course=_course(configuration,manifest['course_code'])
-        profile=effective_style(configuration,manifest['course_code'])
+        from .memory import candidate_style
+        profile=candidate_style(configuration,manifest['course_code'],{'effective_style':manifest.get('style')})
+        course['languages'] = manifest.get('course', {}).get('languages', course['languages'])
         key=__import__('hashlib').sha256(json.dumps({'sources':sources,'renderer':word_renderer_hash(),'mode':mode,
             'course':course,'style':profile,'builder':file_sha256(Path(__file__))},sort_keys=True).encode()).hexdigest()
         output=root/'documents'/key;index=output/'index.json'

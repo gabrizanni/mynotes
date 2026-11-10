@@ -8,6 +8,7 @@ from mynotes.chat import ChatError, launch_chat
 from mynotes.cli import main
 from mynotes.integrations import install_integration
 from mynotes.workspace import Workspace
+from mynotes.context import CORE, instruction_module, task_context
 
 
 def _setup(tmp_path: Path):
@@ -36,10 +37,11 @@ def test_empty_chat_uses_startup_context_without_eager_checks(tmp_path, monkeypa
     assert "courses=OPS" in prompt
     assert "onboarding=complete" in prompt
     assert "briefly greet the user, then wait" in prompt
-    assert "do not run commands, inspect files" in prompt
-    assert "the command tool to run" in prompt
-    assert "`mynotes doctor`" in prompt
-    assert "`mynotes status`" in prompt
+    assert "do not run commands, inspect files" in prompt.lower()
+    assert "`mynotes doctor`" in CORE
+    assert "`mynotes status`" in CORE
+    assert "context --activity" in CORE
+    assert instruction_module("notes") not in prompt
     assert options["env"]["MYNOTES_WORKSPACE"] == str(workspace.root)
     assert options["env"]["MYNOTES_CHAT_ACTIVE"] == "1"
 
@@ -55,10 +57,11 @@ def test_concrete_chat_request_retains_checks_and_recursion_guard(tmp_path, monk
     assert launch_chat(workspace, configuration, "agy", "Prepara OPS-L03") == 0
     prompt = calls[0][calls[0].index("--prompt-interactive") + 1]
     assert "Prepara OPS-L03" in prompt
-    assert "For note generation run `mynotes doctor` and `mynotes status`" in prompt
+    prompt += CORE + task_context(workspace.configuration_store().load(), "notes")["instructions"]
+    assert "`mynotes doctor` and `mynotes status`" in prompt
     assert "the task's direct command for transcription" in prompt
-    assert "the user performs manual desktop and microsoft word checks" in prompt.lower()
-    assert "updates are automatic with safety backups unless the course publication mode is review" in prompt.lower()
+    assert "manual desktop and microsoft word checks belong to the user" in prompt.lower()
+    assert "updates are automatic with safety backups unless course publication mode" in prompt.lower()
     assert "mynotes undo CODE" in prompt
     assert "--notes-file" in prompt
     assert "show it to the user and obtain their approval before publication" not in prompt
@@ -115,7 +118,8 @@ def test_cli_and_chat_do_not_change_process_parts_policy(tmp_path, monkeypatch):
     launch_chat(workspace, configuration, "agy", "Prepara OPS-L03")
     assert "MYNOTES_AGY_PARTS" not in os.environ
     prompt = calls[0][0][calls[0][0].index("--prompt-interactive") + 1]
-    assert "do not start pending-course questionnaires before completing" in prompt
+    assert "do not start" in CORE and "pending-course questionnaires before completing" in CORE
+    prompt += task_context(workspace.configuration_store().load(), "notes")["instructions"]
     assert "Optional course context never" in prompt
     assert "no extra approval" in prompt and "review mode" in prompt
 
@@ -125,5 +129,8 @@ def test_installed_integrations_share_operational_priority(tmp_path):
         installed = install_integration(platform, tmp_path)
         for name in (["agents/mynotes.md", "skills/mynotes/SKILL.md"] if platform == "agy" else ["SKILL.md"]):
             content = (Path(installed["path"]) / name).read_text()
-            assert "do not start pending-course questionnaires before completing" in content
-            assert "After completing the operational request" in content
+            assert "context --activity" in content
+            assert len(content.split()) < 900
+    notes = instruction_module("notes")
+    assert "After completing the operational request" in notes
+    assert "pending-course questionnaires before completing" in CORE

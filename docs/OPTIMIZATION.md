@@ -3,6 +3,30 @@
 Audit, verified improvements and remaining work, 2026-10-11–12. This is not a
 provider benchmark. No extra AI call was made for this audit.
 
+## Modular coordinator instructions and user memory
+
+The note-prompt-editor development change loads a small common policy plus the
+current activity's module and fresh memory, instead of supplying the complete
+manual at every launch. Source-reading and generation validation are unchanged.
+There is no library enumeration before an empty-chat greeting.
+
+Synthetic startup probes (no provider invocation), counting words rather than
+tokens, use an empty workspace, a short saved learner profile, and one synthetic
+course. The old initial message contained approximately 5,133–5,245 words before
+any additional skill/agent channel. The new common policy has 610 words:
+
+| State | Initial message, Codex / Agy / Claude | Configured text including skill/agent channels, Codex / Agy / Claude |
+| --- | --- | --- |
+| First start | 735 / 125 / 127 | 825 / 863 / 754 |
+| Profile saved, first course pending | 788 / 178 / 180 | 878 / 916 / 807 |
+| Course already configured | 665 / 55 / 57 | 755 / 793 / 684 |
+
+The combined count conservatively includes both Agy agent and skill. Codex's
+small skill is an index; its launcher supplies the policy. Claude explicitly
+appends its policy file. Actual provider-internal context loading, caching,
+latency and natural-language interpretation require separate live verification;
+these figures are not a speed, billing or academic-quality benchmark.
+
 ## 0.2.5 source correction and first-use trial
 
 Standalone DOCX notes with no recognized lecture heading are now fully extracted

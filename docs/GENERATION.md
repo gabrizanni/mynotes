@@ -26,6 +26,14 @@ delegates the choice to the CLI. See [dynamic catalog behavior](MODEL-CATALOG.md
 
 ## Complete an ordinary notes request
 
+Note preferences are resolved once from built-in defaults, global choices,
+course overrides and explicit run options. The same resolver serves single
+lessons, coordinated batches and study generation. Dialogue memory is excluded
+from writing inputs and cache identities. Original course answers are provenance,
+not instructions that can restore a superseded preference. A running request
+and an explicit batch resume retain their saved writing configuration; changing
+memory never starts a generation. A new request uses the latest preferences.
+
 ```sh
 mynotes notes OPS --lessons 1-6 --plan-only
 mynotes notes OPS --lessons 1-6

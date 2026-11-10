@@ -1262,6 +1262,8 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
     source_candidate = workspace.runs_dir / lecture_id / "lecture_notes.candidate.json"
     source_candidate_hash = file_sha256(source_candidate)
     candidate, pack = _load_candidate(workspace, lecture_id); notes = candidate["notes"]
+    from .memory import candidate_style
+    profile = candidate_style(configuration, code, candidate)
     image_limit = candidate.get("request_options", {}).get("image_limit")
     if image_limit is None:
         image_limit = profile.get("image_limit")
@@ -1290,7 +1292,7 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
         _configure_document(document, profile)
     else:
         document = _new_document(course, profile)
-    _replace_or_append(document, notes, pack, language=str(course.get("languages", {}).get("notes", "en")), recap_language=str(profile.get("recap_language", "it")))
+    _replace_or_append(document, notes, pack, language=str(profile.get("notes_language") or course.get("languages", {}).get("notes", "en")), recap_language=str(profile.get("recap_language", "it")))
     document.save(output)
     expected_visuals = sum(1 for item in notes.get("visual_decisions", []) if item.get("decision") == "include")
     expected_formula = bool(notes.get("formula") or notes.get("formulas") or any(block.get("kind") == "formula" for block in notes.get("blocks", [])))

@@ -144,20 +144,12 @@ def _read(path: Path) -> dict[str, Any]:
 
 
 def _style(configuration: dict, code: str, instructions: str, image_limit: int | None) -> dict:
-    style = effective_style(configuration, code)
-    if not isinstance(instructions, str):
-        raise WorkflowError("Lesson instructions must be text")
-    if instructions.strip():
-        style["lesson_instructions"] = instructions.strip()
-    if image_limit is not None:
-        if type(image_limit) is not int or image_limit < 0:
-            raise WorkflowError("image_limit must be a non-negative integer")
-        style["image_limit"] = image_limit
-    style["freeform_preferences"] = configuration["style"].get("freeform_preferences", "")
-    if configuration.get("personal", {}).get("background"):
-        style["learner_background"] = configuration["personal"]["background"]
-    style["question_language"] = str(configuration.get("personal", {}).get("interface_language") or _course(configuration, code).get("languages", {}).get("notes", "en"))
-    return style
+    from .memory import writing_configuration
+    from .configuration import ConfigurationError
+    try:
+        return writing_configuration(configuration, code, instructions=instructions, image_limit=image_limit)[1]
+    except ConfigurationError as error:
+        raise WorkflowError(str(error)) from error
 
 
 def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]:
@@ -582,7 +574,8 @@ def _fits(request: ProviderRequest, count: int, budget: BatchBudget) -> bool:
 
 def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int], *, provider: str | None = None,
                quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
-               instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False) -> dict:
+               instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False,
+               writing_snapshot: dict | None = None) -> dict:
     """Inspect existing prepared packs; write nothing and invoke no provider."""
     code = course_code.upper()
     if selection is not None and not isinstance(selection, dict):
@@ -599,7 +592,8 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
            and choice.get('review_before') not in lectures for choice in (selection or {}).values()):
         raise WorkflowError('A deferred slide must be reviewed within the selected prepared lesson range')
     configuration = workspace.configuration_store().load()
-    course = deepcopy(_course(configuration, code))
+    from .memory import generation_course
+    course = generation_course(_course(configuration, code))
     # Onboarding progress is administrative, never an input to lesson writing.
     course.pop('context_setup', None)
     if speaker_focus is not None:
@@ -607,6 +601,20 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
         course['speaker_focus']=speaker_focus
     requested = resolve_model(configuration, provider, quality)
     style = _style(configuration, code, instructions, image_limit)
+    if writing_snapshot:
+        if writing_snapshot.get("course_code") != code or writing_snapshot.get("lectures") != lectures:
+            raise WorkflowError("Writing snapshot does not match selected course and lessons")
+        course = deepcopy(writing_snapshot["course"])
+        style = deepcopy(writing_snapshot["style"])
+        if instructions.strip():
+            style["lesson_instructions"] = instructions.strip()
+        if image_limit is not None:
+            style["image_limit"] = image_limit
+        if speaker_focus:
+            course["speaker_focus"] = speaker_focus
+        old_model = writing_snapshot["requested_model"]
+        if provider in (None, old_model["provider"]) and quality in (None, old_model["quality"]):
+            requested = RequestedModel(**old_model)
     batch_id = code + "-" + _hash(lectures)[:12]
     historical = workspace.runs_dir / '_batches' / batch_id / 'manifest.json'
     if historical.is_file():
@@ -919,13 +927,19 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
-                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update") -> dict:
+                   build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update",
+                   writing_snapshot: dict | None = None) -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
     if word_mode not in {'update', 'standalone'}:
         raise WorkflowError('Word mode must be update or standalone')
     if autonomous_organization:
         word_mode = 'standalone'
-    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons, autonomous_organization=autonomous_organization)
+    if writing_snapshot is None and batch_id:
+        saved = load_batch_manifest(workspace, batch_id)
+        if saved.get("course") and saved.get("style"):
+            writing_snapshot = saved
+    kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons, autonomous_organization=autonomous_organization,
+                  writing_snapshot=writing_snapshot)
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
     if batch_id is not None and batch_id != plan["batch_id"]:
         raise WorkflowError("Resume batch ID does not match the selected course and lessons")
@@ -937,6 +951,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
     with ExitStack() as locks:
         for lecture in plan["lectures"]:
             locks.enter_context(_generation_lock(workspace, lecture))
+        # Freeze preferences between the initial plan and the locked execution.
+        kwargs["writing_snapshot"] = plan
         plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
         if plan["status"] != "PLANNED":
             _save(workspace.runs_dir / "_batches" / plan["batch_id"] / "manifest.json", plan)

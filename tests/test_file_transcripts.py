@@ -137,6 +137,7 @@ def test_export_write_failure_offers_save_retry_without_asr(setup,monkeypatch,ca
 
 def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch):
     from mynotes.chat import launch_chat
+    from mynotes.context import task_context
     ws,folder,_=setup
     for number in range(36):external(folder,f'External lecture {number}.txt')
     config=ws.configuration_store().load()
@@ -145,8 +146,12 @@ def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch)
     monkeypatch.setattr('mynotes.chat.subprocess.run',lambda args,**kw:calls.append(args) or type('Done',(),{'returncode':0})())
     assert launch_chat(ws,config,'agy','Lavora sul corso')==0
     prompt=' '.join(calls[0])
-    assert 'Before EVERY course task' in prompt and 'capture pending --json' in prompt
-    assert 'TXT files without audio/metadata' in prompt and 'External lecture 35' in prompt
+    assert 'External lecture 35' not in prompt
+    task=task_context(config,'notes')['instructions']
+    assert 'Before each course source task' in task and 'capture pending --json' in task
+    assert 'TXT files without audio/metadata' in task
+    pending=links.pending(capture.CaptureStore(ws))['items']
+    assert len(pending)==36 and any(item['title']=='External lecture 35' for item in pending)
 
 
 def test_two_existing_hardlinks_remain_two_visible_transcripts(setup):
