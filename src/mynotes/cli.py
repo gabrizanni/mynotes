@@ -1029,8 +1029,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "context":
             from .context import render_context, task_context
-            settings = Workspace.from_value(arguments.workspace).configuration_store().load()
-            result = task_context(settings, arguments.activity, arguments.course, include_core=arguments.include_core)
+            workspace = Workspace.from_value(arguments.workspace)
+            settings = workspace.configuration_store().load()
+            result = task_context(settings, arguments.activity, arguments.course, include_core=arguments.include_core, workspace=workspace)
             print(json.dumps(result, ensure_ascii=False, indent=2) if arguments.json else render_context(result))
             return 0
         if arguments.command == "memory":

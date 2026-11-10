@@ -72,6 +72,9 @@ def save(ws, item):
     value = {k: v for k, v in item.items() if k not in {'warnings', 'blocking_reasons', 'actions', 'can_transcribe', 'status', 'transcription_status', 'stable', 'audio_available'}}
     with database(ws) as conn:
         conn.execute('INSERT INTO recordings VALUES (?,?) ON CONFLICT(id) DO UPDATE SET metadata=excluded.metadata WHERE recordings.metadata != excluded.metadata', (item['id'], json.dumps(value, sort_keys=True)))
+    if item.get('export_text'):
+        from .source_routes import remember_transcript_folder
+        remember_transcript_folder(ws, {**item, 'path': item['export_text']})
 
 
 def roots(ws):

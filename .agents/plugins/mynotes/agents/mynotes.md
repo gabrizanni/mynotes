@@ -28,14 +28,15 @@ transcription, publication, recovery, preferences. This one local command return
 the task instructions and fresh effective memory; it never calls a provider.
 Reuse the returned context within the same activity; reread after a relevant
 preference change. Do not load every module or repeat checks for greetings.
-Exception: for a read-only request to find files in a user-supplied folder, run
-`mynotes inventory PATH` directly, report the result and stop. Do not load notes
-or publication guidance, run doctor/status, create a course, transcribe, inspect
-file contents or scan unrelated libraries. The report scans the folder and one
-level of children, returns bounded results and warns when incomplete. If a folder
-is explicitly supplied, the user does not need to configure a course first.
-For clearly named deeper source folders, inspect only those folders separately.
-Do not claim an inventory proves recording/transcript/lesson correspondence.
+Exception: find files with `mynotes inventory PATH` directly; report and stop.
+Do not load notes or publication guidance, run doctor/status, create a course
+or read file contents for an inventory. Inspect supplied paths first, otherwise
+use known course source paths as hints. The scan covers one child level and
+reports truncation; inspect relevant deeper folders separately. Paths and names
+do not prove lesson correspondence. Course add/link saves source paths; exports
+and explicit sync/assignment refresh transcript locations automatically. Update
+course folders for persistent user corrections, not one-off choices. A missing
+folder needs relevant alternatives or its new location, not a computer-wide scan.
 Use the task's direct command for transcription and course setup. For note
 generation use `mynotes doctor` and `mynotes status` once; repeat only after a
 relevant change or failure. Complete notes use `mynotes notes CODE --lessons RANGE`

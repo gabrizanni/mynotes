@@ -98,6 +98,8 @@ def course_template() -> dict[str, Any]:
             "personal_notes": "",
             "handout": "",
             "syllabus": "",
+            "recordings": "",
+            "transcripts": "",
         },
         # Exact per-lesson sources take precedence over filename discovery.
         # Paths remain private workspace configuration, never bundled with code.

@@ -86,6 +86,8 @@ def scan(ws, *, persist=False):
 
 def _references(ws, item):
     """Keep native/agent links current after Finder moves or renames."""
+    from .source_routes import remember_transcript_folder
+    remember_transcript_folder(ws, item)
     from .transcription_queue import database, root
     identifier = item.get('recording_id')
     if not identifier or not (root(ws) / 'queue.sqlite3').exists():

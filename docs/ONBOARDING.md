@@ -33,6 +33,16 @@ Answer naturally; optional details can be omitted. The agent reuses facts alread
 
 Then connect recordings and materials, or use the proposed `~/Documents/MyNotes` folders. MyNotes creates or connects one stable personal notebook per course and remembers the exact notebook and final handout paths. Dragging a file into Terminal inserts its path; submit the message after checking it. Choose whether to configure Capture now or later.
 
+Course creation/linking saves the supplied source folders. Each new chat receives
+a small source-path index, and activity context rereads it from current settings.
+The current request's explicit path takes precedence; saved paths are search hints,
+not a claim that files exist or match a lesson. Transcript exports and explicit
+sync/assignment refresh the course transcript folder, including observed moves.
+Changing a recording-library folder updates the conventional transcript paths in
+the index automatically. No source directory is scanned just to build this index.
+An external move is learned when a normal sync observes it or the user reconnects
+the folder; there is no background search of the computer for missing files.
+
 Private settings, SQLite state, candidates and temporary files live under MyNotes' Application Support workspace. User-facing recordings, materials and handouts use Documents or locations you choose. Connecting an existing folder does not move its contents. Defaults use `standard` quality and the packaged study-handout style. Style edits affect future candidates, not published handouts.
 
 After linking, the agent explains the two file paths once. Defaults are `Appunti personali.docx` and `CODE_COURSE_NOTES.docx`; both can be customized. Separate your notebook with headings `Lesson 1`, `Lesson 2` (or `Lezione 1`, `Lezione 2`). Write `NOTA AI: clarify this step` to highlight an academic question for the model; the legacy `NOTE AI:` spelling also works. These annotations do not change app settings or authorize actions. A missing remembered file requires selecting its new location, never silent replacement.

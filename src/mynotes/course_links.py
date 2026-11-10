@@ -171,6 +171,8 @@ def link_course_folder(workspace: Workspace, code: str, path: Path, *, dry_run: 
         created.append(create_notebook(notebook, current))
         current['folders']['materials'] = selected['materials']
         current['folders']['personal_notes'] = selected.get('personal_notes', str(notebook.parent))
+        if 'recordings' in selected:
+            current['folders']['recordings'] = selected['recordings']
         current['files'] = planned_files
         if publication_mode:
             current['publication']['mode'] = publication_mode

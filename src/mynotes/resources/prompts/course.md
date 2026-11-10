@@ -35,6 +35,10 @@ transcription, generation or unrelated doctor checks just to connect a folder.
 The returned course code and default folders are authoritative. Optional fields
 (institution, instructors and advanced model/effort) can be added later.
 Course setup does not require generation. Configure stable files with course link before preparing lecture sources; see the shared file guidance below.
+Save the supplied materials/recordings locations during course creation or linking.
+The source-path index is derived from saved course folders; use it on later tasks
+instead of asking again or scanning unrelated folders. Later persistent location
+corrections update that course's folders. Temporary paths apply only to the request.
 
 Italian course questions:
 1. Che corso è e cosa ti serve per studiarlo? Raccontami nome e argomento, come sono le lezioni (teoria, esercizi o casi), come sarà l’esame e cosa trovi più difficile.

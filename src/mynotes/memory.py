@@ -213,6 +213,10 @@ def generation_course(course):
     # provenance, not a second authoritative preference set. Keep the academic
     # context available but explicitly label its role in the provider prompt.
     course["preferences"] = {}
+    # Search hints are administrative; an export/relink alone must not create
+    # a new paid writing identity. Academic source hashes are checked separately.
+    for key in ('recordings', 'transcripts'):
+        course.get('folders', {}).pop(key, None)
     return course
 
 

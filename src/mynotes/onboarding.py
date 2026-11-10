@@ -179,6 +179,12 @@ def add_first_course(workspace: Workspace, name: str, notes_language: str = "en"
         if existing:
             if patch:
                 existing.update(apply_answer(existing))
+            if materials:
+                existing['folders']['materials'] = materials
+            if recordings:
+                existing['folders']['recordings'] = recordings
+                if recordings not in settings['paths']['recording_dirs']:
+                    settings['paths']['recording_dirs'].append(recordings)
             selected_code.append(existing["code"])
             return settings
         base = re.sub(r"[^A-Z0-9]", "", name.upper())[:12] or "COURSE"
@@ -196,6 +202,8 @@ def add_first_course(workspace: Workspace, name: str, notes_language: str = "en"
         course = normalize_course({"code": code, "name": name, "languages": {"lesson": "en", "notes": notes_language},
                                    "folders": {"materials": str(material_dir), "personal_notes": str(note_dir), "handout": str(root / "Handouts")}})
         course = apply_answer(course)
+        if recordings:
+            course['folders']['recordings'] = recordings
         tools = managed_tools()
         course["transcription"]["tools"].update({k: tools[k] for k in ("argmax", "model_cache") if isinstance(tools.get(k), str)})
         settings["courses"].append(course)
