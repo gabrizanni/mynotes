@@ -108,6 +108,7 @@ struct CaptureEvent: Codable, Identifiable {
         case "NEEDS_REVIEW":
             switch diagnosticCode {
             case "INVALID_START", "MISSING_END", "INVALID_END", "INVALID_DURATION": return "Orario da correggere"
+            case "INVALID_TIMEZONE": return "Fuso orario da verificare"
             case "UNKNOWN_COURSE": return "Corso da associare"
             case "EVENT_DISAPPEARED": return "Evento da verificare"
             default: return "Programmazione da completare"
@@ -122,6 +123,7 @@ struct CaptureEvent: Codable, Identifiable {
     var statusExplanation: String {
         if eligibility == "SCHEDULED" { return "La lezione è nel programma automatico. La registrazione è confermata soltanto quando Capture acquisisce il microfono." }
         switch diagnosticCode {
+        case "INVALID_TIMEZONE": return "Il fuso non è riconosciuto oppure l’ora locale è ambigua o inesistente durante il cambio dell’ora legale. Correggi il calendario usando un fuso valido e un orario univoco, poi sincronizza."
         case "INVALID_START": return "Il calendario non fornisce un inizio valido. Correggi l’evento nel calendario e sincronizza."
         case "MISSING_END": return "Manca l’orario di fine. Aggiungilo nel calendario e sincronizza."
         case "INVALID_END": return "L’orario di fine non è valido. Correggilo nel calendario e sincronizza."
