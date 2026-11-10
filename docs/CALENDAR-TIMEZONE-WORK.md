@@ -16,7 +16,7 @@ Branch: `fix/calendar-timezones`. Prerequisite: installed UI 0.3.3, retained by 
 - [x] C0: Clean tree inspected; dedicated topic branch created from develop with installed UI prerequisite merged.
 - [x] C1: Consistent local display, live timezone/day updates and original-time detail; native regression checks.
 - [x] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
-- [ ] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
+- [x] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
 - [ ] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
 - [ ] C5: 0.3.4 build/install with private backup and rollback; real UI and launched-path verification.
 
@@ -35,3 +35,7 @@ C1 evidence: release SwiftUI build passed; both workspace native tests passed, i
 Additional C2 reproductions: a floating 19:00 Kolkata event inside the UTC subscription window was omitted before localization; an unknown explicit TZID was silently interpreted as Kolkata. Both require regression coverage.
 
 C2 evidence: 83 focused ingestion/calendar tests passed. Floating DTSTART/DTEND/RECURRENCE-ID/RDATE/EXDATE are localized before recurrence expansion and period filtering, in both import modes. Explicit event TZID is preserved; unknown TZID and ambiguous/skipped local times are rejected/reported; existing invalid events remain reviewable with their identity retained.
+
+C3 in progress: UI release build and workspace native checks passed for day-clipped spans and 23/25-hour days. `swift test --package-path capture` cannot run on this Command Line Tools installation because XCTest is unavailable; use `scripts/test_capture_native.py --scheduler-only`, now extended with the same clock-change assertions. No application update has been installed yet.
+
+C3 evidence: final UI release build passed. Workspace native tests passed for split midnight spans, exclusive day-end boundaries, 23/25-hour grids and distinct positions for the repeated local hour. Standalone scheduler regressions passed after clock notifications were dispatched to the main actor; no microphone acquisition or system-clock changes were used. Equivalent XCTest assertions are retained for hosts with XCTest, but could not be run here. Full integration suite is running; C4/C5 remain incomplete.

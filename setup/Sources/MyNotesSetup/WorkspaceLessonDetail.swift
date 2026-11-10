@@ -31,7 +31,7 @@ struct WorkspaceLessonDetail: View {
                         Text(lesson.title).font(.title2.weight(.semibold)).textSelection(.enabled)
                         Text(courseName).foregroundStyle(.secondary)
                         Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).font(.callout).foregroundStyle(.secondary)
-                        if let original = WorkspaceCalendar(timezone: displayTimeZone.identifier).originalTimeLabel(lesson.date, timezone: lesson.timezone) {
+                        if let sourceZone = lesson.event?.timezone, let original = WorkspaceCalendar(timezone: displayTimeZone.identifier).originalTimeLabel(lesson.date, timezone: sourceZone) {
                             Text("Orario originale · " + original).font(.caption).foregroundStyle(.secondary)
                         }
                     }

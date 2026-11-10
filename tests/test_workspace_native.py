@@ -48,6 +48,23 @@ precondition(local.calendar.component(.day,from:boundary)==8)
 precondition(local.originalTimeLabel(boundary,timezone:"Asia/Kolkata")==nil)
 precondition(local.originalTimeLabel(boundary,timezone:"Europe/Rome")!.contains("00:30"))
 precondition(local.originalTimeLabel(boundary,timezone:"Unknown/Zone")==nil)
+let beforeMidnight=CaptureDates.read("2026-11-07T18:00:00Z")!
+let afterMidnight=CaptureDates.read("2026-11-07T20:00:00Z")!
+let first=local.clipped(start:beforeMidnight,end:afterMidnight,on:beforeMidnight)!
+let second=local.clipped(start:beforeMidnight,end:afterMidnight,on:afterMidnight)!
+precondition(first.duration==1800 && second.duration==5400)
+precondition(first.end==second.start)
+precondition(local.clipped(start:beforeMidnight,end:first.end,on:afterMidnight)==nil)
+precondition(local.clipped(start:afterMidnight,end:beforeMidnight,on:beforeMidnight)==nil)
+let autumn=CaptureDates.read("2026-10-25T12:00:00Z")!
+let spring=CaptureDates.read("2026-03-29T12:00:00Z")!
+precondition(clock.hours(autumn).count==25 && clock.dayInterval(autumn).duration==90000)
+precondition(clock.hours(spring).count==23 && clock.dayInterval(spring).duration==82800)
+let firstRepeated=CaptureDates.read("2026-10-25T00:30:00Z")!
+let secondRepeated=CaptureDates.read("2026-10-25T01:30:00Z")!
+precondition(clock.clock(firstRepeated)==clock.clock(secondRepeated))
+precondition(clock.timelineMinute(secondRepeated,on:autumn)-clock.timelineMinute(firstRepeated,on:autumn)==60)
+precondition(clock.label(firstRepeated,format:"zzz") != clock.label(secondRepeated,format:"zzz"))
 let ny=WorkspaceCalendar(timezone:"America/New_York")
 precondition(ny.calendar.component(.day,from:boundary)==7)
 precondition(ny.clock(boundary)=="18:30")

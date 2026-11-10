@@ -22,6 +22,39 @@ final class CaptureTests: XCTestCase {
                                          pythonExecutable: "/usr/bin/false", courseCodes: ["QNT9"])
         try CaptureJSON.save(value, to: root.appendingPathComponent("config/capture.json"))
     }
+    func testRecordingWindowUsesInstantsAcrossRepeatedLocalHour() throws {
+        let first = ISO8601DateFormatter().date(from: "2026-10-25T02:30:00+02:00")!
+        let second = ISO8601DateFormatter().date(from: "2026-10-25T02:30:00+01:00")!
+        var event = lecture(first)
+        event.startsAt = first; event.recordAt = first
+        event.endsAt = second; event.stopAt = second.addingTimeInterval(120)
+        event.timezone = "Europe/Rome"
+        XCTAssertTrue(event.isCurrent(first))
+        XCTAssertTrue(event.isCurrent(first.addingTimeInterval(3599)))
+        XCTAssertFalse(event.isCurrent(second))
+        event.timezone = "Asia/Kolkata"
+        XCTAssertTrue(event.isCurrent(first))
+        XCTAssertFalse(event.isCurrent(second))
+    }
+    @MainActor
+    func testClockNotificationsReconcileWithoutEnablingCapture() async throws {
+        let directory = try root()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try configuration(directory, enabled: false)
+        try CaptureJSON.save(Schedule(schemaVersion: 1, revision: 1, events: []), to: directory.appendingPathComponent("state/capture/schedule.json"))
+        let engine = try CaptureEngine(workspace: directory, authorization: { false })
+        engine.start()
+        defer { engine.shutdown() }
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange, .NSCalendarDayChanged] {
+            engine.evaluate(now: Date().addingTimeInterval(-3600))
+            NotificationCenter.default.post(name: name, object: nil)
+            try await Task.sleep(nanoseconds: 20_000_000)
+            let status = try CaptureJSON.load(RuntimeStatus.self, from: directory.appendingPathComponent("state/capture/runtime.json"))
+            XCTAssertLessThan(abs(status.updatedAt.timeIntervalSinceNow), 5)
+            XCTAssertFalse(status.recording)
+            XCTAssertEqual(status.title, "Capture disabled")
+        }
+    }
     @MainActor
     func testDeniedMicrophoneNeverClaimsRecording() throws {
         let directory = try root()

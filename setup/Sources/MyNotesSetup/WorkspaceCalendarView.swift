@@ -40,7 +40,7 @@ struct WorkspaceCalendarView: View {
     private var week: some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                Color.clear.frame(width: 46, height: 64)
+                Color.clear.frame(width: 1, height: 64)
                 ForEach(days, id: \.self) { day in
                     VStack(spacing: 6) {
                         Text(clock.label(day, format: "EEE").uppercased()).font(.caption).foregroundStyle(.secondary)
@@ -54,9 +54,8 @@ struct WorkspaceCalendarView: View {
                 ScrollView(.vertical) {
                     HStack(alignment: .top, spacing: 0) {
                         VStack(spacing: 0) {
-                            ForEach(0..<24, id: \.self) { hour in
-                                Text(String(format: "%02d", hour)).font(.caption).foregroundStyle(.secondary)
-                                    .frame(width: 46, height: hourHeight, alignment: .top).id(hour)
+                            ForEach(0..<(days.map { clock.hours($0).count }.max() ?? 24), id: \.self) { hour in
+                                Color.clear.frame(width: 1, height: hourHeight).id(hour)
                             }
                         }
                         ForEach(days, id: \.self) { day in
@@ -68,12 +67,15 @@ struct WorkspaceCalendarView: View {
         }
     }
     private func dayColumn(_ day: Date) -> some View {
-        let events = entries.filter { clock.sameDay($0.date, day) }.sorted { $0.date < $1.date }
+        let events = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
-                ForEach(0..<24, id: \.self) { _ in
-                    Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
-                    Color.clear.frame(height: hourHeight - 1)
+                ForEach(clock.hours(day), id: \.self) { hour in
+                    HStack(alignment: .top, spacing: 2) {
+                        Text(clock.label(hour, format: clock.dayInterval(day).duration == 86400 ? "HH" : "HH\nzzz"))
+                            .font(.system(size: 9)).foregroundStyle(.secondary).frame(width: 28, alignment: .leading)
+                        Rectangle().fill(Color.primary.opacity(0.06)).frame(height: 1)
+                    }.frame(height: hourHeight, alignment: .top)
                 }
             }
             HStack(alignment: .top, spacing: 2) {
@@ -82,25 +84,24 @@ struct WorkspaceCalendarView: View {
                     ZStack(alignment: .top) {
                         Color.clear
                         ForEach(lanes[lane]) { lesson in
-                            if let event = lesson.event {
-                                let startMinute = clock.minuteOfDay(lesson.date)
-                                let endMinute = clock.sameDay(event.end, day) ? clock.minuteOfDay(event.end) : 1440
+                            if let event = lesson.event, let segment = clock.clipped(start: event.start, end: event.end, on: day) {
+                                let startMinute = clock.timelineMinute(segment.start, on: day)
                                 let offset = CGFloat(startMinute) / 60 * hourHeight
-                                let duration = Double(max(15, endMinute - startMinute)) * 60
+                                let duration = segment.duration
                                 WorkspaceCalendarEvent(lesson: lesson, status: lesson.recordingLabel(model.snapshot),
-                                    time: clock.clock(lesson.date), height: max(32, CGFloat(duration / 3600) * hourHeight - 3), select: select)
+                                    time: (segment.start > event.start ? "↳ " : "") + clock.label(segment.start, format: "HH:mm z"), height: max(32, CGFloat(duration / 3600) * hourHeight - 3), select: select)
                                     .offset(y: offset)
 
                             }
                         }
                     }
                 }
-            }.padding(.horizontal, 3)
+            }.padding(.leading, 30).padding(.trailing, 3)
             if clock.sameDay(day, now) {
-                Rectangle().fill(Color.red).frame(height: 1).offset(y: CGFloat(clock.minuteOfDay(now)) / 60 * hourHeight)
+                Rectangle().fill(Color.red).frame(height: 1).offset(y: CGFloat(clock.timelineMinute(now, on: day)) / 60 * hourHeight)
                     .accessibilityLabel("Ora attuale: " + clock.clock(now))
             }
-        }.frame(height: hourHeight * 24).overlay(alignment: .leading) { Rectangle().fill(Color.primary.opacity(0.06)).frame(width: 1) }
+        }.frame(height: hourHeight * clock.dayInterval(day).duration / 3600).overlay(alignment: .leading) { Rectangle().fill(Color.primary.opacity(0.06)).frame(width: 1) }
     }
     private var month: some View {
         ScrollView {
@@ -109,7 +110,7 @@ struct WorkspaceCalendarView: View {
                     Text(weekday).font(.caption).foregroundStyle(.secondary).padding(.vertical, 16)
                 }
                 ForEach(days, id: \.self) { day in
-                    let items = entries.filter { clock.sameDay($0.date, day) }.sorted { $0.date < $1.date }
+                    let items = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
                     VStack(alignment: .leading, spacing: 6) {
                         Button { anchor = day; monthly = false } label: {
                             Text(clock.label(day, format: "d")).font(.callout.weight(.medium))
@@ -117,7 +118,7 @@ struct WorkspaceCalendarView: View {
                         }.buttonStyle(.plain).padding(.bottom, 4)
                         ForEach(Array(items.prefix(3))) { item in
                             Button { select(item.id) } label: {
-                                Text(clock.clock(item.date) + " " + item.title).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(clock.clock(max(item.date, clock.dayInterval(day).start)) + " " + item.title).font(.caption).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(.plain).padding(4).background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
                         }
                         if items.count > 3 { Button("Altre \(items.count - 3)") { anchor = day; monthly = false }.font(.caption).buttonStyle(.plain) }

@@ -128,6 +128,21 @@ struct WorkspaceCalendar {
         return (0..<42).compactMap { calendar.date(byAdding: .day, value: $0, to: beginning) }
     }
     func sameDay(_ a: Date, _ b: Date) -> Bool { calendar.isDate(a, inSameDayAs: b) }
+    func dayInterval(_ day: Date) -> DateInterval {
+        calendar.dateInterval(of: .day, for: day)!
+    }
+    func clipped(start: Date, end: Date, on day: Date) -> DateInterval? {
+        let bounds = dayInterval(day)
+        let from = max(start, bounds.start), through = min(end, bounds.end)
+        return from < through ? DateInterval(start: from, end: through) : nil
+    }
+    func hours(_ day: Date) -> [Date] {
+        let bounds = dayInterval(day)
+        return stride(from: 0.0, to: bounds.duration, by: 3600).map { bounds.start.addingTimeInterval($0) }
+    }
+    func timelineMinute(_ date: Date, on day: Date) -> Double {
+        date.timeIntervalSince(dayInterval(day).start) / 60
+    }
     func minuteOfDay(_ date: Date) -> Int {
         let components = calendar.dateComponents([.hour, .minute], from: date)
         return (components.hour ?? 0) * 60 + (components.minute ?? 0)

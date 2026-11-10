@@ -137,12 +137,12 @@ struct MyNotesWorkspaceView: View {
             await refresh(recover: true)
         }
         .environment(\.timeZone, TimeZone(identifier: displayTimezoneID) ?? .autoupdatingCurrent)
-        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange).receive(on: RunLoop.main)) { _ in
             displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
             clockInstant = Date()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .NSSystemClockDidChange)) { _ in clockInstant = Date() }
-        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged)) { _ in clockInstant = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSSystemClockDidChange).receive(on: RunLoop.main)) { _ in clockInstant = Date() }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in clockInstant = Date() }
         .onChange(of: scenePhase) { _, phase in if phase == .active && sheet == nil { Task { await refresh(recover: true) } } }
         .onReceive(poll) { date in
             if abs(date.timeIntervalSince(clockInstant)) >= 30 { clockInstant = date }
@@ -201,7 +201,9 @@ struct MyNotesWorkspaceView: View {
         }
     }
     private var today: some View {
-        let dayLessons = lessons.filter { clock.sameDay($0.date, now) }.sorted { $0.date < $1.date }
+        let dayLessons = lessons.filter { lesson in
+            lesson.event.map { clock.clipped(start: $0.start, end: $0.end, on: now) != nil } ?? clock.sameDay(lesson.date, now)
+        }.sorted { $0.date < $1.date }
         let next = lessons.filter { ($0.event?.end ?? .distantPast) > now && $0.event?.eligibility == "SCHEDULED" }.min { $0.date < $1.date }
         let problems = lessons.filter(\.needsAttention).filter { $0.hasContent || $0.event?.eligibility != "SCHEDULED" }
         return ScrollView {

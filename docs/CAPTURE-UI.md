@@ -318,3 +318,21 @@ Misure iniziali sui metadati locali di 72 lezioni (nessun audio letto):
 Queste misure riguardano il modello dati; la reattività finale va verificata anche
 nell’app nativa. Le fixture pubbliche usano soltanto metadati artificiali. Sample,
 fixture personali e ricevute di installazione rimangono fuori dal repository.
+
+
+### Orari locali e calendario
+
+Oggi, Calendario e Raccolta mostrano gli orari nel fuso del Mac. Il dettaglio
+riporta anche l’orario originale quando il fuso dell’evento è diverso. Cambiare
+fuso non modifica gli istanti delle lezioni o gli audio già registrati.
+
+Gli eventi ICS con TZID mantengono il loro fuso; quelli senza fuso usano quello
+della sottoscrizione. Fusi sconosciuti e ore locali ambigue o inesistenti vengono
+segnalati per revisione, senza sostituzioni silenziose. Le lezioni oltre
+mezzanotte compaiono in entrambi i giorni; la griglia segue le 23 o 25 ore reali
+nei cambi dell’ora legale, indicando il fuso nelle ore ripetute.
+
+Capture rivaluta le scadenze quando il sistema segnala un cambio dell’orologio,
+del fuso o del giorno, rispettando pausa e disattivazione. Il Mac deve comunque
+restare acceso e sveglio; un orologio di sistema errato richiede correzione nelle
+impostazioni di macOS.
