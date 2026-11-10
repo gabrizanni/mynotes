@@ -43,6 +43,10 @@ capture_install_guard() {
   fi
 }
 
+refresh_launch_entries() {
+  "$python_bin" "$release_root/scripts/cleanup_launch_services.py" --app-home "$app_home" || print -u2 "MyNotes launch-entry cleanup failed; run scripts/cleanup_launch_services.py to retry."
+}
+
 refresh_capture_python() {
   "$python_bin" - "$app_home/current/venv/bin/mynotes" <<'PY_CAPTURE'
 import json, os, subprocess, sys
@@ -131,6 +135,7 @@ if [[ -n "$rollback_version" ]]; then
     print -u2 "Rollback configuration failed; previous application selection restored."
     exit 2
   fi
+  refresh_launch_entries
   print "Rolled back MyNotes launcher to $rollback_version. Private workspaces were not changed."
   exit 0
 fi
@@ -268,5 +273,6 @@ application_selected=1
 write_launcher
 refresh_capture_python
 install_complete=1
+refresh_launch_entries
 print "Installed MyNotes $version. Ensure $prefix/bin is on PATH."
 print "Provider authentication stays external: use codex login or the Agy sign-in flow."
