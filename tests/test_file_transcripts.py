@@ -150,7 +150,7 @@ def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch)
     prompt=' '.join(calls[0])
     assert 'External lecture 35' not in prompt
     task=task_context(config,'notes')['instructions']
-    assert 'Before each course source task' in task and 'capture pending --json' in task
+    assert 'Before preparing or generating notes' in task and 'capture pending --json' in task
     assert 'TXT files without audio/metadata' in task
     pending=links.pending(capture.CaptureStore(ws))['items']
     assert len(pending)==36 and any(item['title']=='External lecture 35' for item in pending)

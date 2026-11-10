@@ -1,4 +1,6 @@
-Before each course source task (notes, study or a source-availability check), run
+For read-only discovery in a user-supplied folder use `mynotes inventory PATH`;
+report the result and stop. Do not start a generation or a full-library scan.
+Before preparing or generating notes and study materials, run
 `mynotes capture pending --json` and `mynotes transcription-queue transcripts --json`.
 Inspect all relevant TXT in the course folder AND Trascrizioni/Dubbi before
 declaring a lesson missing, running ASR or preparing notes. Do not limit the

@@ -101,6 +101,15 @@ mynotes context --activity notes --course COURSE
 mynotes context --activity preferences --course COURSE --json
 ```
 
+To list sources in a folder you supplied, say “find the recordings,
+transcripts and slides in this folder.” The agent can use `mynotes inventory
+PATH` immediately, without creating a course. This is a metadata-only inventory
+of the supplied folder and its immediate children; it reports file counts and
+truncation, and lists TXT files among notes because a filename alone cannot prove
+whether one is a transcript. It does not validate audio, associate lessons or
+read file contents. A deeper folder must be inspected separately. A later request
+to prepare notes still performs the appropriate source and freshness checks.
+
 Activities are `profile`, `course`, `notes`, `study`, `capture`, `transcription`,
 `publication`, `recovery`, and `preferences`. Each returns the relevant guidance
 and fresh inherited/own/effective memory. It invokes no model and does not scan

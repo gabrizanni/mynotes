@@ -186,6 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"mynotes {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+    inventory = subparsers.add_parser("inventory", help="inspect one supplied course folder without setup or content extraction")
+    inventory.add_argument("path", help="course folder to inspect")
     from .context import ACTIVITIES
     context = subparsers.add_parser("context", help="read task instructions and fresh effective memory; no provider calls")
     context.add_argument("--activity", choices=ACTIVITIES, required=True)
@@ -1020,6 +1022,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.command == "inventory":
+            from .course_links import inspect_course_folder
+            result = inspect_course_folder(Path(arguments.path))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if arguments.command == "context":
             from .context import render_context, task_context
             settings = Workspace.from_value(arguments.workspace).configuration_store().load()

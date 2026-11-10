@@ -235,6 +235,13 @@ def test_standalone_provider_can_bootstrap_core_once(workspace, capsys):
     assert "common_instructions" not in json.loads(capsys.readouterr().out)
 
 
+def test_simple_folder_inventory_is_distinct_from_preparing_notes():
+    assert 'mynotes inventory PATH' in CORE
+    assert 'Do not load notes' in CORE
+    assert 'For read-only discovery' in instruction_module('sources')
+    assert 'Before preparing or generating notes' in instruction_module('sources')
+
+
 @pytest.mark.parametrize("patch", ["null", "[]", '{"image_limit":true}', '{"writing_style":"invented"}'])
 def test_invalid_style_patch_is_rejected_without_writing(workspace, capsys, patch):
     before = workspace.configuration_path.read_bytes()
