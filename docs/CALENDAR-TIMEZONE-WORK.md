@@ -18,7 +18,7 @@ Branch: `fix/calendar-timezones`. Prerequisite: installed UI 0.3.3, retained by 
 - [x] C2: ICS timezone provenance, invalid timezone handling, recurrence/DST checks and stable event identity.
 - [x] C3: Day-clipped event segments, DST presentation and recording deadline reconciliation checks.
 - [x] C4: Relevant automated checks, public-tree audit, reviewed commits and draft PR into develop.
-- [ ] C5: 0.3.4 build/install with private backup and rollback; real UI and launched-path verification.
+- [x] C5: 0.3.4 build/install with private backup and rollback; real UI and launched-path verification.
 
 ## Baseline evidence
 
@@ -28,7 +28,7 @@ Confirmed gaps: Today/Calendar use the first event timezone, library/detail use 
 
 ## Resume procedure
 
-Inspect `git status`, this checklist and the latest focused commits. Do not assume a build/install process stopped: check its live handle/log before restarting. Until C5 is verified, the installed app remains 0.3.3. Build and install helpers from previous updates are private temporary files and must be inspected before reuse. Keep installation receipts and personal paths outside this public document.
+Inspect `git status`, this checklist and the latest focused commits. Do not assume a build/install process stopped: check its live handle/log before restarting. C5 is verified: the installed app and recorder are 0.3.4. Build and install helpers from previous updates are private temporary files and must be inspected before reuse. Keep installation receipts and personal paths outside this public document.
 
 C1 evidence: release SwiftUI build passed; both workspace native tests passed, including India/New York day boundaries and original Rome time. Added system timezone/clock/day notification handling and a bounded 30-second visible-clock refresh. Real UI verification remains C5.
 
@@ -43,3 +43,9 @@ C3 evidence: final UI release build passed. Workspace native tests passed for sp
 C4 in progress: full pytest integration run exited successfully (no failures). Preparing 0.3.4 and an actionable localized INVALID_TIMEZONE explanation. The changed native dashboard case is being checked separately; no broad suite rerun is needed for the version bump/UI copy. New Capture code changes its ad-hoc signature, so C5 must explicitly verify microphone permission and must not assume authorization survived.
 
 C4 evidence: all local integration/native/dashboard checks passed, public-tree audit and staged diff checks passed, universal release and signed UI app built. Isolated native UI preview verified Rome DST fallback (02 CEST and 02 CET), a spanning lesson on both month dates, and the same lesson at 06:00 India with original 02:30 CEST detail. Focused commits are pushed; draft PR: https://github.com/gabrizanni/mynotes/pull/6. C5 installation and its permission check remain outstanding.
+
+## Completed installation audit
+
+0.3.4 was installed only after GitHub CI run 42765264206 succeeded, including full tests, native audio/scheduler regression, public audit and DMG build. The canonical installed app was opened and its real calendar verified. The running recorder executable resolves to the 0.3.4 runtime and matches the candidate hash; microphone permission remains AUTHORIZED. Existing media/configuration preservation checks passed. Private installation receipt, previous app/runtime and syntax-checked rollback script are retained outside Git. Temporary preview/build apps were disabled to avoid duplicate launch targets. No real microphone recording or paid model call was used.
+
+All implementation checkpoints are complete. Remaining draft-PR review/merge is a separate repository integration action; no release tag or stable-branch promotion was performed.
