@@ -152,14 +152,16 @@ def library(workspace, *, query=None, date=None, course=None):
                     if item["audio_available"] and item["id"] not in active_ids and item.get("event_id") not in active_ids:
                         audio_stat = Path(item['path']).stat()
                         verified = item.get('verified_audio') == [audio_stat.st_mtime_ns, audio_stat.st_size] and item.get('audio_sha256') == saved.get('audio_sha256')
-                        state = "COMPLETED" if verified or file_sha256(Path(item["path"])) == saved.get("audio_sha256") else "OUTDATED"
+                        # Polling only reads metadata. Full audio validation belongs to
+                        # explicit sync, import and transcription preparation.
+                        state = "COMPLETED" if verified else "OUTDATED"
                         if state == "COMPLETED":
                             if path.with_suffix(".txt").is_file():
                                 item["transcript_text"] = str(path.with_suffix(".txt"))
                             item["transcript_json"] = str(path)
                             item['quality_summary'] = saved.get('quality_summary')
                         else:
-                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio è cambiato dopo la trascrizione. Verifica la sorgente prima di ritrascrivere."})
+                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio richiede una verifica rispetto alla trascrizione salvata. Verifica la sorgente prima di riutilizzarla."})
                 else:
                     state = "NEEDS_REVIEW"
                     item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione salvata non supera i controlli di integrità. Controlla il risultato prima di riutilizzarlo."})
@@ -284,6 +286,8 @@ def library(workspace, *, query=None, date=None, course=None):
         if state in {'QUEUED', 'RUNNING'}:
             item['can_transcribe'] = False
     values = items.values()
+    from .audio_sources import project
+    project(workspace, list(items.values()))
     if query:
         from .capture_calendar import contains
         values = [r for r in values if contains(r["title"], query)]
@@ -423,6 +427,9 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
     added, skipped, reuse_archives, notices = 0, [], [], []
     for item in recordings:
         state = item["transcription_status"]
+        if not item.get('source_selected', True):
+            skipped.append({"recording_id": item["id"], "reason": "SOURCE_SELECTION", "blocking_reasons": item["blocking_reasons"]})
+            continue
         if recording_id is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
             continue
         if state != "COMPLETED" and not item["can_transcribe"]:
@@ -750,6 +757,12 @@ def change_job(workspace, identifier, action):
     """Serialize user transitions with runner claims; keep attempt files intact."""
     import signal
     from .recording_library import resolve_path
+    if action in {'retry', 'restart', 'recover'}:
+        target = next((j for j in status(workspace)['jobs'] if j['id'] == identifier), None)
+        if target:
+            source = next((i for i in library(workspace) if i['id'] == target['recording_id']), None)
+            if source and not source.get('source_selected', True):
+                raise ValueError('Scegli questa sorgente audio prima di avviare un nuovo tentativo.')
     pid = None
     if action not in {'retry', 'restart', 'recover', 'remove', 'cancel'}:
         raise ValueError('Azione di coda non riconosciuta')
@@ -817,10 +830,17 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
+    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "verify-library", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
+        if action == 'associate-audio':
+            command.add_argument('--recording', required=True)
+            command.add_argument('--file', required=True)
+        if action in {'inspect-audio', 'import-audio'}:
+            command.add_argument('--file', required=True)
+        if action in {'prefer-audio', 'exclude-audio', 'restore-audio', 'prepare-trash'}:
+            command.add_argument('--recording', required=True)
         if action == "rename-transcript":
             command.add_argument("--transcript", required=True)
             command.add_argument("--name", required=True)
@@ -856,7 +876,23 @@ def run_cli(args):
     ws, action = Workspace.from_value(args.workspace), args.queue_command
     if not ws.is_initialized():
         raise ValueError("Initialize MyNotes first")
-    if action == "rename-transcript":
+    if action in {'inspect-audio', 'import-audio'}:
+        from .audio_sources import inspect_audio, import_audio
+        payload = json.loads(Path(args.file).read_text())
+        value = ({'status': 'OK', 'files': [inspect_audio(ws, p) for p in payload['paths']]}
+                 if action == 'inspect-audio' else import_audio(ws, payload['paths'], event_id=payload.get('event_id'), course=payload.get('course'), lesson=payload.get('lesson')))
+    elif action == 'associate-audio':
+        from .audio_sources import associate
+        payload = json.loads(Path(args.file).read_text())
+        value = associate(ws, args.recording, event_id=payload.get('event_id'), course=payload.get('course'), lesson=payload.get('lesson'))
+    elif action in {'prefer-audio', 'exclude-audio', 'restore-audio', 'prepare-trash'}:
+        from .audio_sources import choose
+        value = choose(ws, args.recording, action)
+    elif action == "verify-library":
+        from .recording_library import sync
+        sync(ws)
+        value = {"status": "OK", "message": "File della raccolta verificati. Nessuna nuova trascrizione avviata."}
+    elif action == "rename-transcript":
         from .transcript_library import rename
         value = rename(ws, args.transcript, args.name)
     elif action == "transcripts":

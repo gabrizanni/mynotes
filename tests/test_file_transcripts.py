@@ -98,9 +98,11 @@ def test_failed_secondary_saves_primary_and_empty_primary_still_fails(setup,monk
     assert other.exists() and not (folder/'Trascrizioni'/'Dubbi'/'No text.txt').exists()
 
 
-def test_mtime_change_does_not_invalidate_and_new_content_does(setup):
+def test_metadata_change_requires_explicit_verification_and_keeps_transcript(setup):
     ws,folder,engine=setup;audio(folder);item=queue.library(ws)[0];transcribe(ws,item['id'])
     current=queue.library(ws)[0];p=Path(current['path']);st=p.stat();os.utime(p,(st.st_atime,st.st_mtime+100))
+    assert queue.library(ws)[0]['transcription_status']=='OUTDATED'
+    lib.sync(ws)
     assert queue.library(ws)[0]['transcription_status']=='COMPLETED'
     p.write_bytes(p.read_bytes()+b'changed');assert queue.library(ws)[0]['transcription_status']=='OUTDATED'
     assert Path(current['export_text']).exists() and engine.calls==1

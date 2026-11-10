@@ -10,7 +10,7 @@ private func captureStateLabel(_ status: String) -> String {
     case "FAILED": return "Trascrizione non riuscita"
     case "INTERRUPTED": return "Trascrizione interrotta"
     case "NEEDS_REVIEW": return "Trascrizione non riuscita"
-    case "OUTDATED": return "Audio modificato: trascrizione da aggiornare"
+    case "OUTDATED": return "Audio da verificare rispetto alla trascrizione"
     case "WAITING": return "Audio non ancora disponibile"
     case "CANCELLED": return "Rimossa dalla coda"
     case "CANCELLING": return "Interruzione in corso"
@@ -52,6 +52,7 @@ struct CaptureRecordingsView: View {
     @CaptureViewState<String> private var associationCourse = ""
     @CaptureViewState<String> private var associationLesson = ""
     let queueVisible: Bool
+    var activityOnly = false
     private var recordings: [CaptureRecording] {
         model.recordings.sorted { left, right in
             switch sortOrder {
@@ -71,13 +72,24 @@ struct CaptureRecordingsView: View {
     private var selectedReady: [CaptureRecording] { recordings.filter { selected.contains($0.id) && CaptureRecordingFilter.ready.includes($0) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            controls
+            if !activityOnly { controls }
+            else {
+                HStack {
+                    Text("\(model.queue?.activeJobs.count ?? 0) lavori attivi").foregroundStyle(.secondary)
+                    Spacer()
+                    Button(model.queue?.paused == true ? "Riprendi coda" : "Pausa coda") { Task { await model.queueAction(model.queue?.paused == true ? "resume" : "pause") } }
+                    Menu("Altro") { Button("Svuota lavori in attesa") { Task { await model.queueAction("clear") } }.disabled(model.queue?.activeJobs.contains { $0.status == "QUEUED" } != true) }.fixedSize()
+                }.disabled(model.isPreview || model.queueBusy)
+            }
             if !queueVisible { folderControls }
             if queueVisible {
-                DisclosureGroup("Coda (\(model.queue?.activeJobs.count ?? 0))", isExpanded: $showQueue) {
-                    queueList.frame(maxHeight: 240)
+                if activityOnly { queueList.frame(maxHeight: .infinity) }
+                else {
+                    DisclosureGroup("Coda (\(model.queue?.activeJobs.count ?? 0))", isExpanded: $showQueue) {
+                        queueList.frame(maxHeight: 240)
+                    }
                 }
-                transcriptList
+                if !activityOnly { transcriptList }
             }
             else { libraryList }
         }
@@ -351,11 +363,12 @@ struct CaptureRecordingsView: View {
                 } else if let reason = model.queue?.waitReason { Label(reason, systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary) }
                 if model.queue?.activeJobs.isEmpty != false {
                     Label("Nessun lavoro in attesa", systemImage: "checkmark.circle").font(.headline)
-                    Text("Avvia una trascrizione dalla scheda Registrazioni.").foregroundStyle(.secondary)
+                    Text(activityOnly ? "Apri una lezione nella Raccolta per avviare una trascrizione." : "Avvia una trascrizione dalla scheda Registrazioni.").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.queue?.activeJobs ?? []) { queueRow($0) }
                 }
                 Divider()
+                if model.queue?.failedJobs.isEmpty == false { Text("Da verificare").font(.headline) }
                 ForEach(model.queue?.failedJobs ?? []) { queueRow($0) }
                 DisclosureGroup("Cronologia (\(model.queue?.historyJobs.count ?? 0))", isExpanded: $showHistory) {
                     ForEach(model.queue?.historyJobs ?? []) { queueRow($0, historical: true) }
