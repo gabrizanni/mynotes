@@ -116,6 +116,8 @@ def packet_request(request, targets, unit, directory):
     context = {'progressive_protocol': 2, 'review_task': {'lecture_id': unit['lecture_id'], 'targets': targets,
         'visual_decisions': [v for v in unit['visual_delta'] if v['evidence_id'] in ids],
         'existing_visual_ids': [b['visual_id'] for b in unit['blocks'] if b.get('kind')=='visual']}}
+    if request.batch_context.get('risk_policy_version', 1) >= 3:
+        context['risk_policy_version'] = request.batch_context['risk_policy_version']
     candidate = replace(request, phase='progressive_review', source_pack={
         'lecture_id': unit['lecture_id'], 'evidence': selected, 'visuals': visuals},
         batch_context=context, response_schema=review_schema(), previous_notes=None, run_dir=directory,

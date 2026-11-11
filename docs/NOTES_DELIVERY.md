@@ -71,6 +71,10 @@ is corroborated by other cited text. Negation conflicts in ASR alternatives stay
 risky. These are local selection heuristics, not semantic certification.
 Historical jobs without this marker retain version 1; version 2 keeps its broader
 ASR rule. Reopening cannot reinterpret saved reviews or grant additional attempts.
+Version 3 also carries the import's actual `needs_review`, `alternative`,
+agreement and ASR-engine provenance through both writing and review inputs as
+untrusted source data; selecting an uncertain passage must not strip its doubt.
+Their repeated field names use reversible aliases, retaining every source value.
 
 Standard reuses the writer's observed text-slide classification: ordinary
 text-only screenshots are omitted from subsequent risk packets while their

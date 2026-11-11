@@ -43,11 +43,14 @@ def validate_shape(value, contract, path='$'):
         for index,item in enumerate(value):validate_shape(item,contract.get('items',{}),f'{path}[{index}]')
 
 
-def compact_sources(data):
+def compact_sources(data, *, imported_asr=False):
     result = deepcopy(data)
-    result['evidence_field_names'] = {v: k for k, v in FIELDS.items()}
+    fields = dict(FIELDS)
+    if imported_asr:
+        fields.update(needs_review='u', alternative='a', agreement='g', confidence='c', source_engine='x')
+    result['evidence_field_names'] = {v: k for k, v in fields.items()}
     result['untrusted_evidence'] = True
-    result['evidence'] = [{FIELDS.get(k, k): v for k, v in row.items() if k != 'untrusted_evidence'}
+    result['evidence'] = [{fields.get(k, k): v for k, v in row.items() if k != 'untrusted_evidence'}
                           for row in result['evidence']]
     return result
 

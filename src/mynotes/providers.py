@@ -246,6 +246,11 @@ def _context(request: ProviderRequest) -> str:
             })
             if (request.batch_context or {}).get('progressive_protocol') == 2:
                 evidence[-1].update({key:item[key] for key in ('confidence','origin_lecture_id','origin_evidence_id') if key in item})
+                # Imported ASR uses these fields, not only uncertainty_codes /
+                # asr_alternative. Keep its actual uncertainty in the lossless
+                # projection for new jobs, with historical packet sizing intact.
+                if request.batch_context.get('risk_policy_version', 1) >= 3:
+                    evidence[-1].update({key:item[key] for key in ('needs_review','alternative','agreement','source_engine') if key in item})
         evidence_view = {
             "lecture_id": pack.get("lecture_id", request.lecture_id), "course": pack.get("course", {}),
             # Old packs stripped marker content from evidence. Preserve it as
@@ -271,7 +276,8 @@ def _context(request: ProviderRequest) -> str:
         evidence_view["evidence"] = [{key: value for key, value in row.items() if key not in defaults[row["id"][:1]] and value is not None} for row in evidence]
         if (request.batch_context or {}).get('progressive_protocol') == 2:
             from .progressive_wire import compact_sources
-            evidence_view = compact_sources(evidence_view)
+            evidence_view = compact_sources(evidence_view,
+                imported_asr=request.batch_context.get('risk_policy_version', 1) >= 3)
     if request.batch_context is not None:
         evidence_view["prior_lessons_not_independent_evidence"] = request.batch_context.get("continuity", [])
     if request.previous_notes:

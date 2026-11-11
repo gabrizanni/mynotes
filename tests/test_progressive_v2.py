@@ -49,6 +49,33 @@ def test_compact_projection_is_lossless_including_uncertainty(tmp_path):
     assert 'untrusted_evidence' not in data['evidence'][0]
 
 
+def test_imported_asr_uncertainty_reaches_writer_and_bounded_reviewer(tmp_path):
+    req=request(tmp_path)
+    row=req.source_pack['evidence'][2]
+    original=dict(needs_review=True,alternative='Cost does not affect service.',
+                  agreement=0.72,source_engine='imported ASR')
+    row.update(original)
+    # Historical projections keep their original bytes/capacity behavior.
+    old=w.restore_sources(json.loads(_context(req).splitlines()[-1]))
+    assert 'alternative' not in old[2] and 'needs_review' not in old[2]
+    req=replace(req,batch_context={**req.batch_context,'risk_policy_version':3})
+    projected=w.restore_sources(json.loads(_context(req).splitlines()[-1]))
+    assert all(projected[2][k]==v for k,v in original.items())
+    encoded=json.loads(_context(req).splitlines()[-1])
+    assert encoded['evidence'][2]['u'] is True and encoded['evidence'][2]['a']==original['alternative']
+    assert 'needs_review' not in encoded['evidence'][2]
+    value,_=w.validate_unit(req,unit(),[])
+    group=r.packets(req,value,tmp_path/'review')[0]
+    packet=r.packet_request(req,group,value,tmp_path/'review')
+    restored=w.restore_sources(json.loads(_context(packet).splitlines()[-1]))
+    selected=next(r for r in restored if r['id']=='T001')
+    assert all(selected[k]==v for k,v in original.items())
+    assert packet.batch_context['risk_policy_version']==3
+    # Source alternatives are not promoted to trusted configuration.
+    trusted=json.loads(_context(packet).splitlines()[1])
+    assert 'alternative' not in json.dumps(trusted)
+
+
 @pytest.mark.parametrize('reference',['T001..T003','T002..T001','T001..T999','T000..T002'])
 def test_bad_ranges_never_cross_missing_or_lesson_boundaries(tmp_path,reference):
     req=request(tmp_path)
