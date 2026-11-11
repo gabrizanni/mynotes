@@ -277,7 +277,8 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
         'candidate': str(output), 'candidate_hash': file_sha256(output), 'baseline_hash': baseline_hash,
         'source_candidate_hashes': sources, 'generated_baseline': str(raw), 'generated_baseline_sha256': file_sha256(raw),
         'structure': structure, 'render': render, 'conflicts': conflicts, 'preserved_edits': preserved,
-        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied}, 'validated_at': now_compact_utc()}
+        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied},
+        'renderer_hash': pub.word_renderer_hash(), 'validated_at': now_compact_utc()}
     atomic_json_write(output.with_suffix('.validation.json'), validation)
     return {'status': 'WORD_CANDIDATE_VALIDATED', **validation}
 
@@ -306,6 +307,7 @@ def publish_course_revision(workspace, candidate_path):
             'baseline_hash': validation['baseline_hash'], 'status': 'PREPARED', 'created_at': now_compact_utc(),
             'content_hashes': validation['content_hashes'], 'content_hash': validation['content_hashes'][lectures[0]],
             'publication_state': pub._publication_state(workspace, target)}
+        transaction['renderer_hash'] = validation.get('renderer_hash')
         originals_dir = candidate_path.parent / 'original-candidates'
         originals_dir.mkdir(exist_ok=True)
         transaction['original_candidates'] = {}
@@ -428,9 +430,11 @@ def update_course(workspace, lectures, *, timeout_seconds=None, before_publish=N
         unchanged = True
         for lecture in lectures:
             payload, _ = pub._load_candidate(workspace, lecture)
-            previous = next((t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')}).get(lecture)
-                             for t in transactions if t.get('status') == 'COMPLETED' and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), None)
-            unchanged &= bool(payload.get('published_to_word')) and previous == pub._content_fingerprint(payload)
+            previous = next((t for t in transactions if t.get('status') == 'COMPLETED'
+                             and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), {})
+            content = previous.get('content_hashes', {previous.get('lecture_id'): previous.get('content_hash')}).get(lecture)
+            unchanged &= (bool(payload.get('published_to_word')) and content == pub._content_fingerprint(payload)
+                          and previous.get('renderer_hash') == pub.word_renderer_hash())
         if unchanged:
             return {'status': 'SKIPPED', 'lecture_id': lectures[0], 'lectures': lectures, 'output': str(target), 'reason': 'already_published'}
     built = build_course_revision(workspace, lectures, timeout_seconds=timeout_seconds)

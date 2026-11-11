@@ -240,6 +240,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                     _load_candidate(workspace, lecture)
             if (review_defects is None and previous.get('status') in {'COMPLETED', 'COMPLETED_WITH_WARNINGS'} and state.get('generation_complete')
                     and state.get('delivery') and _valid_files(state['delivery'].get('files', []))
+                    and previous.get('publication', {}).get('renderer_hash') == word_renderer_hash()
                     and previous.get('publication', {}).get('output')
                     and Path(previous['publication']['output']).is_file()
                     and file_sha256(Path(previous['publication']['output'])) == previous['publication'].get('output_hash')):
@@ -288,7 +289,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                         **state.pop('problem'), 'resolved_at_epoch': time.time()})
                 target = Path(result.get('output', result.get('target', '')))
                 if target.is_file():
-                    state['publication'].update(output=str(target), output_hash=file_sha256(target))
+                    state['publication'].update(output=str(target), output_hash=file_sha256(target), renderer_hash=word_renderer_hash())
                 emit('COMPLETED_WITH_WARNINGS' if state['warnings'] else 'COMPLETED')
             else:
                 # Review preference and personal conflicts are genuine external

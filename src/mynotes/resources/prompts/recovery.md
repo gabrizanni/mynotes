@@ -15,8 +15,14 @@ This explicit, local source-link rectification changes only evidence_ids, never
 prose, source pages, page owners or teaching status. It is separate from a second
 automatic narrative correction and invokes no model. The file binds the original
 notes hash and each target hash; supply only verified current-lesson transcript
-IDs and a concrete reason. See the --review-references help and NOTES_DELIVERY
-contract. Raw results and correction allowances stay unchanged. If the source
+IDs and a concrete reason. JSON contract: {version:1, base_notes_sha256, reason,
+changes:[{target:"organization"|"block", index, lecture_id, before_sha256,
+evidence_ids:[...], reason}]}. Indices are zero-based in the original global
+organization array or the stated lesson's blocks. Use at most 12 changes.
+Hashes are SHA-256 of sorted compact UTF-8 JSON (ensure_ascii=false). The base is
+the saved response's notes; each before hash binds the entire original target.
+The stored reference-review receipt is reused automatically by later --resume.
+Raw results and correction allowances stay unchanged. If the source
 match is uncertain, stop for review; never guess references to make checks pass.
 
 Use supported local recovery for metadata, checkpoint and Word errors; do not

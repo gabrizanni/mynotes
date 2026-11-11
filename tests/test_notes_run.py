@@ -78,7 +78,9 @@ def test_renderer_change_rebuilds_only_word_and_preserves_notes(tmp_path, monkey
     result=nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
     assert result['status']=='COMPLETED' and result['delivery']['renderer_hash']==current
     assert first['delivery']['files']!=result['delivery']['files']
-    assert all(p.read_bytes()==data for p,data in originals.items())
+    assert result['publication']['status']=='PUBLISHED' and result['publication']['renderer_hash']==current
+    assert result['publication']['output_hash']!=first['publication']['output_hash']
+    assert all(json.loads(p.read_text())['notes']==json.loads(data)['notes'] for p,data in originals.items())
     assert nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())['reused']
 
 
