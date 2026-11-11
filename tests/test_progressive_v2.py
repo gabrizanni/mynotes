@@ -104,11 +104,12 @@ def test_unit_limits_apply_before_another_model_request(tmp_path):
     with pytest.raises(ProviderError,match='six blocks'):w.validate_unit(req,value,[])
 
 
-def test_terminal_marker_is_canonicalized_only_when_every_completion_flag_matches(tmp_path):
+@pytest.mark.parametrize('marker',['Course Complete','Course completed'])
+def test_terminal_marker_is_canonicalized_only_when_every_completion_flag_matches(tmp_path,marker):
     req=request(tmp_path);one,_=w.validate_unit(req,unit(),[])
-    raw=unit(1,True);raw['next_topic']='Course Complete'
+    raw=unit(1,True);raw['next_topic']=marker
     got,proof=w.validate_unit(req,raw,[one]);assert got['next_topic']=='' and proof[-1]['kind']=='redundant_terminal_marker'
-    assert raw['next_topic']=='Course Complete'
+    assert raw['next_topic']==marker
     raw['next_topic']='Explain the missing legal case'
     with pytest.raises(ProviderError,match='completion'):w.validate_unit(req,raw,[one])
 

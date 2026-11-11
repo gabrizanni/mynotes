@@ -151,7 +151,7 @@ def validate_unit(request, raw, previous):
     unit, proof = expand(raw, valid, origins(request))
     if (unit.get('complete') is True and unit.get('lesson_complete') is True
             and unit.get('lecture_id') == request.batch_context['lessons'][-1]
-            and unit.get('next_topic','').strip().casefold() in {'complete','completed','course complete','done','fine','corso completato'}):
+            and unit.get('next_topic','').strip().casefold() in {'complete','completed','course complete','course completed','done','fine','corso completato'}):
         proof.append({'kind':'redundant_terminal_marker','original':unit['next_topic'],'canonical':''})
         unit['next_topic']=''
     settled_visuals={v['evidence_id']:v for p in previous for v in p['visual_delta']}
