@@ -355,12 +355,27 @@ def test_new_jobs_freeze_risk_policy_while_historical_snapshots_keep_theirs(tmp_
     cfg=ws.configuration_store().load();cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'}
     ws.configuration_store().save(cfg)
     new=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2)
-    assert new['risk_policy_version']==2
+    assert new['risk_policy_version']==3
     historical={k:new[k] for k in ('course_code','lectures','course','style','requested_model')}
     old=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=historical)
     assert 'risk_policy_version' not in old
     frozen=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=new)
-    assert frozen['risk_policy_version']==2 and frozen['fingerprint']==new['fingerprint']
+    assert frozen['risk_policy_version']==3 and frozen['fingerprint']==new['fingerprint']
+    saved_two={**new,'risk_policy_version':2}
+    assert plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=saved_two)['risk_policy_version']==2
+
+
+def test_uncertainty_policy_three_focuses_on_uncorroborated_claims_not_flagged_asides():
+    block={'kind':'paragraph','text':'the instrument calibration is unstable.','evidence_ids':['S001','T001']}
+    rows={'S001':{'content':'the instrument measures levels'},'T001':{'text':'the instrument calibration is unstable [CHECK @ 00:01:00]','needs_review':True}}
+    assert 'source_uncertainty' in r.risks(block,rows,{},'standard',policy=3)
+    rows['S001']['content']=block['text']
+    assert r.risks(block,rows,{},'standard',policy=3)==[]
+    assert 'source_uncertainty' in r.risks(block,rows,{},'standard',policy=2)
+    rows['T001']['text']='okay, another point [CHECK @ 00:01:00]'
+    assert r.risks(block,rows,{},'standard',policy=3)==[]
+    rows['T001'].update(text='the instrument calibration is stable',alternative='the instrument calibration is not stable')
+    assert 'source_uncertainty' in r.risks(block,rows,{},'standard',policy=3)
 
 
 def test_visual_cache_is_bound_to_bytes_effort_and_does_not_become_instructions(tmp_path):

@@ -25,6 +25,32 @@ def merge_visual_updates(known, updates):
         known[identifier]=update
 
 
+def _relevant_uncertainty(block_text, rows):
+    """Select uncertainty linked to a claim, not a flagged unrelated ASR aside.
+
+    This is a local risk heuristic, not semantic certification. Explicit source
+    uncertainty codes remain unconditional; digits/examples/causal claims retain
+    their independent risk checks.
+    """
+    stop=set('this that these those with from which what where when while there their they have been does doing about some many other because also into such than then them more most very could would should must will each only whether under over through without between questo questa questi queste della delle dello degli nella nelle sono come anche quando quindi perché'.split())
+    def words(text):
+        text=re.sub(r'\[CHECK[^\]]*\]','',text,flags=re.I)
+        return {w for w in re.findall(r'\w+',text.casefold()) if len(w)>3 and w not in stop}
+    def content(row):return str(row.get('content',row.get('text','')))
+    flagged=[row for row in rows if row.get('needs_review') is True]
+    reliable=words(' '.join(content(row) for row in rows if not row.get('needs_review')))
+    claims=words(block_text)
+    for row in flagged:
+        uncertain=words(content(row))
+        alternative=str(row.get('alternative') or row.get('asr_alternative') or '')
+        negations=lambda text:bool(re.search(r"\b(?:no|not|never|without|cannot|non|mai|senza)\b|\b\w+n['’]t\b",text.casefold()))
+        if alternative and len(uncertain & claims)>=2 and negations(alternative)!=negations(content(row)):
+            return True
+        if len(uncertain)>=2 and (not reliable or len((uncertain & claims)-reliable)>=2):
+            return True
+    return False
+
+
 def risks(block, evidence, style, quality, *, policy=1):
     if quality == 'base':
         return []
@@ -46,7 +72,8 @@ def risks(block, evidence, style, quality, *, policy=1):
     if policy >= 2 and kind not in {'heading','overview'}:
         if re.search(r'\bdirect(?:ly)? (?:consequences|caus\w*)\b|\b(?:in order to|so as to|to prevent)\b',text,re.I):
             result.append('strong_causal_or_normative_claim')
-        if any(evidence.get(i, {}).get('needs_review') is True for i in block.get('evidence_ids', [])):
+        rows=[evidence.get(i,{}) for i in block.get('evidence_ids', [])]
+        if (_relevant_uncertainty(text,rows) if policy>=3 else any(row.get('needs_review') is True for row in rows)):
             result.append('source_uncertainty')
         if re.search(r'\b(hundreds?|thousands?|millions?|billions?)\b|\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty)\s+(seconds?|minutes?|hours?|days?|years?|percent)\b', text, re.I):
             result.append('numbers_or_dates')

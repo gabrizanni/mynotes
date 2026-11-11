@@ -62,12 +62,15 @@ returns approval, minimal replacement or unresolved in one call. Sources are
 never truncated to fit; a single oversized target stops as NEEDS_REVIEW. An
 approval is evidence of that scoped check, not certification of every sentence.
 
-New progressive jobs freeze risk policy version 2. It also recognizes the
+New progressive jobs freeze risk policy version 3. It also recognizes the
 imported transcript's actual `needs_review` flag, spelled-out quantities and
 parenthetical specific examples absent from the cited text. UNKNOWN speakers
-and technical terms alone still do not trigger review. Historical jobs without
-this marker retain version 1 so reopening cannot reinterpret their reviews or
-grant additional attempts.
+and technical terms alone still do not trigger review. A flagged ASR aside does
+not expand review when its uncertainty is unrelated to the claim or its wording
+is corroborated by other cited text. Negation conflicts in ASR alternatives stay
+risky. These are local selection heuristics, not semantic certification.
+Historical jobs without this marker retain version 1; version 2 keeps its broader
+ASR rule. Reopening cannot reinterpret saved reviews or grant additional attempts.
 
 Standard reuses the writer's observed text-slide classification: ordinary
 text-only screenshots are omitted from subsequent risk packets while their

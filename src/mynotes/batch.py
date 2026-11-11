@@ -713,7 +713,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     if progressive_protocol is not None:
         payload['progressive_protocol'] = progressive_protocol
     if progressive_protocol == 2:
-        policy = (writing_snapshot or {}).get('risk_policy_version', 1) if writing_snapshot is not None else 2
+        policy = (writing_snapshot or {}).get('risk_policy_version', 1) if writing_snapshot is not None else 3
         if policy >= 2:
             payload['risk_policy_version'] = policy
     if generation_id is not None:
