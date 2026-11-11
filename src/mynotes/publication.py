@@ -1157,7 +1157,11 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                 from .local_recovery import verify_local_receipt
                 verify_local_receipt(attempt, workspace.root)
                 continue
-            if record.get("envelope", {}).get("transport") == "agy_parts_v1":
+            if record.get("envelope", {}).get("transport") == "agy_progressive_v2":
+                from .agy_progressive import verify_receipt
+                verify_receipt(record, workspace.root)
+                envelope = record['envelope']
+            elif record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
                 verify_receipt(record, workspace.root)
                 envelope = record["envelope"]

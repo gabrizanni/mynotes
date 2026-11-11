@@ -219,7 +219,8 @@ def _wire(prompt: str) -> bytes:
 
 def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | None], *, cwd: str, env: dict,
                 total_seconds: float = TOTAL_SECONDS, first_seconds: float = FIRST_TURN_SECONDS,
-                next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None) -> subprocess.CompletedProcess:
+                next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None,
+                abort_errors: bool = False, log_file: Path | None = None) -> subprocess.CompletedProcess:
     """One process/conversation; separate stderr, bounded turns, group cleanup."""
     outputs = [bytearray(), bytearray()]
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -230,6 +231,10 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         previous = signal.signal(signal.SIGTERM, interrupted)
     started = turn_started = time.monotonic(); turn_limit = first_seconds
     pending = b''; finished = False; nudged = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
+    log_position = 0
+    def provider_failure(message):
+        if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|attempt \d+ failed.*retrying', message, re.I):
+            raise ProviderError('Provider interrupted or truncated this unit; no internal restart permitted: ' + message[:500])
     try:
         process.stdin.write(_wire(prompt)); process.stdin.flush()
         with selectors.DefaultSelector() as selector:
@@ -237,6 +242,10 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
             selector.register(process.stderr, selectors.EVENT_READ, 1)
             while selector.get_map():
                 now = time.monotonic()
+                if abort_errors and log_file is not None and log_file.is_file():
+                    with log_file.open() as native_log:
+                        native_log.seek(log_position); recent = native_log.read(); log_position = native_log.tell()
+                    provider_failure(recent)
                 slept = sleep.poll()
                 if slept:
                     error = ProviderSuspendedError(f'System suspended for {slept:.0f}s; old transport closed')
@@ -265,7 +274,8 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                     if not data:
                         selector.unregister(key.fileobj); continue
                     outputs[key.data].extend(data)
-                    if key.data: continue
+                    if key.data:
+                        provider_failure(data.decode(errors='replace')); continue
                     pending += data
                     while b'\n' in pending:
                         line, pending = pending.split(b'\n',1)
@@ -274,6 +284,8 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                         except (ValueError, UnicodeError) as error: raise ProviderError('Invalid Agy streaming event') from error
                         if on_event is not None: on_event(event)
                         step = event.get('step_update', {})
+                        if event.get('event') == 'error' or step.get('step_type') == 'error':
+                            provider_failure(json.dumps(event))
                         progress = (step.get('step_index'), step.get('step_type'))
                         initialization = ('init', event.get('conversation_id'))
                         useful_step = (event.get('event') == 'step_update' and step.get('state') == 'DONE'

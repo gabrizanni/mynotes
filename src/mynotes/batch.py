@@ -561,6 +561,15 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 'Use taught only with current T evidence, supplement for unspoken supplied content, '
                 'and settle every remaining page by the last selected lesson. Preserve settled prior ownership. '
                 'Structural exemptions still require inspected title/divider source image hashes.')
+    if plan.get('progressive_protocol') == 2:
+        context['progressive_protocol'] = 2
+        from .visual_memory import load
+        prior_proof = run_dir/'progressive-v2/request.json'
+        if prior_proof.is_file():
+            context['cached_visual_inspections'] = json.loads(prior_proof.read_text())['batch_context'].get('cached_visual_inspections',[])
+        else:
+            context['cached_visual_inspections'] = load(Path(plan['workspace_state'])/'visual-inspections',
+                pack['visuals'],plan['requested_model']) if plan.get('workspace_state') else []
     request = ProviderRequest(lectures[0], plan["course"], {}, plan["requested"], source_pack=pack, run_dir=run_dir,
                               style=plan["style"], response_schema=batch_notes_schema(autonomous_organization=plan.get('autonomous_organization', False)), batch_context=context)
     return request, maps
@@ -604,7 +613,7 @@ def _fits(request: ProviderRequest, count: int, budget: BatchBudget) -> bool:
 def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int], *, provider: str | None = None,
                quality: str = "standard", selection: dict | None = None, budgets: BatchBudget | dict | None = None,
                instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False,
-               writing_snapshot: dict | None = None) -> dict:
+               writing_snapshot: dict | None = None, progressive_protocol: int | None = None, generation_id: str | None = None) -> dict:
     """Inspect existing prepared packs; write nothing and invoke no provider."""
     code = course_code.upper()
     if selection is not None and not isinstance(selection, dict):
@@ -644,7 +653,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
         old_model = writing_snapshot["requested_model"]
         if provider in (None, old_model["provider"]) and quality in (None, old_model["quality"]):
             requested = RequestedModel(**old_model)
-    batch_id = code + "-" + _hash(lectures)[:12]
+    batch_id = code + "-" + _hash([lectures,generation_id] if generation_id else lectures)[:12]
     historical = workspace.runs_dir / '_batches' / batch_id / 'manifest.json'
     if historical.is_file():
         old_course = _read(historical).get('course')
@@ -677,7 +686,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
         raise WorkflowError("Selection must be an object mapping canonical slide IDs")
     # Prior organization is context, not an immutable academic decision. A
     # changed published placement is recorded with the affected lessons below.
-    ownership, unresolved = _owners(inventory, packs, {**prior_choices, **explicit})
+    ownership, unresolved = _owners(inventory, packs, {**({} if progressive_protocol == 2 and generation_id else prior_choices), **explicit})
     history_warnings = prior_unresolved
     if prior_unresolved and not explicit:
         unresolved.extend(prior_unresolved)
@@ -698,6 +707,10 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     if autonomous_organization:
         payload['autonomous_organization'] = True
         payload['organization_mode'] = (writing_snapshot or {}).get('organization_mode', 'joint')
+    if progressive_protocol is not None:
+        payload['progressive_protocol'] = progressive_protocol
+    if generation_id is not None:
+        payload['generation_id'] = generation_id
     fingerprint = _hash(payload)
     plan = {**payload, "batch_id": batch_id, "fingerprint": fingerprint, "status": "NEEDS_SELECTION" if unresolved else "PLANNED",
             "unresolved": unresolved, "groups": [], "published_to_word": False,
@@ -708,7 +721,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
             'message': 'Il provider non dichiara tutti i limiti del modello. Si tenta la richiesta congiunta senza tagliare fonti; un errore conserva il lavoro disponibile senza rigenerazioni complete automatiche.'}]
     if unresolved:
         return plan
-    runtime = {**plan, "packs": packs, "inventory": inventory, "requested": requested}
+    runtime = {**plan, "packs": packs, "inventory": inventory, "requested": requested, "workspace_state":str(workspace.state_dir)}
     remaining = list(lectures)
     prior_count = 0
     while remaining:
@@ -974,7 +987,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
                    build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update",
-                   writing_snapshot: dict | None = None, review_defects: dict | None = None) -> dict:
+                   writing_snapshot: dict | None = None, review_defects: dict | None = None, progressive_protocol: int | None = None, generation_id: str | None = None) -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
     if word_mode not in {'update', 'standalone'}:
         raise WorkflowError('Word mode must be update or standalone')
@@ -985,7 +998,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if saved.get("course") and saved.get("style"):
             writing_snapshot = saved
     kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons, autonomous_organization=autonomous_organization,
-                  writing_snapshot=writing_snapshot)
+                  writing_snapshot=writing_snapshot, progressive_protocol=progressive_protocol, generation_id=generation_id)
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
     if review_defects is not None and (len(plan['groups']) != 1 or not autonomous_organization):
         raise WorkflowError('Reviewed block correction requires a joint notes batch; legacy progressive jobs retain their existing recovery path')
@@ -1009,7 +1022,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if snapshots != plan["sources"]:
             raise WorkflowError("Sources changed while preparing the batch request; no provider was invoked")
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
-        runtime = {**plan, "packs": packs, "sources": snapshots, "inventory": inventory, "requested": RequestedModel(**plan["requested_model"])}
+        runtime = {**plan, "packs": packs, "sources": snapshots, "inventory": inventory, "requested": RequestedModel(**plan["requested_model"]), "workspace_state":str(workspace.state_dir)}
         root = workspace.runs_dir / "_batches" / plan["batch_id"]
         version_dir = root / plan["fingerprint"]
         effective_sources = deepcopy(snapshots)
@@ -1087,6 +1100,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 activity['checkpoint']=str(group_dir)
                 version_group = version_dir / f"group-{group_index:03d}"
                 request, maps = _request(runtime, lectures, group_dir, continuity)
+                if progressive_protocol == 2:
+                    from dataclasses import replace
+                    request = replace(request, resume_authorized=batch_id is not None)
                 retained_response = retained_origin = retained_lineage = None
                 if autonomous_organization:
                     retained_response, retained_origin, retained_lineage = _autonomous_retained(root, request, runtime, lectures, continuity, maps)
@@ -1107,7 +1123,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         path = workspace.runs_dir / saved["lecture_id"] / "lecture_notes.candidate.json"
                         if not path.is_file() or _candidate_digest(path) != saved["sha256"]:
                             raise WorkflowError("Saved batch candidate was edited or removed; inspect it before retrying. No automatic paid regeneration.")
-                for phase, context_mode in QUALITY_PHASES[runtime["requested"].quality]:
+                phases_to_run = (("writing", "thorough"),) if progressive_protocol == 2 else QUALITY_PHASES[runtime["requested"].quality]
+                for phase, context_mode in phases_to_run:
                     active = with_phase(request, phase, context_mode, previous)
                     checkpoint = group_dir / f"{phase}-{_hash(continuity)[:12]}.json"
                     phase_started = time.monotonic()
@@ -1146,7 +1163,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         started_path = group_dir / f'{phase}-started.json'
                         guard = _invocation_guard(root, phase, runtime, lectures, continuity)
                         resumable_parts = (_agy_uses_parts(active)
-                            and any(group_dir.glob('writing-parts/*/state.json')))
+                            and (any(group_dir.glob('writing-parts/*/state.json')) or (group_dir/'progressive-v2/state.json').is_file()))
                         explicit_external_resume = (batch_id is not None and guard.exists()
                             and any(_read(guard).get(key) is True for key in ('paused_quota', 'paused_auth')))
                         if (guard.exists() or started_path.exists()) and not resumable_parts and not explicit_external_resume:
@@ -1217,12 +1234,13 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         validation_started=time.monotonic()
                         activity={**activity,"status":"LOCAL_VALIDATION"};save_progress()
                         with phase_budget.track('local_checks'):
-                            validated = _validate_group(response, runtime, lectures, maps, final_phase=phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
+                            validated = _validate_group(response, runtime, lectures, maps, final_phase=progressive_protocol == 2 or phase == QUALITY_PHASES[runtime["requested"].quality][-1][0], continuity=continuity)
                     except (CoverageError, ContentRevisionError) as error:
                         retained_from = Path(origin['returned']).parent if origin and origin.get('returned') else None
                         retained_repair = retained_from/'coverage-repair/repair.json' if retained_from else None
                         cached_repair = ((group_dir/'coverage-repair/repair.json').is_file()
                                          or bool(retained_repair and retained_repair.is_file()))
+                        if progressive_protocol == 2: raise
                         if not repair_missing or phase != "writing" or (phase_budget.remaining('coverage_repair') <= 0 and not cached_repair):raise
                         certified_base=group_dir/'certified-base.json'
                         if certified_base.exists():
@@ -1243,6 +1261,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     if not checkpoint.exists() or (review_defects is not None and repair_lineage is not None):
                         _unchanged(runtime)
                         _save_generation_phase(checkpoint, previous, response)
+                    if progressive_protocol == 2:
+                        from .visual_memory import save as save_inspections
+                        save_inspections(workspace.state_dir/'visual-inspections',active,response)
                     phase_metrics.append({"phase":phase,"started_at_epoch":phase_wall,"ended_at_epoch":time.time(),
                         "elapsed_seconds":time.monotonic()-phase_started,"reused":reused,
                         "local_validation_seconds":time.monotonic()-validation_started if validation_started is not None else None,
@@ -1352,6 +1373,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             'PAUSED_NETWORK' if isinstance(error,ProviderTransportError) else
                             'TIMED_OUT' if isinstance(error,ProviderTimeoutError) else
                             'INTERRUPTED' if isinstance(error,(ProviderCancelledError,KeyboardInterrupt)) else 'FAILED')
+            if progressive_protocol == 2 and 'NEEDS_REVIEW' in str(error): failure_status='NEEDS_REVIEW'
             failed = {**plan, "status": failure_status,
                       "error": str(error), "completed_groups": len({entry["group"] for entry in shared_attempts}),
                       "shared_attempts": shared_attempts, "candidates": results,"word_candidates":word_candidates,

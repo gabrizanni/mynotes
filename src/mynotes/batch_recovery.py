@@ -247,7 +247,10 @@ def certify_response(response,request,root):
         if response.notes != raw: raise WorkflowError('Recovered result changed')
         return response
     if record.get('error') or record.get('returncode')!=0:raise WorkflowError('Saved response came from a failed provider transport')
-    if record.get('envelope',{}).get('transport')=='agy_parts_v1':
+    if record.get('envelope',{}).get('transport')=='agy_progressive_v2':
+        from .agy_progressive import verify_receipt
+        raw=verify_receipt(record,root)
+    elif record.get('envelope',{}).get('transport')=='agy_parts_v1':
         from .agy_parts import verify_receipt
         raw=verify_receipt(record,root)
     elif record.get('requested',{}).get('provider')=='agy':
@@ -633,6 +636,12 @@ def batch_status(workspace,batch_id):
         except PermissionError:activity={**activity,'status':'UNKNOWN','reported_status':activity.get('status'),'liveness':'permission_denied'}
         directory=Path(activity.get('checkpoint',''))
         if directory.is_absolute() and directory.resolve().is_relative_to(root.resolve()):
+            progressive=directory/'progressive-v2/state.json'
+            if progressive.is_file():
+                value=json.loads(progressive.read_text())
+                activity={**activity,'progressive_status':value.get('status'),'accepted_sections':len(value.get('units',[])),
+                    'current_unit':value.get('current_unit'),'last_step':value.get('last_step'),
+                    'last_activity':value.get('last_activity'),'progressive_problem':value.get('problem')}
             states=list(directory.glob('writing-parts/*/state.json'))
             if states:
                 state=json.loads(max(states,key=lambda p:p.stat().st_mtime).read_text())

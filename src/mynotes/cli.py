@@ -396,7 +396,9 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("course")
     notes.add_argument("--workspace")
     notes.add_argument("--lessons", help="ordered lesson numbers/ranges")
-    notes.add_argument("--resume", metavar="BATCH_ID", help="reuse saved responses and finish the original selected range")
+    notes_mode = notes.add_mutually_exclusive_group()
+    notes_mode.add_argument("--regenerate", action="store_true", help="explicit new generation revision; retains old jobs and sources")
+    notes_mode.add_argument("--resume", metavar="BATCH_ID", help="reuse saved responses and finish the original selected range")
     notes.add_argument("--provider", choices=("codex", "agy", "claude"))
     notes.add_argument("--quality", help="saved quality or standard")
     notes.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
@@ -979,7 +981,7 @@ def _notes(arguments: argparse.Namespace) -> int:
     def progress(stage, detail):
         print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
     result = run_notes(workspace, arguments.course, numbers, resume=arguments.resume,
-                       review_defects=_load_json(arguments.review_defects) if arguments.review_defects else None,
+                       review_defects=_load_json(arguments.review_defects) if arguments.review_defects else None, regenerate=arguments.regenerate,
         provider=arguments.provider, quality=arguments.quality, instructions=arguments.instructions,
         image_limit=arguments.image_limit, selection=_load_json(arguments.selection) if arguments.selection else None,
         budgets=_load_json(arguments.budgets) if arguments.budgets else None, speaker_focus=arguments.speaker_focus,

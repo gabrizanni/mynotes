@@ -412,7 +412,7 @@ def recover_course_revision(workspace, transaction):
     return transaction
 
 
-def update_course(workspace, lectures, *, timeout_seconds=None):
+def update_course(workspace, lectures, *, timeout_seconds=None, before_publish=None):
     from . import publication as pub
     if isinstance(lectures, str): lectures = [lectures]
     lectures = [value.upper() for value in lectures]
@@ -437,4 +437,6 @@ def update_course(workspace, lectures, *, timeout_seconds=None):
     if built['status'] == 'PERSONAL_CONTENT_CONFLICT': return built
     if course['publication']['mode'] == 'review':
         return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show the cumulative candidate and publish only after approval.'}
+    if before_publish is not None:
+        before_publish(built)
     return publish_course_revision(workspace, Path(built['candidate']))

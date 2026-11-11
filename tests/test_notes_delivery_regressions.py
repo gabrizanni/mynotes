@@ -114,6 +114,10 @@ def test_joint_portions_reach_two_words_and_resume_without_another_session(tmp_p
     config['providers']['default'] = 'agy'
     config['providers']['configured']['agy'] = {'model': 'test-model', 'effort': 'high'}
     ws.configuration_store().save(config)
+    # This fixture exercises the historical v1 transport, not the new v2 wire.
+    from mynotes.batch import plan_batch, _save
+    historical = plan_batch(ws, 'OPS', [1, 2], provider='agy', budgets=VERIFIED, autonomous_organization=True)
+    _save(ws.runs_dir/'_batches'/historical['batch_id']/'manifest.json', historical)
     commands = []
     monkeypatch.setenv('MYNOTES_AGY_PARTS', '1')
     monkeypatch.setattr(providers, 'provider_executable', lambda _: sys.executable)

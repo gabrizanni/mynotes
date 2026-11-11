@@ -1,3 +1,14 @@
+For progressive v2 Agy jobs, inspect batch-status before acting. NEEDS_REVIEW
+retains the failed unit/packet and does not grant another automatic attempt.
+A corrected block is never automatically corrected a second time. Risk review is
+split into at most three targets per call, not a new whole-lesson rewrite.
+An explicitly requested --regenerate creates a distinct revision; never infer it
+from an ordinary --resume or hide a failed job behind a new one. Interrupted
+intact prefixes may continue only in their saved conversation. Observed provider
+truncation, stream errors and retries stop the owned invocation with logs retained.
+Do not revive an ERROR result or modify raw receipts. This policy supersedes the
+historical v1 retry/whole-group rules below only for jobs with progressive_protocol=2.
+
 Use supported local recovery for metadata, checkpoint and Word errors; do not
 edit MyNotes implementation, the installed runtime, raw responses or receipts
 to turn a failure into success. Never accept an Agy ERROR envelope, weaken

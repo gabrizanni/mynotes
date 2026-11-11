@@ -104,7 +104,7 @@ def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adap
                 raise
             emit('LOCAL_WORD_RETRY', {'reason': str(error), 'provider_invoked': False})
         except WorkflowError:
-            if local_attempt:
+            if local_attempt or kwargs.get('progressive_protocol') == 2:
                 raise
             # This diagnosis cannot call a provider or alter a retained attempt.
             # Apply only a certified, complete locally recoverable result.
@@ -121,8 +121,10 @@ def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adap
 def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provider=None,
               quality=None, instructions=None, image_limit=None, selection=None,
               budgets=None, speaker_focus=None, context_lessons=None, plan_only=False,
-              contiguous_transcripts=False, provider_adapter=None, progress=None, review_defects=None):
+              contiguous_transcripts=False, provider_adapter=None, progress=None, review_defects=None, regenerate=False):
     """Run one explicit request; existing candidate-only commands are unchanged."""
+    if regenerate and resume:
+        raise WorkflowError('--regenerate and --resume are mutually exclusive')
     if review_defects is not None and (not resume or plan_only):
         raise WorkflowError('Reviewed defects require --resume of an existing batch')
     code = course_code.upper()
@@ -149,7 +151,17 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
         if not numbers:
             return {'status': 'SOURCE_BOUNDARY', 'lectures': [], 'warnings': boundary_warnings,
                     'provider_invoked': False, 'published_to_word': False}
+    # Explicit regeneration creates a distinct root; old candidates and guards stay intact.
+    import uuid
+    generation_id = uuid.uuid4().hex if regenerate else saved.get('generation_id')
+    if not saved and not regenerate:
+        existing = code + '-' + batch._hash(original_lectures)[:12]
+        if (workspace.runs_dir/'_batches'/existing/'manifest.json').is_file():
+            saved = batch.load_batch_manifest(workspace, existing)
     options = saved.get('request_options', {})
+    from .workflow import resolve_model
+    selected_model = resolve_model(workspace.configuration_store().load(), provider or saved.get('requested_model',{}).get('provider'),
+                                   quality or saved.get('requested_model',{}).get('quality','standard'))
     kwargs = dict(provider=provider or saved.get('requested_model', {}).get('provider'),
                   quality=quality or saved.get('requested_model', {}).get('quality', 'standard'),
                   instructions=instructions if instructions is not None else options.get('instructions', ''),
@@ -158,7 +170,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                   budgets=budgets if budgets is not None else saved.get('budgets'),
                   speaker_focus=speaker_focus or options.get('speaker_focus'),
                   context_lessons=context_lessons if context_lessons is not None else saved.get('context_lessons'),
-                  writing_snapshot=saved if saved.get('course') and saved.get('style') else None)
+                  writing_snapshot=saved if saved.get('course') and saved.get('style') else None,
+                  progressive_protocol=saved.get('progressive_protocol') if saved else (2 if selected_model.provider=='agy' else None), generation_id=generation_id)
     # A settled legacy job keeps its exact historical writing request. New
     # requests integrate organization into the normal writing response.
     # Explicit complete requests migrate unfinished historical placement too;
@@ -251,7 +264,12 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                 state['delivery'] = _local_word(lambda: build_batch_documents(workspace, state['batch_id'], mode='both'), emit)
             emit('UPDATING_WORD')
             from .course_update import update_course
-            result = _local_word(lambda: update_course(workspace, plan['lectures'], timeout_seconds=900), emit)
+            before_publish = None
+            if plan.get('progressive_protocol') == 2 and plan['requested_model']['quality'] == 'revisione':
+                from .agy_progressive import audit_document
+                before_publish = lambda built: audit_document(workspace, plan, built)
+            result = _local_word(lambda: update_course(workspace, plan['lectures'], timeout_seconds=900,
+                **({'before_publish':before_publish} if before_publish else {})), emit)
             state['publication'] = result
             if result['status'] in {'PUBLISHED', 'SKIPPED'}:
                 if state.get('problem'):

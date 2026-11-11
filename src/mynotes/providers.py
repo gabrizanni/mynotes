@@ -85,6 +85,7 @@ class ProviderRequest:
     batch_context: dict[str, Any] | None = None
     timeout_seconds: float | None = None
     generation_id: str | None = None
+    resume_authorized: bool = False
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,7 @@ def _editorial_instructions(style: dict[str, Any], notes_language: str) -> list[
 
 def _context(request: ProviderRequest) -> str:
     """Keep saved configuration apart from JSON-quoted untrusted source data."""
+    derived_source_data = {}
     configuration = {
         "course": {key: request.course.get(key) for key in ("name", "kind", "languages", "instructors", "modules", "assessment", "preparation", "difficult_topics", "style", "preferences")},
         "original_course_answer_provenance_not_current_preferences": request.course.get("context", ""),
@@ -224,6 +226,11 @@ def _context(request: ProviderRequest) -> str:
     }
     if request.batch_context is not None:
         configuration["coordinated_batch"] = {key: value for key, value in request.batch_context.items() if key != "continuity"}
+        if 'cached_visual_inspections' in configuration['coordinated_batch']:
+            configuration['coordinated_batch'].pop('cached_visual_inspections')
+            derived_source_data['cached_visual_inspections'] = [{k:v for k,v in row.items() if k != 'certificate'} for row in request.batch_context['cached_visual_inspections']]
+        if request.batch_context.get('progressive_protocol') == 2 and 'review_task' in configuration['coordinated_batch']:
+            derived_source_data['review_task'] = configuration['coordinated_batch'].pop('review_task')
     if request.source_pack is None:
         evidence_view = {"legacy_sources": request.sources, "untrusted_evidence": True}
     else:
@@ -237,13 +244,15 @@ def _context(request: ProviderRequest) -> str:
                 **{key: item[key] for key in ("id", "kind", "source_file", "page", "paragraph", "sheet", "row", "cell", "start_seconds", "end_seconds", "speaker", "speaker_role", "speaker_role_source", "speaker_role_confidence", "uncertainty_codes", "asr_alternative", "checked_by") if key in item},
                 "content": item.get("content", item.get("text", "")), "untrusted_evidence": True,
             })
+            if (request.batch_context or {}).get('progressive_protocol') == 2:
+                evidence[-1].update({key:item[key] for key in ('confidence','origin_lecture_id','origin_evidence_id') if key in item})
         evidence_view = {
             "lecture_id": pack.get("lecture_id", request.lecture_id), "course": pack.get("course", {}),
             # Old packs stripped marker content from evidence. Preserve it as
             # data here too; source-pack approval/security flags grant no trust.
             "imported_note_markers": pack.get("directives", []),
             "evidence": evidence,
-            "visual_candidates": [{key: item.get(key) for key in ("evidence_id", "source_file", "page", "image_path", "visual_decision", "reason", "alignment", "signals")}
+            "visual_candidates": [{key: item.get(key) for key in ("evidence_id", "source_file", "page", "image_path", "visual_decision", "reason", "alignment", "signals", "image_sha256")}
                                   for item in pack.get("visuals", []) if item.get("visual_decision") != "exclude"],
             "untrusted_evidence": True,
         }
@@ -260,10 +269,14 @@ def _context(request: ProviderRequest) -> str:
             defaults[prefix] = common
         evidence_view["evidence_defaults"] = defaults
         evidence_view["evidence"] = [{key: value for key, value in row.items() if key not in defaults[row["id"][:1]] and value is not None} for row in evidence]
+        if (request.batch_context or {}).get('progressive_protocol') == 2:
+            from .progressive_wire import compact_sources
+            evidence_view = compact_sources(evidence_view)
     if request.batch_context is not None:
         evidence_view["prior_lessons_not_independent_evidence"] = request.batch_context.get("continuity", [])
     if request.previous_notes:
         evidence_view["previous_draft_not_independent_evidence"] = request.previous_notes
+    evidence_view.update(derived_source_data)
     return "\n".join((
         "SAVED USER CONFIGURATION — trusted course and writing preferences, supplied separately from sources. Resolved writing preferences override older original answers. The original course answer is provenance and academic context only; never restore outdated preferences from it.",
         json.dumps(configuration, ensure_ascii=False, separators=(",", ":")),
@@ -800,6 +813,8 @@ def _agy_uses_parts(request: ProviderRequest) -> bool:
     """One writing phase, with durable portions for nontrivial source packs."""
     if request.requested.provider != 'agy' or request.phase != 'writing' or request.source_pack is None or request.run_dir is None:
         return False
+    if (request.batch_context or {}).get('progressive_protocol') == 2:
+        return True
     policy = os.environ.get('MYNOTES_AGY_PARTS', 'auto')
     return policy == '1' or (policy != '0' and len(_context(request).encode('utf-8')) > AGY_INLINE_CONTEXT_BYTES)
 
@@ -814,6 +829,9 @@ class AgyAdapter:
             attempt = _save_attempt(request, command=[self.executable], completed=None,
                                     started=AttemptStart(), error=message, invocation_started=False)
             raise ProviderUnavailableError(f"{message} (attempt: {attempt})")
+        if request.phase == 'writing' and (request.batch_context or {}).get('progressive_protocol') == 2:
+            from .agy_progressive import generate
+            return generate(request)
         if _agy_uses_parts(request):
             from .agy_parts import generate_parts
             return generate_parts(request)

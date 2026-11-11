@@ -166,7 +166,10 @@ attempt one joint request with an explicit unverified-limit warning, preserving
 work on error instead of repeating the deck in separate writing calls. This is not proof that unknown
 model limits or hidden CLI overhead fit; evidence is never silently truncated.
 
-Standard quality remains one writing phase. Course context, learner profile,
+New Agy complete jobs use progressive v2 writing with bounded risk verification
+in standard; base has local checks, approfondito reviews all blocks, and revisione
+also checks the final merged rendered pages. Legacy jobs keep their phases.
+See [delivery contracts](NOTES_DELIVERY.md). Course context, learner profile,
 detail, lists, formulas and image preferences are shared with generation.
 `--instructions TEXT` applies temporary instructions. `--image-limit N` caps
 inserted figures per lesson; zero inserts none, while source-image inspection
@@ -180,9 +183,9 @@ automatically spending quota. Shared provider attempts are stored and counted
 once; per-lesson candidates reference them without multiplying consumption.
 Counter semantics and unknown values remain separate; there is no inferred bill.
 
-### Durable Agy writing portions
+### Historical Agy writing portions (version 1)
 
-Agy automatically uses its existing same-conversation writing portions for
+Historical Agy jobs and diagnostic generate commands use same-conversation writing portions for
 source contexts over 32,000 UTF-8 bytes; smaller requests retain a single turn.
 Inputs are staged losslessly in evidence files bounded by 20,000 bytes. There
 is no second planning/review phase or change to model, effort or source coverage.
@@ -335,7 +338,7 @@ building the DMG. Unit tests, native compilation, real provider runs, rendered
 page inspection, Microsoft Word checks and isolated installer checks are
 distinct evidence. A skipped visual check never counts as passed.
 
-### Single-turn default and optional bounded Agy portions workers
+### Writer isolation and historical single-turn/portion transports
 
 Agy generation selects `mynotes-note-writer`, a private, per-attempt agent with
 `view_file` for the exact staged text inputs/source images and `finish` to return the structured
@@ -350,8 +353,8 @@ worker's task. The user's global Agy profile is unchanged.
 
 Repeated evidence metadata is declared once by identifier prefix; every included
 utterance, exact identifier and timestamp remains available. This is payload
-compaction, not source summarization or removal. `standard` remains one writing
-phase. Oversized Agy user messages use application-staged input files instead of
+compaction, not source summarization or removal. The historical standard contract uses one writing phase; new complete Agy jobs
+include the scoped risk checks documented in NOTES_DELIVERY.md. Oversized Agy user messages use application-staged input files instead of
 a monolithic prompt: trusted configuration, untrusted source metadata, and ordered
 JSONL evidence chunks. Every source row is retained unchanged in the compact
 representation. Planning computes the same file list without creating files.

@@ -37,7 +37,56 @@ as a course search hint. Imports remain transcripts, never synthetic recordings.
 The existing extraction cache verifies source bytes, extractor identity and
 assets before reuse across lessons.
 
-## Word and recovery
+## Progressive Agy jobs (version 2)
+
+New complete `notes` requests using Agy retain a single joint source context but
+return at most six new blocks and 32 KiB JSON per unit. Header metadata appears
+once per lesson; page and graphic decisions are deltas, never repeated ledgers.
+The source projection is reversible: text, order, times, roles and uncertainty
+remain intact. Dense `T123..T145` references expand only within one lesson origin;
+missing/ambiguous/cross-lesson intervals are rejected before ordinary validation.
+Legacy jobs retain their original wire, phases and correction allowances.
+
+| Quality | Verification |
+| --- | --- |
+| base | Complete pertinent sources and mandatory local checks; no model reviewer. |
+| standard | Local checks plus scoped risk packets, not an exhaustive prose audit. |
+| approfondito | Source review of every block and its contextual source links. |
+| revisione | Extended source review plus all final merged PDF pages, before update. |
+
+Standard selects numbers, formulas/tables, graphics, unmatched names/acronyms,
+strong causal/legal claims, uncertain cited source passages and recap language.
+An UNKNOWN speaker or technical-term marker alone triggers no review. A packet
+contains at most three targets, 64 KiB text/schema input and 24 KiB output. It
+returns approval, minimal replacement or unresolved in one call. Sources are
+never truncated to fit; a single oversized target stops as NEEDS_REVIEW. An
+approval is evidence of that scoped check, not certification of every sentence.
+
+Every unit is saved only after the level's checks. Each block has one automatic
+correction opportunity, retained across reopen. Unrelated blocks/anchors never
+enter the packet. Residual defects stop the job without another corrective round
+or an automatic quality upgrade. Writing completion, scoped verification and
+Word delivery are separate states; partial or unverified work cannot update the
+stable document. Whole-job legacy correction is disabled for these new jobs.
+
+Exact image access events are recorded separately from inspected declarations.
+An image cannot be treated as inspected solely because the writer says so.
+Validated image classification/provenance can be reused for unchanged bytes and
+matching requested provider/model/effort/quality; changed bytes/settings require
+fresh inspection. Cache descriptions remain untrusted source data. Numeric
+image tables still require the pertinent actual source image. Graphs/diagrams
+preserve spatial information; ordinary text screenshots stay excluded.
+
+`notes CODE --regenerate --lessons RANGE` explicitly creates a new generation
+revision and preserves old jobs/candidates; it cannot be combined with --resume.
+Ordinary resume never grants a new failed writing/review attempt. An explicitly
+resumed user interruption can continue the exact intact same-conversation prefix.
+Observed Agy truncation/transport/internal-retry errors stop the owned process
+and retain its logs, rather than starting another full generation. Hidden
+provider behavior remains unobservable. No global productive-writing deadline
+is introduced. Codex/Claude keep their existing transports and review contracts.
+
+## Word and historical recovery
 
 The shared renderer owns Word styles, heading hierarchy, native tables/equations
 and inspected essential source figures. Currency and ordinary percentages remain
