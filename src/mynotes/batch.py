@@ -114,7 +114,8 @@ def _autonomous_retained(root, request, runtime, lectures, continuity, maps):
                 'requested_model': runtime['requested_model'], 'style': runtime['style'], 'course': runtime['course'],
                 'budgets': runtime['budgets'], 'contract': runtime['contract'],
                 'generation_contract': runtime['generation_contract'], 'continuity': continuity, 'maps': maps,
-                'context_sources': runtime.get('context_sources', {})}
+                'context_sources': runtime.get('context_sources', {}),
+                **({'risk_policy_version':runtime['risk_policy_version']} if runtime.get('risk_policy_version') else {})}
     current = request.run_dir / 'request-intent.json'
     if current.exists() and _read(current) != identity:
         raise WorkflowError('Saved autonomous source intent changed; no automatic writing retry')
@@ -563,6 +564,8 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 'Structural exemptions still require inspected title/divider source image hashes.')
     if plan.get('progressive_protocol') == 2:
         context['progressive_protocol'] = 2
+        if plan.get('risk_policy_version'):
+            context['risk_policy_version'] = plan['risk_policy_version']
         from .visual_memory import load
         prior_proof = run_dir/'progressive-v2/request.json'
         if prior_proof.is_file():
@@ -709,6 +712,10 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
         payload['organization_mode'] = (writing_snapshot or {}).get('organization_mode', 'joint')
     if progressive_protocol is not None:
         payload['progressive_protocol'] = progressive_protocol
+    if progressive_protocol == 2:
+        policy = (writing_snapshot or {}).get('risk_policy_version', 1) if writing_snapshot is not None else 2
+        if policy >= 2:
+            payload['risk_policy_version'] = policy
     if generation_id is not None:
         payload['generation_id'] = generation_id
     fingerprint = _hash(payload)
@@ -1100,7 +1107,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                            "requested": plan["requested_model"], "style": plan["style"], "course": plan["course"],
                                            "budgets": plan["budgets"], "contract": plan["contract"], "generation_contract": plan["generation_contract"],
                                            "prompt_contract": plan["prompt_contract"], "continuity": continuity,
-                                           **({'autonomous_organization':True} if autonomous_organization else {})})
+                                           **({'autonomous_organization':True} if autonomous_organization else {}),
+                                           **({'risk_policy_version':plan['risk_policy_version']} if plan.get('risk_policy_version') else {})})
                 group_dir = root / "generation-checkpoints" / group_fingerprint
                 activity['checkpoint']=str(group_dir)
                 version_group = version_dir / f"group-{group_index:03d}"

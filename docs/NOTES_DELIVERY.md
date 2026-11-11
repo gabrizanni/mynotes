@@ -62,6 +62,13 @@ returns approval, minimal replacement or unresolved in one call. Sources are
 never truncated to fit; a single oversized target stops as NEEDS_REVIEW. An
 approval is evidence of that scoped check, not certification of every sentence.
 
+New progressive jobs freeze risk policy version 2. It also recognizes the
+imported transcript's actual `needs_review` flag, spelled-out quantities and
+parenthetical specific examples absent from the cited text. UNKNOWN speakers
+and technical terms alone still do not trigger review. Historical jobs without
+this marker retain version 1 so reopening cannot reinterpret their reviews or
+grant additional attempts.
+
 Standard reuses the writer's observed text-slide classification: ordinary
 text-only screenshots are omitted from subsequent risk packets while their
 complete extracted source text stays present. Diagram/table/formula/uncertain
@@ -129,6 +136,17 @@ another automatic attempt. Raw returns, prior candidates and completion receipts
 are retained. Corrections may add an inspected source figure at an existing block
 anchor and replace only identified passages. They must pass all normal source,
 style, image, Word and personal-edit checks before delivery.
+
+For completed progressive v2 writing, this command binds each observed block to
+its original unit and checks the original patch decisions. A block already
+corrected cannot be automatically corrected again; an observed defect in an
+uncorrected block may receive its first bounded correction. Only the identified
+blocks and relevant sources enter packets (at most 3 / 64 KiB input / 24 KiB
+output), never the full lesson or all anchors. The revision has a separate receipt,
+preserves the original responses/candidates/completions and reuses the saved
+model, effort, style and source snapshots. A failed packet is never retried;
+ordinary resume cannot silently redeliver the old Word as verified while the
+observed defect is unresolved. Reopening the same successful review is idempotent.
 
 A conservative local check flags strongly English long recaps when Italian was
 requested. It is not a general language detector. Source citations and an

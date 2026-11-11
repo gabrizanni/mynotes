@@ -91,6 +91,7 @@ def run_single(request, instruction=None):
         'Copy block_id and base_sha256 exactly. Keep existing valid content and references. Use compact T ranges where useful. '
         'Correct a recap to the saved recap language; do not merely translate its heading. '
         'Do not invent details, dates, numerical values, technical methods or legal holdings. '
+        'Do not turn an ambiguous source label into a technical definition or infer a causal motive that the supplied source does not state. Attribute the source wording and its uncertainty when needed. '
         'For a missing figure, preserve the explanation and add its visual block as the second replacement block. '
         'Respect existing_visual_ids: never add a second copy of an image already placed. Keep recap and qa replacements as footer content; do not append narrative after them. '
         'For V: targets approve the observation and use visual_updates if the classification/choice needs correction; the narrative will follow later. '

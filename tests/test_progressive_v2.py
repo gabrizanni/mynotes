@@ -331,6 +331,38 @@ def test_standard_reuses_text_inspection_without_hiding_graphics_or_sources(tmp_
     assert req.source_pack['visuals'][0]['image_path'].endswith('source.png')
 
 
+def test_risk_policy_two_selects_actual_asr_flags_and_unprovided_examples_without_changing_history(tmp_path):
+    evidence={'T001':{'text':'explanations should be intelligible to affected people','speaker_role':'UNKNOWN'}}
+    block={'kind':'paragraph','text':'explanations involve techniques (such as feature attribution heatmaps or surrogate models).','evidence_ids':['T001']}
+    assert r.risks(block,evidence,{},'standard')==[]
+    assert r.risks(block,evidence,{},'standard',policy=2)==['unmatched_specific_example']
+    evidence['T001']['text']=block['text']
+    assert r.risks(block,evidence,{},'standard',policy=2)==[]
+    evidence['T001']['needs_review']=True
+    assert r.risks(block,evidence,{},'standard',policy=2)==['source_uncertainty']
+    assert r.risks(block,evidence,{},'standard')==[]
+    assert r.risks(block,evidence,{},'base',policy=2)==[]
+    block['text']='the exposure lasted twenty hours.';evidence['T001'].pop('needs_review')
+    assert r.risks(block,evidence,{},'standard',policy=2)==['numbers_or_dates']
+    block['text']='the system treats a valid obstacle as non-hazardous to prevent abrupt braking.'
+    assert r.risks(block,evidence,{},'standard',policy=2)==['strong_causal_or_normative_claim']
+
+
+def test_new_jobs_freeze_risk_policy_while_historical_snapshots_keep_theirs(tmp_path):
+    from test_autonomous_organization import prepared
+    from mynotes.batch import plan_batch
+    ws=prepared(tmp_path)
+    cfg=ws.configuration_store().load();cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'}
+    ws.configuration_store().save(cfg)
+    new=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2)
+    assert new['risk_policy_version']==2
+    historical={k:new[k] for k in ('course_code','lectures','course','style','requested_model')}
+    old=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=historical)
+    assert 'risk_policy_version' not in old
+    frozen=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=new)
+    assert frozen['risk_policy_version']==2 and frozen['fingerprint']==new['fingerprint']
+
+
 def test_visual_cache_is_bound_to_bytes_effort_and_does_not_become_instructions(tmp_path):
     from PIL import Image
     from mynotes.visual_memory import scope,load,certificate_access

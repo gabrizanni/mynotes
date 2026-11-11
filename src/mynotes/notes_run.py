@@ -193,6 +193,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
     kwargs['writing_snapshot'] = {key: plan[key] for key in ('course_code', 'lectures', 'course', 'style', 'requested_model')}
     if plan.get('organization_mode'):
         kwargs['writing_snapshot']['organization_mode'] = plan['organization_mode']
+    if plan.get('risk_policy_version'):
+        kwargs['writing_snapshot']['risk_policy_version'] = plan['risk_policy_version']
     root = workspace.runs_dir / '_batches' / (resume or plan['batch_id'])
     state_path = root / 'notes-run.json'
     observer = progress or (lambda *_: None)
@@ -231,6 +233,19 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
             observer(stage, detail or {})
 
         try:
+            observed=root/'observed-review'
+            if (review_defects is None and (previous.get('observed_defects_unresolved') or
+                    (previous.get('status')=='NEEDS_REVIEW' and previous.get('problem',{}).get('failed_phase')=='REVIEWING_OBSERVED_DEFECTS'))):
+                raise WorkflowError('NEEDS_REVIEW: observed textual defect remains unresolved; ordinary resume cannot certify the previous Word')
+            if observed.joinpath('intent.json').exists():
+                intent=json.loads((observed/'intent.json').read_text())
+                if review_defects is not None and intent['review']!=review_defects:
+                    raise WorkflowError('Observed review already recorded; no additional automatic round')
+                if not observed.joinpath('committed.json').exists() and review_defects is None:
+                    raise WorkflowError('NEEDS_REVIEW: observed defects have an unfinished review; preserved Word is not a new verified delivery')
+                if observed.joinpath('committed.json').exists():
+                    for lecture in plan['lectures']:_load_candidate(workspace,lecture)
+                    if review_defects is not None:review_defects=None
             from .publication import word_renderer_hash
             if (state.get('delivery') and state['delivery'].get('renderer_hash') != word_renderer_hash()):
                 # Rebuild Word locally; preserve certified notes and model work.
@@ -260,20 +275,32 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                 if reusable:
                     _load_candidate(workspace, lecture)
             if not reusable:
-                emit('GENERATING', {'next_action': 'recover_saved_work_before_provider'})
-                generated = _generate_with_local_recovery(workspace, code, numbers, resume,
-                    kwargs, provider_adapter, autonomy, emit, review_defects, reference_review)
+                if review_defects is not None and plan.get('progressive_protocol')==2:
+                    emit('REVIEWING_OBSERVED_DEFECTS', {'whole_writing_restarted':False})
+                    from .reviewed_revision import review_saved
+                    generated=review_saved(workspace, state['batch_id'], review_defects)
+                else:
+                    emit('GENERATING', {'next_action': 'recover_saved_work_before_provider'})
+                    generated = _generate_with_local_recovery(workspace, code, numbers, resume,
+                        kwargs, provider_adapter, autonomy, emit, review_defects, reference_review)
                 state['generation'] = {'status': generated['status'], 'fingerprint': generated.get('fingerprint')}
                 if generated['status'] != 'CANDIDATE_READY':
                     emit(generated['status'], generated.get('problem'))
                     return deepcopy(state)
                 state['generation_complete'] = True
+                state.pop('observed_defects_unresolved',None)
                 state['candidate_hashes'] = {l: _candidate_hash(workspace.runs_dir / l / 'lecture_notes.candidate.json') for l in plan['lectures']}
                 state['warnings'] += generated.get('warnings', [])
             emit('BUILDING_WORD')
             if not _valid_files(state.get('delivery', {}).get('files', [])):
                 from .batch_documents import build_batch_documents
                 state['delivery'] = _local_word(lambda: build_batch_documents(workspace, state['batch_id'], mode='both'), emit)
+                manifest=batch.load_batch_manifest(workspace,state['batch_id'])
+                manifest['word_candidates']={row['lecture_id']:{'path':row['path'],'sha256':row['sha256'],
+                    'mode':'standalone','renderer_hash':state['delivery']['renderer_hash'],
+                    'source_candidate_content_hash':batch._candidate_digest(workspace.runs_dir/row['lecture_id']/'lecture_notes.candidate.json')}
+                    for row in state['delivery']['files'] if row['kind']=='standalone'}
+                batch._save(root/'manifest.json',manifest)
             emit('UPDATING_WORD')
             from .course_update import update_course
             before_publish = None
@@ -297,6 +324,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                 emit(result['status'], {'published_to_word': result.get('published_to_word', False)})
             return deepcopy(state)
         except (ProviderError, WorkflowError, PublicationError, OSError, ValueError, KeyError, TypeError) as error:
+            if 'NEEDS_REVIEW' in str(error) and (current_stage=='REVIEWING_OBSERVED_DEFECTS' or state.get('observed_defects_unresolved')):
+                state['observed_defects_unresolved']=True
             state['problem'] = {'kind': type(error).__name__, 'message': str(error),
                                 'saved_content_preserved': True, 'failed_phase': state.get('status'),
                                 'next_action': f'mynotes notes {code} --resume {state["batch_id"]}'}
@@ -308,7 +337,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                 state['problem']['batch_problem'] = current.get('problem')
             except (WorkflowError, OSError):
                 status = 'STOPPED'
-            emit(status if status not in {'RUNNING', 'CANDIDATE_READY', 'PLANNED'} else 'STOPPED')
+            emit('NEEDS_REVIEW' if 'NEEDS_REVIEW' in str(error) else (status if status not in {'RUNNING', 'CANDIDATE_READY', 'PLANNED'} else 'STOPPED'))
             return deepcopy(state)
         except KeyboardInterrupt:
             emit('INTERRUPTED', {'saved_content_preserved': True})

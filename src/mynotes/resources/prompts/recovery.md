@@ -2,6 +2,13 @@ For progressive v2 Agy jobs, inspect batch-status before acting. NEEDS_REVIEW
 retains the failed unit/packet and does not grant another automatic attempt.
 A corrected block is never automatically corrected a second time. Risk review is
 split into at most three targets per call, not a new whole-lesson rewrite.
+For an actual defect found after v2 writing, submit --review-defects against the
+retained response hash. This permits only the first correction of a block whose
+original allowance is unused. Inspect the sources and name exact blocks; do not
+request an exhaustive review under Standard. The original generation is retained.
+If the allowance is spent, stop at NEEDS_REVIEW; do not reset it or start another
+whole generation. Failed explicit reviews keep the previous Word for reference,
+but ordinary resume cannot certify that old result as a resolved defect.
 An explicitly requested --regenerate creates a distinct revision; never infer it
 from an ordinary --resume or hide a failed job behind a new one. Interrupted
 intact prefixes may continue only in their saved conversation. Observed provider

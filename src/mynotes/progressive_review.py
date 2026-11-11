@@ -25,7 +25,7 @@ def merge_visual_updates(known, updates):
         known[identifier]=update
 
 
-def risks(block, evidence, style, quality):
+def risks(block, evidence, style, quality, *, policy=1):
     if quality == 'base':
         return []
     if quality in {'approfondito', 'revisione'}:
@@ -43,6 +43,21 @@ def risks(block, evidence, style, quality):
     if kind not in {'heading','overview'} and any(name.casefold() not in source.casefold() for name in names): result.append('unmatched_name_or_acronym')
     if any(evidence.get(i, {}).get('uncertainty_codes') for i in block.get('evidence_ids', [])):
         result.append('source_uncertainty')
+    if policy >= 2 and kind not in {'heading','overview'}:
+        if re.search(r'\bdirect(?:ly)? (?:consequences|caus\w*)\b|\b(?:in order to|so as to|to prevent)\b',text,re.I):
+            result.append('strong_causal_or_normative_claim')
+        if any(evidence.get(i, {}).get('needs_review') is True for i in block.get('evidence_ids', [])):
+            result.append('source_uncertainty')
+        if re.search(r'\b(hundreds?|thousands?|millions?|billions?)\b|\b(one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty)\s+(seconds?|minutes?|hours?|days?|years?|percent)\b', text, re.I):
+            result.append('numbers_or_dates')
+        # Concrete examples can introduce unmentioned methods without capitals.
+        # Select only examples with at least two substantive words absent from
+        # their actual cited sources; ordinary terminology alone is insufficient.
+        stop = set('such as including for example and or the a an of in to with come ad esempio e o il la un una dei delle'.split())
+        source_words = set(re.findall(r'\w+', source.casefold()))
+        examples = re.findall(r'\((?:such as|e\.g\.|including|for example|come|ad esempio)\s+([^)]{1,400})\)', text, re.I)
+        if any(len({w for w in re.findall(r'\w+', example.casefold()) if len(w)>3 and w not in stop and w not in source_words})>=2 for example in examples):
+            result.append('unmatched_specific_example')
     # UNKNOWN voice and term markup alone are deliberately not risk criteria.
     return result
 
@@ -100,7 +115,8 @@ def packets(request, unit, directory):
         return v.get('content_kind') in {'chart','diagram','uncertain'} or signals.get('drawings',0)>12 or signals.get('images',0)>0
     targets = []
     for index, block in enumerate(unit['blocks']):
-        reasons = risks(block, evidence, request.style, request.requested.quality)
+        reasons = risks(block, evidence, request.style, request.requested.quality,
+                        policy=request.batch_context.get('risk_policy_version',1))
         # Every source graphic decision must be evaluated, even if excluded.
         linked = set(block['evidence_ids'])
         for v in unit['visual_delta']:

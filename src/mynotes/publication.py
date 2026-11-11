@@ -1153,6 +1153,12 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                 p = Path(origin[key])
                 if not p.resolve().is_relative_to(workspace.root.resolve()) or file_sha256(p) != origin[key+'_sha256']:
                     raise PublicationError('Original writing revalidation provenance changed')
+    if candidate.get('reviewed_revision'):
+        try:
+            from .reviewed_revision import verify
+            verify(candidate, workspace.root)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            raise PublicationError('Observed-defect revision cannot be verified: ' + str(error)) from error
     if candidate.get('reference_review'):
         try:
             from .reference_review import verify

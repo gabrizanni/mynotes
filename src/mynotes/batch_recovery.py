@@ -22,6 +22,7 @@ def intent(plan, lectures, continuity, *, reviewed=False):
             'budgets':plan['budgets'],'contract':plan['contract'],'generation_contract':plan['generation_contract'],
             'prompt_contract':plan['prompt_contract'],'continuity':continuity,
             **({'autonomous_organization':True} if plan.get('autonomous_organization') else {}),
+            **({'risk_policy_version':plan['risk_policy_version']} if plan.get('risk_policy_version') else {}),
             **({'context_sources':plan['context_sources']} if plan.get('context_sources') else {})}
 
 
