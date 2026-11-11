@@ -72,7 +72,8 @@ def packet_request(request, targets, unit, directory):
     visuals = [deepcopy(v) for v in request.source_pack.get('visuals', []) if v['evidence_id'] in ids and v.get('image_path')]
     # No whole-lesson anchors, continuity arrays or completed narrative.
     context = {'progressive_protocol': 2, 'review_task': {'lecture_id': unit['lecture_id'], 'targets': targets,
-        'visual_decisions': [v for v in unit['visual_delta'] if v['evidence_id'] in ids]}}
+        'visual_decisions': [v for v in unit['visual_delta'] if v['evidence_id'] in ids],
+        'existing_visual_ids': [b['visual_id'] for b in unit['blocks'] if b.get('kind')=='visual']}}
     candidate = replace(request, phase='progressive_review', source_pack={
         'lecture_id': unit['lecture_id'], 'evidence': selected, 'visuals': visuals},
         batch_context=context, response_schema=review_schema(), previous_notes=None, run_dir=directory,
@@ -121,6 +122,15 @@ def packets(request, unit, directory):
     return result
 
 
+def replacement_blocks(request, original, decision):
+    index=int(decision['block_id'][1:])
+    placed={b.get('visual_id') for i,b in enumerate(original['blocks']) if i!=index and b.get('kind')=='visual'}
+    blocks,_=expand(decision['blocks'],{r['id'] for r in request.source_pack['evidence']},origins(request))
+    blocks=[b for b in blocks if not (b.get('kind')=='visual' and b.get('visual_id') in placed)]
+    if not blocks:raise ProviderError('Risk correction cannot replace content with an already placed image')
+    return blocks
+
+
 def apply_review(request, original, targets, reply):
     if size(reply) > MAX_REVIEW_OUTPUT:
         raise ProviderError('NEEDS_REVIEW: risk response exceeds 24 KiB')
@@ -149,7 +159,7 @@ def apply_review(request, original, targets, reply):
         for block in expanded:
             if not block.get('evidence_ids') or set(block['evidence_ids']) - allowed:
                 raise ProviderError('Risk correction cites sources outside its target')
-        replacements[int(key[1:])] = expanded
+        replacements[int(key[1:])] = replacement_blocks(request,original,decision)
     if seen != set(known): raise ProviderError('Risk review did not account for every target')
     # Indices are the raw-unit coordinates; patches never shift later targets.
     unit['blocks'] = [b for index, block in enumerate(original['blocks']) for b in replacements.get(index, [deepcopy(block)])]
@@ -191,7 +201,7 @@ def review_unit(request, unit, root, invoke):
         for decision in saved['response']['decisions']:
             if decision['status'] == 'patch':
                 index = int(decision['block_id'][1:])
-                edits[index], _ = expand(decision['blocks'], {r['id'] for r in request.source_pack['evidence']}, origins(request))
+                edits[index] = replacement_blocks(request,unit,decision)
         merge_visual_updates(visual_updates,saved['response']['visual_updates'])
         refs.append({'path':str(path),'sha256':file_sha256(path)})
     effective['blocks'] = [b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]

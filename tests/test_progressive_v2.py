@@ -162,6 +162,20 @@ def test_review_can_attach_exact_source_supplied_by_another_target_and_classify_
     with pytest.raises(ProviderError,match='outside'):r.apply_review(req,value,targets,reply)
 
 
+def test_footer_patch_cannot_duplicate_a_figure_already_approved_in_the_unit(tmp_path):
+    req=request(tmp_path);value,_=w.validate_unit(req,unit(),[])
+    figure={'kind':'visual','visual_id':'S001','text':'Original source diagram explanation.','evidence_ids':['S001'],'coverage_role':'full'}
+    value['blocks'].insert(2,figure);recap=value['blocks'][4]
+    target={'block_id':'B4','base_sha256':r.digest(recap),'block':recap,'reasons':['recap_language_and_summary']}
+    decision={'block_id':'B4','base_sha256':r.digest(recap),'status':'patch','reason':'Correct the recap and propose a redundant image',
+        'blocks':[{**recap,'text':'A corrected source-supported recap.'},{**figure,'text':'A repeated proposed diagram.'}]}
+    reply={'decisions':[decision],'visual_updates':[]}
+    updated=r.apply_review(req,value,[target],reply)
+    assert [b['kind'] for b in updated['blocks']]==['overview','paragraph','visual','qa','recap']
+    assert updated['blocks'][2]==figure and updated['blocks'][-1]['text']=='A corrected source-supported recap.'
+    assert r.replacement_blocks(req,value,decision)==[updated['blocks'][-1]]
+
+
 def test_falsely_claimed_image_inspection_is_blocked(tmp_path):
     from PIL import Image
     req=request(tmp_path);image=tmp_path/'page.png';Image.new('RGB',(20,20),'orange').save(image)

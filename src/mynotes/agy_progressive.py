@@ -10,7 +10,7 @@ import sys
 import time
 
 from . import progressive_wire as wire
-from .progressive_review import digest, review_unit, apply_review, review_schema, merge_visual_updates, packets
+from .progressive_review import digest, review_unit, apply_review, review_schema, merge_visual_updates, packets, replacement_blocks
 from .providers import (ProviderError, ProviderResponse, ProviderRequest, RequestedModel,
     _agy_schema, _context, _decode_agy, _normalize_transport_notes, _prompt,
     _save_attempt, _stage_agy_context, _stage_agy_writer, provider_environment,
@@ -82,6 +82,7 @@ def run_single(request, instruction=None):
         'Correct a recap to the saved recap language; do not merely translate its heading. '
         'Do not invent details, dates, numerical values, technical methods or legal holdings. '
         'For a missing figure, preserve the explanation and add its visual block as the second replacement block. '
+        'Respect existing_visual_ids: never add a second copy of an image already placed. Keep recap and qa replacements as footer content; do not append narrative after them. '
         'For V: targets approve the observation and use visual_updates if the classification/choice needs correction; the narrative will follow later. '
         'Inspect every supplied source image before deciding; distinguish a diagram from its list of labels. '
         'Return only the decisions and visual_updates schema via finish; maximum 24 KiB JSON.\n'+inputs)
@@ -163,7 +164,8 @@ def generate(request):
     if state.get('identity')!=identity:raise ProviderError('Progressive identity changed')
     recover_local = (request.resume_authorized and state.get('status')=='NEEDS_REVIEW'
         and (state.get('problem') in {'Risk correction cites sources outside its target','Risk visual update lacks an inspected target',
-                                    'Progressive unit repeats settled source metadata','Progressive completion is inconsistent'}
+                                    'Progressive unit repeats settled source metadata','Progressive completion is inconsistent',
+                                    'Question blocks must follow the main narrative'}
              or str(state.get('problem','')).startswith('Candidate omits required evidence coverage: ')))
     if (state.get('status') in {'FAILED','NEEDS_REVIEW'} and not recover_local) or (state.get('status')=='INTERRUPTED' and not request.resume_authorized):
         raise ProviderError('NEEDS_REVIEW: stopped progressive job retained; no automatic retry')
@@ -265,13 +267,26 @@ def generate(request):
             if decoded!=retained['raw']:raise ProviderError('Retained unit differs from its SUCCESS')
             original_hash=file_sha256(pending)
             prior_attempt=Path(state['attempt']);prior_record=json.loads(prior_attempt.read_text())
+            from .providers import _jsonl_events
+            if decoded.get('complete') is True and not any(e.get('event')=='result' for e in _jsonl_events(prior_record.get('stdout',''))):
+                matching=[]
+                for candidate in directory.glob('provider-attempts/writing-*.json'):
+                    record=json.loads(candidate.read_text())
+                    results=[e['result'] for e in _jsonl_events(record.get('stdout','')) if e.get('event')=='result']
+                    if (record.get('requested')==asdict(request.requested) and results and results[-1]==envelope
+                            and all(r.get('status')=='SUCCESS' for r in results)
+                            and record.get('error') in {'Progressive completion is inconsistent','Question blocks must follow the main narrative'}):
+                        matching.append((candidate,record))
+                if len(matching)!=1:raise ProviderError('Local terminal source could not be proven uniquely; no writing retry')
+                prior_attempt,prior_record=matching[0]
             next_prompt=accept(envelope)
             if file_sha256(pending)!=original_hash:raise ProviderError('Local scope recovery changed the original return')
             if next_prompt is None:
                 from .providers import _jsonl_events
                 results=[e['result'] for e in _jsonl_events(prior_record['stdout']) if e.get('event')=='result']
                 if (not results or any(r.get('status')!='SUCCESS' for r in results) or results[-1]!=envelope
-                        or prior_record.get('error') != json.loads(snapshot.read_text()).get('problem')):
+                        or (prior_record.get('error') != json.loads(snapshot.read_text()).get('problem')
+                            and prior_record.get('error')!='Progressive completion is inconsistent')):
                     raise ProviderError('Local completion needs an intact SUCCESS terminal, not a provider ERROR')
                 local_terminal_source={'path':str(prior_attempt),'sha256':file_sha256(prior_attempt),
                     'local_problem':prior_record['error']}
@@ -357,7 +372,7 @@ def verify_receipt(record, workspace_root):
             if reply!=review_data['response'] or review_data['task']['unit_sha256']!=digest(unit):raise ProviderError('Risk correction source changed')
             changed=apply_review(request,unit,review_data['task']['targets'],reply)
             for d in reply['decisions']:
-                if d['status']=='patch':edits[int(d['block_id'][1:])],_=wire.expand(d['blocks'],{e['id'] for e in request.source_pack['evidence']},wire.origins(request))
+                if d['status']=='patch':edits[int(d['block_id'][1:])]=replacement_blocks(request,unit,d)
             merge_visual_updates(visuals,reply['visual_updates'])
         effective['blocks']=[b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]
         effective['visual_delta']=[visuals.pop(v['evidence_id'],v) for v in unit['visual_delta']]
