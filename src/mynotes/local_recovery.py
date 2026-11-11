@@ -29,6 +29,15 @@ def recover_parts(request, directory, *, apply=False):
     state = json.loads(state_path.read_text()); parts_root = state_path.parent
     if not state.get('local_rejection'):
         return None, None
+    if state.get('problem', {}).get('message') == 'Writing portions contain conflicting slide organization':
+        latest = parts_root/f"returned-{len(state.get('parts', [])):03d}.json"
+        if latest.is_file():
+            retained = json.loads(latest.read_text())
+            if retained.get('part', {}).get('complete') is False:
+                # This is an unfinished prefix, not a complete note result.
+                # The adapter verifies and recovers it before continuing the
+                # original conversation; it cannot become a Word here.
+                return None, None
     records = []
     for path in attempts:
         path=_contained(path,directory)
@@ -45,7 +54,7 @@ def recover_parts(request, directory, *, apply=False):
     if not records:
         raise ProviderError('No recorded provider stream for local recovery')
     attempt,record,results=records[0]
-    if (not record.get('error') or not str(record['error']).startswith('Writing portion cites unknown evidence')
+    if (not record.get('error') or not str(record['error']).startswith(('Writing portion cites unknown evidence', 'Writing portions contain conflicting slide organization'))
             or any(not isinstance(r,dict) or r.get('status')!='SUCCESS' for r in results)):
         raise ProviderError('Only a complete SUCCESS stream rejected locally can be recovered')
     # Reconstruct and compare all evidence and metadata against this request.
@@ -206,8 +215,8 @@ def recover_batch(workspace,batch_id,*,apply=False):
             receipt = {'transformations':[], 'active_seconds':None}
         started=__import__('time').monotonic()
         if manifest.get('autonomous_organization'):
-            from .lesson_organization import integrate_decisions
-            ownership,_=integrate_decisions(response,plan,lessons[0],maps[lessons[0]])
+            from .lesson_organization import integrate_group_decisions
+            ownership,_=integrate_group_decisions(response,plan,lessons,maps)
             plan={**plan,'ownership':ownership}
         from .generation_diagnostics import group_defects
         from .workflow import WorkflowError

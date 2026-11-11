@@ -239,7 +239,7 @@ def test_simple_folder_inventory_is_distinct_from_preparing_notes():
     assert 'mynotes inventory PATH' in CORE
     assert 'Do not load notes' in CORE
     assert 'For read-only discovery' in instruction_module('sources')
-    assert 'Before preparing or generating notes' in instruction_module('sources')
+    assert 'If a required transcript is missing' in instruction_module('sources')
 
 
 @pytest.mark.parametrize("patch", ["null", "[]", '{"image_limit":true}', '{"writing_style":"invented"}'])

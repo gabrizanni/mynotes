@@ -1189,11 +1189,39 @@ def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float
     pages = []
     try:
         for index, page in enumerate(rendered):
-            text = page.get_textpage().get_text_range().strip()
-            images = sum(1 for obj in page.get_objects() if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE)
-            if not text and not images:
+            textpage = page.get_textpage()
+            try:
+                text = textpage.get_text_range().strip()
+                # Check actual positioned glyphs, not only extracted text.
+                # Footers may be below the body margin; horizontal overflow
+                # and physical-page clipping are never intentional layout.
+                width, height = page.get_size()
+                margin = 1.5 / 2.54 * 72
+                body_characters = 0
+                for character in range(textpage.count_chars()):
+                    if not textpage.get_text_range(character, 1).strip():
+                        continue
+                    left, bottom, right, top = textpage.get_charbox(character)
+                    if right <= left or top <= bottom:
+                        continue
+                    if top >= margin - 3 and bottom <= height - margin + 3:
+                        body_characters += 1
+                    if left < margin - 3 or right > width - margin + 3 or bottom < -1 or top > height + 1:
+                        raise PublicationError(f'Rendered Word has text outside the printable area at page {index + 1}')
+                images = body_images = 0
+                for obj in page.get_objects():
+                    if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+                        images += 1
+                        left, bottom, right, top = obj.get_bounds()
+                        if top >= margin - 3 and bottom <= height - margin + 3:
+                            body_images += 1
+                        if left < margin - 3 or right > width - margin + 3 or bottom < -1 or top > height + 1:
+                            raise PublicationError(f'Rendered Word has an image outside the printable area at page {index + 1}')
+            finally:
+                textpage.close()
+            if not body_characters and not body_images:
                 raise PublicationError(f"Rendered Word contains an empty page at {index + 1}")
-            pages.append({"page": index + 1, "characters": len(text), "images": images})
+            pages.append({"page": index + 1, "characters": len(text), "body_characters": body_characters, "images": images})
     finally:
         rendered.close()
     if not pages:

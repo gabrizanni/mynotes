@@ -105,9 +105,10 @@ def pending_organization(ownership, lectures, packs):
 
 def integrated_schema():
     """Decisions accompany ordinary writing; they are not a second model phase."""
-    return {"type": "array", "description": "Source-bound main placement decisions, made while writing this lesson. Include every unresolved visible slide. Pending slides remain in the course pool, not missing current-lesson content.",
+    return {"type": "array", "description": "Place every unresolved page across the selected lessons while writing. Each page has one main owner. Cover all supplied teaching pages, including unspoken supplementary material; never dump leftovers into the last lesson.",
             "items": {"type": "object", "additionalProperties": False,
                       "properties": {"canonical_slide_id": {"type": "string"},
+                                     "owner": {"type": "string", "description": "Selected lecture_id receiving this page's main explanation. Required for joint requests."},
                                      "status": {"type": "string", "enum": ["taught", "supplement", "pending", "material"]},
                                      "reason": {"type": "string"},
                                      "evidence_ids": {"type": "array", "items": {"type": "string"}},
@@ -119,7 +120,7 @@ def integrated_schema():
                       "required": ["canonical_slide_id", "status", "reason", "evidence_ids"]}}
 
 
-def integrate_decisions(response, plan, lecture, mapping):
+def integrate_decisions(response, plan, lecture, mapping, *, scope=None):
     """Validate a separate organization ledger without editing returned prose.
 
     Already reviewed legacy placement needs no new response field. A retained
@@ -128,6 +129,8 @@ def integrate_decisions(response, plan, lecture, mapping):
     """
     ownership = deepcopy(plan['ownership'])
     visible = {key for key, item in plan['inventory'].items() if lecture in item['occurrences']}
+    if scope is not None:
+        visible &= scope
     unresolved = {key for key in visible if ownership[key].get('provisional')
                   or ownership[key]['status'] in {'deferred', 'pending'}}
     rows = response.notes.get('organization')
@@ -151,9 +154,10 @@ def integrate_decisions(response, plan, lecture, mapping):
                    if row['id'].startswith('T') and row.get('origin_lecture_id', lecture) == lecture}
     last = lecture == plan['lectures'][-1]
     for row in rows:
-        if (not isinstance(row, dict) or set(row) - {'canonical_slide_id', 'status', 'reason', 'evidence_ids', 'structural_review'}
+        if (not isinstance(row, dict) or set(row) - {'canonical_slide_id', 'owner', 'status', 'reason', 'evidence_ids', 'structural_review'}
                 or not {'canonical_slide_id', 'status', 'reason', 'evidence_ids'}.issubset(row)
                 or row.get('canonical_slide_id') not in visible or row['canonical_slide_id'] in seen
+                or row.get('owner', lecture) != lecture
                 or row.get('status') not in {'taught', 'supplement', 'pending', 'material'}
                 or not isinstance(row.get('reason'), str) or not row['reason'].strip()):
             raise WorkflowError('Integrated organization has an unknown, duplicate or invalid slide decision')
@@ -209,3 +213,95 @@ def integrate_decisions(response, plan, lecture, mapping):
                        'derived_from_retained_response': derived, 'decisions': deepcopy(rows),
                        'before': deepcopy(plan['ownership']), 'after': deepcopy(ownership),
                        'source_snapshots': deepcopy(plan['sources'])}
+
+
+def integrate_group_decisions(response, plan, lectures, mappings):
+    """Resolve a joint writing response once; no additional planning call.
+
+    Keep the historical single-lesson receipt format, with the same final
+    ledger in each receipt, so publication verifies every lesson independently.
+    """
+    # Some writers return a global S evidence ID in the canonical field and
+    # include that page itself among supporting references. Resolve only an
+    # exact, unique source-bound alias; never guess a teacher/transcript link.
+    from dataclasses import replace
+    normalizations = []
+    original_rows = response.notes.get('organization')
+    if isinstance(original_rows, list):
+        aliases = {}
+        for canonical, item in plan['inventory'].items():
+            for lecture in lectures:
+                local = item['occurrences'].get(lecture)
+                if local is not None:
+                    identifier = mappings[lecture][local]
+                    if identifier in aliases and aliases[identifier] != canonical:
+                        raise WorkflowError('Ambiguous canonical slide alias')
+                    aliases[identifier] = canonical
+        rows = deepcopy(original_rows)
+        for row in rows:
+            if not isinstance(row, dict):
+                raise WorkflowError('Organization needs page objects')
+            key = row.get('canonical_slide_id')
+            row['canonical_slide_id'] = aliases.get(key, key)
+            ids = row.get('evidence_ids')
+            removed = []
+            if isinstance(ids, list):
+                removed = [i for i in ids if aliases.get(i) == row['canonical_slide_id']]
+                row['evidence_ids'] = [i for i in ids if aliases.get(i) != row['canonical_slide_id']]
+            derived = []; supporting_blocks = []
+            owner = row.get('owner', lectures[0] if len(lectures) == 1 else None)
+            if row.get('status') == 'taught' and row.get('evidence_ids') == [] and owner in lectures:
+                item = plan['inventory'].get(row['canonical_slide_id'], {})
+                local = item.get('occurrences', {}).get(owner)
+                page_id = mappings[owner].get(local)
+                own_turns = {mappings[owner][r['id']] for r in plan['packs'][owner]['evidence']
+                             if r['id'].startswith('T') and r.get('origin_lecture_id', owner) == owner}
+                note = next((r['notes'] for r in response.notes.get('lessons', []) if r.get('lecture_id') == owner), {})
+                for index, block in enumerate(note.get('blocks', [])):
+                    if (block.get('kind') in {'paragraph','bullets','table','formula','visual'}
+                            and block.get('coverage_role') in {'full','supplement','new_insight'}
+                            and page_id in block.get('evidence_ids', [])):
+                        refs = [i for i in block.get('evidence_ids', []) if i in own_turns]
+                        if refs: supporting_blocks.append(index)
+                        derived.extend(i for i in refs if i not in derived)
+                row['evidence_ids'] = derived
+            if key != row['canonical_slide_id'] or removed:
+                normalizations.append({'from': key, 'canonical_slide_id': row['canonical_slide_id'],
+                                       'removed_self_page_references': removed})
+            if derived:
+                normalizations.append({'canonical_slide_id': row['canonical_slide_id'],
+                    'derived_transcript_references': derived, 'supporting_narrative_blocks': supporting_blocks})
+        response = replace(response, notes={**response.notes, 'organization': rows})
+    if len(lectures) == 1:
+        ownership, receipt = integrate_decisions(response, plan, lectures[0], mappings[lectures[0]])
+        if normalizations: receipt['reference_normalizations'] = normalizations
+        return ownership, {lectures[0]: receipt}
+    rows = response.notes.get('organization')
+    if not isinstance(rows, list):
+        raise WorkflowError('Joint writing requires explicit source-bound organization')
+    unresolved = {key for key, choice in plan['ownership'].items()
+                  if choice.get('provisional') or choice['status'] in {'pending', 'deferred'}}
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise WorkflowError('Joint organization needs page objects')
+        key, owner = row.get('canonical_slide_id'), row.get('owner')
+        if key not in plan['inventory'] or key in seen or owner not in lectures:
+            raise WorkflowError('Joint organization has an unknown/duplicate page or owner')
+        if owner not in plan['inventory'][key]['occurrences'] or row.get('status') == 'pending':
+            raise WorkflowError('Joint organization must settle every page in an available selected lesson')
+        seen.add(key)
+    if unresolved - seen:
+        raise WorkflowError('Joint organization omits unresolved visible slide decisions')
+    ownership = deepcopy(plan['ownership']); receipts = {}
+    for lecture in lectures:
+        decisions = [row for row in rows if row['owner'] == lecture]
+        scoped = replace(response, notes={**response.notes, 'organization': decisions})
+        ownership, receipt = integrate_decisions(scoped, {**plan, 'ownership': ownership}, lecture,
+                                                mappings[lecture], scope={r['canonical_slide_id'] for r in decisions})
+        receipts[lecture] = receipt
+    for receipt in receipts.values():
+        receipt.update(before=deepcopy(plan['ownership']), after=deepcopy(ownership),
+                       selected_lessons=list(lectures))
+        if normalizations: receipt['reference_normalizations'] = deepcopy(normalizations)
+    return ownership, receipts

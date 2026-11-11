@@ -98,7 +98,7 @@ def test_inventory_cli_finds_sources_without_creating_workspace_or_reading_conte
     monkeypatch.setattr(Path, 'read_bytes', lambda *a, **k: pytest.fail('Inventory must not read file contents'))
     assert main(['inventory', str(root)]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report['file_counts'] == {'materials': 1, 'personal_notes': 1, 'recordings': 1}
+    assert report['file_counts'] == {'materials': 1, 'personal_notes': 0, 'recordings': 1, 'transcripts': 1}
     assert report['inventory_truncated'] is False
     assert not (tmp_path / 'must-not-exist').exists()
 

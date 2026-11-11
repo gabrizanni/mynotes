@@ -54,15 +54,14 @@ missing or explicitly partial transcript. Plain TXT is usable, but its size or
 line count cannot prove complete audio coverage. The returned requested and
 delivered lesson ranges and boundary warnings remain explicit.
 
-New requests integrate slide organization into the normal writing response;
-no additional organizing/model review phase is added. Pending shared-deck
-pages remain in a course pool and do not make the current lesson incomplete.
-The next lesson reads its full transcript and the complete retained prior
-passages, settles relevant pending pages and creates its own Word. The final
-selected lesson must settle remaining pages before complete course coverage can
-be claimed. A settled main explanation is reused; other lessons can add distinct
-transcript-supported insights. Actual changes to previously settled placement
-use the existing coordinated organization-revision and targeted-correction path.
+New complete notes requests organize all selected lessons in the ordinary joint
+writing response, using all selected complete transcripts and one copy of each
+shared source page. Each page receives a source-bound owner; a single lesson
+covers all supplied teaching slides, and multiple lessons distribute them by
+topic without accumulating leftovers in the final lesson. Unspoken content is
+labelled supplementary. Existing unfinished progressive jobs keep their prior
+checkpoints through a compatibility path. See [verified delivery](NOTES_DELIVERY.md)
+for model-budget preflight, publication checks and measurement boundaries.
 
 The controller retains generation, delivery and publication checkpoints in
 `notes-run.json`. `batch-status` reports that request and verifies the actual
@@ -98,9 +97,10 @@ Replace the example batch ID with the returned ID. Planning reads existing
 packs, writes nothing and invokes no provider. Missing or changed sources return
 `NEEDS_PREPARATION`; normal generation prepares relevant sources, preserving
 explicit source selections and using the existing extraction/ASR caches.
-The coordinator reads the relevant recordings before organizing a shared deck.
-An ambiguous slide receives an explicit provisional placement that the agent
-reviews autonomously; slide assignment never requires user confirmation.
+For ordinary notes, the writing worker reads the complete transcripts and
+organizes shared slides in its normal response; the coordinator does not duplicate
+that full review. Candidate-only diagnostics may still use explicit reviewed
+selection. Slide assignment never requires user confirmation.
 
 Organization uses verified source-file SHA-256 and actual page/slide number.
 `owner` is the revisable main placement, with optional `reason`, `provisional`
@@ -160,8 +160,10 @@ Lessons are sorted numerically. With supplied selected-model context/output
 limits, the planner selects consecutive groups that pass conservative text,
 image/output reservations and CLI-launch checks. `--budgets FILE` accepts
 `verified_for_model`, `context_tokens`, `output_tokens`,
-`output_reserve_per_lesson`, and `visual_tokens_per_image`. Missing model limits
-use single-lesson groups with shared continuity. This is not proof that unknown
+`output_reserve_per_lesson`, and `visual_tokens_per_image`. Candidate-only diagnostics with missing model limits
+use single-lesson groups with shared continuity; new ordinary joint notes requests
+attempt one joint request with an explicit unverified-limit warning, preserving
+work on error instead of repeating the deck in separate writing calls. This is not proof that unknown
 model limits or hidden CLI overhead fit; evidence is never silently truncated.
 
 Standard quality remains one writing phase. Course context, learner profile,
@@ -178,43 +180,32 @@ automatically spending quota. Shared provider attempts are stored and counted
 once; per-lesson candidates reference them without multiplying consumption.
 Counter semantics and unknown values remain separate; there is no inferred bill.
 
-### Single-turn default and optional bounded Agy portions
+### Durable Agy writing portions
 
-Agy writing uses one single-turn request by default, including large source packs.
-Inputs over 32,000 UTF-8 bytes are staged losslessly in evidence files bounded
-by 20,000 bytes instead of one oversized inline message. No source rows are omitted.
-There is no guarantee of a sub-minute response or immunity to network failures.
+Agy automatically uses its existing same-conversation writing portions for
+source contexts over 32,000 UTF-8 bytes; smaller requests retain a single turn.
+Inputs are staged losslessly in evidence files bounded by 20,000 bytes. There
+is no second planning/review phase or change to model, effort or source coverage.
+Each portion contains at most 12 blocks. Continuations reuse the same sources
+and conversation, rather than rereading the deck or restarting the lesson.
+`MYNOTES_AGY_PARTS=1` forces portions; `0` selects single turn for diagnostics;
+`auto` is the default and does not mutate the parent environment. Explicit review
+and targeted-correction phases retain their existing single-turn contract.
 
-Explicit `MYNOTES_AGY_PARTS=1` selects one conversation/process with consecutive
-portions of up to 12 blocks. `MYNOTES_AGY_PARTS=auto` retains the previous
-size-based selection for diagnostics and existing workflows. This is still
-one writing phase: no general AI review is added. Sources are staged losslessly
-once; continuations keep the conversation, model, effort and style. Explicitly requested review phases keep their existing single-turn path.
+Each portion requires its own SUCCESS envelope and integrity-checked checkpoint.
+Only complete assembled lessons pass on to the ordinary source, style and Word
+validators. Partial/ERROR turns cannot become a finished Word. The saved retry
+counter permits one application-managed connection recovery in the same
+conversation. Provider-internal retries, when exposed, are separate observations
+and are not claimed to be controlled by MyNotes.
 
-Each portion requires its own SUCCESS result and an integrity-checked checkpoint.
-The assembled notes still pass the full coverage, duplicate, style and Word
-validators; partial or ERROR replies cannot become a finished candidate. A local
-validation defect reuses the saved transport instead of automatically regenerating
-the lesson. Explicit count/percentage contradictions are blocked for targeted
-correction without an additional AI review call.
-
-After source preparation, writing has its own 20-minute allowance. One necessary
-managed targeted correction has a separate 20-minute allowance, with 2 additional
-minutes for local validation and Word building. Standard quality still uses one
-writing phase. Neither resume, transport recovery nor an organization revision
-resets consumed time. Other explicitly selected quality phases are capped
-individually. Durable phase ledgers record an active marker before invocation and
-charge failures too. Uncertain interrupted consumption blocks a new paid call;
-legacy totals are separated only from bound attempt receipts, never guessed.
-The writer stops after 300 seconds without useful progress; repeated identical
-events do not reset that timer. A deadline is a failure bound, not
-a promise of successful completion or a word limit. Completed portions are
-retained on cancellation. Real progress reports accepted portion counts and
-elapsed time, never invented completion percentages. `MYNOTES_AGY_PARTS=0`
-selects the default single-turn path explicitly, without changing the saved
-model/effort. CLI and direct adapter calls use the same default without changing
-the parent process environment. Usage is the CLI's cumulative session snapshot, not a sum of
-the same counters across portions or resumes; cache/thinking are not added again.
+Writing and the one managed targeted correction have no fixed elapsed-time
+cutoff. Local checks retain their separate two-minute allowance and Word has
+its own rendering budget. A no-progress reminder does not stop productive
+writing or start another paid turn. Accepted portions and actual consumption
+survive cancellation and resume. Report saved portions and elapsed time, not
+invented completion percentages. Cumulative session usage is not summed again
+across portions/resumes; cache and thinking counters remain separate.
 
 Temporary transport failure permits one automatic resume after 10 seconds with
 the same model and conversation. The conversation ID is saved at initialization,

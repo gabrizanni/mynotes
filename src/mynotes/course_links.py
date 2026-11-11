@@ -14,6 +14,7 @@ MATERIAL_TYPES = {'.pdf', '.ppt', '.pptx', '.xlsx'}
 NOTE_TYPES = {'.docx', '.txt', '.md', '.ipynb'}
 AUDIO_TYPES = {'.mp3', '.wav', '.m4a', '.aac', '.aiff', '.flac', '.ogg'}
 ROLE_NAMES = {
+    'transcripts': {'trascrizioni', 'trascrizione', 'transcripts', 'transcript', 'transcriptions'},
     'personal_notes': {'appunti', 'notes', 'note', 'personal notes', 'class notes', 'appunti personali'},
     'recordings': {'registrazioni', 'registrazione', 'recordings', 'recording', 'audio', 'reg'},
 }
@@ -32,8 +33,8 @@ def inspect_course_folder(path: Path, *, max_entries: int = 1000, max_files_per_
     if max_entries < 1 or max_files_per_role < 1:
         raise ValueError('inventory limits must be positive')
     root = resolve_course_directory(path)
-    candidates: dict[str, set[str]] = {'personal_notes': set(), 'recordings': set()}
-    files: dict[str, list[str]] = {'materials': [], 'personal_notes': [], 'recordings': []}
+    candidates: dict[str, set[str]] = {'personal_notes': set(), 'recordings': set(), 'transcripts': set()}
+    files: dict[str, list[str]] = {'materials': [], 'personal_notes': [], 'recordings': [], 'transcripts': []}
     warnings: list[str] = []
     scanned = 0
     truncated = False
@@ -69,7 +70,10 @@ def inspect_course_folder(path: Path, *, max_entries: int = 1000, max_files_per_
                     if not entry.is_file(follow_symlinks=False):
                         continue
                     suffix = item.suffix.casefold()
-                    detected = ('materials' if suffix in MATERIAL_TYPES else 'personal_notes' if suffix in NOTE_TYPES else 'recordings' if suffix in AUDIO_TYPES else None)
+                    # Discovery is metadata-only: these are candidates, not a
+                    # certification that arbitrary JSON is a valid transcript.
+                    transcript = suffix == '.json' or (suffix == '.txt' and role != 'personal_notes')
+                    detected = ('transcripts' if transcript else 'materials' if suffix in MATERIAL_TYPES else 'personal_notes' if suffix in NOTE_TYPES else 'recordings' if suffix in AUDIO_TYPES else None)
                     if detected:
                         files[detected].append(str(item))
                         if detected in candidates:
@@ -91,7 +95,8 @@ def inspect_course_folder(path: Path, *, max_entries: int = 1000, max_files_per_
             visited.add(identity)
             scan(child, named_role)
     counts = {role: len(items) for role, items in files.items()}
-    return {'resolved_folder': str(root), 'files': {role: sorted(items)[:max_files_per_role] for role, items in files.items()},
+    return {'resolved_folder': str(root), 'transcript_candidates_unverified': True,
+            'files': {role: sorted(items)[:max_files_per_role] for role, items in files.items()},
             'file_counts': counts, 'file_list_truncated': [role for role, count in counts.items() if count > max_files_per_role],
             'role_candidates': {role: sorted(items) for role, items in candidates.items()},
             'entries_scanned': scanned, 'inventory_truncated': truncated, 'warnings': warnings}
@@ -116,6 +121,8 @@ def link_course_folder(workspace: Workspace, code: str, path: Path, *, dry_run: 
     try:
         inventory = inspect_course_folder(path)
         selected = {'materials': inventory['resolved_folder']}
+        if len(inventory['role_candidates']['transcripts']) == 1:
+            selected['transcripts'] = inventory['role_candidates']['transcripts'][0]
         ambiguity = {}
         pinned = course['files']['personal_notes']
         for role, explicit in [('personal_notes', notes), ('recordings', recordings)]:

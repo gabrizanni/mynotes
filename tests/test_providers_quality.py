@@ -332,7 +332,7 @@ def test_editorial_prompt_is_self_contained_and_reflects_course_style() -> None:
         RequestedModel("agy", "gemini-test", "high", "standard"),
         style={"recap": True, "recap_language": "same_as_notes", "question_language": "it", "freeform_preferences": "Use simple terms."},
     ))
-    assert "one concise recap block in en" in same_language
+    assert "one concise recap block written entirely in en" in same_language
     assert "retain their original wording and language" in same_language
     assert "additional question and answer in it" in same_language
     assert "Do not add a 'Question 1' prefix" in same_language

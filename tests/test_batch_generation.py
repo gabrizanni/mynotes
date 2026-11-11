@@ -90,6 +90,9 @@ def test_resume_keeps_original_writing_preferences_after_memory_change(tmp_path)
 
 
 def test_structural_slide_exemption_requires_trusted_image_bound_review(tmp_path):
+    import subprocess
+    from dataclasses import replace
+    from mynotes.providers import _save_attempt, AttemptStart
     from PIL import Image
     workspace, deck, selection = workspace_and_deck(tmp_path)
     path = workspace.runs_dir / "OPS-L01/source_pack.json"
@@ -106,9 +109,17 @@ def test_structural_slide_exemption_requires_trusted_image_bound_review(tmp_path
         notes["blocks"] = [b for b in notes["blocks"] if not (b.get("coverage_role") == "full" and b["evidence_ids"] == ["S001"])]
         notes["evidence_coverage"][0].update(disposition="excluded", reason="Reviewed title")
 
+    class Recorded(Adapter):
+        def generate(self, request):
+            response = super().generate(request)
+            path = _save_attempt(request, command=['synthetic'], started=AttemptStart(),
+                completed=subprocess.CompletedProcess(['synthetic'], 0, json.dumps(response.notes), ''))
+            return replace(response, attempt_path=str(path))
+    writer = Recorded(omit)
+
     # Neither a model exclusion nor a heading/overview proves source coverage.
     with pytest.raises(WorkflowError, match="owned slide"):
-        generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=Adapter(omit))
+        generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=writer)
     selection[key] = {"owner": "OPS-L01", "status": "material", "structural_review": {
         "kind": "title", "reason": "Only course title and decorative artwork, no teaching content",
         "image_sha256": "0" * 64}}
@@ -117,7 +128,8 @@ def test_structural_slide_exemption_requires_trusted_image_bound_review(tmp_path
     selection[key]["structural_review"]["image_sha256"] = file_sha256(image)
     # A changed trusted plan has its own checkpoint; it may reuse the saved
     # transport only after local review, never an automatic provider retry.
-    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=Adapter(omit))
+    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=writer)
+    assert len(writer.calls) == 2  # One original call for each distinct lesson; L01 is reused.
     candidate = json.loads(Path(result["candidates"][0]["candidate"]).read_text())
     assert candidate["notes"]["evidence_coverage"][0]["disposition"] == "excluded"
     assert candidate["slide_ownership"][key]["structural_review"]["image_sha256"] == file_sha256(image)
@@ -228,7 +240,10 @@ def test_quota_resume_preserves_first_group_and_usage_refs(tmp_path):
         generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter)
     first = (workspace.runs_dir / "OPS-L01/lecture_notes.candidate.json").read_bytes()
     adapter.fail_at = None
-    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter)
+    with pytest.raises(WorkflowError, match='no automatic whole-lesson restart'):
+        generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter)
+    identifier = plan_batch(workspace, "OPS", [1, 2], selection=selection)['batch_id']
+    result = generate_batch(workspace, "OPS", [1, 2], selection=selection, provider_adapter=adapter, batch_id=identifier)
     assert len(adapter.calls) == 3 and result["candidates"][0]["reused"]
     assert (workspace.runs_dir / "OPS-L01/lecture_notes.candidate.json").read_bytes() == first
     assert len(result["shared_attempts"]) == 2

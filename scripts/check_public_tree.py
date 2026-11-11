@@ -42,6 +42,7 @@ PUBLIC_FILES = (
     "docs/BRAND.md",
     "docs/OPTIMIZATION.md",
     "docs/GENERATION.md",
+    "docs/NOTES_DELIVERY.md",
     "docs/MODEL-CATALOG.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",

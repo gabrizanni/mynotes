@@ -31,10 +31,10 @@ def route_index(workspace, settings, course=None):
 
 
 def remember_transcript_folder(workspace, item):
-    """Called by explicit export/sync/assignment, never by read-only polling."""
+    """Called after validated import/export/assignment, never read-only polling."""
     code = item.get('course_code')
     path = item.get('export_text') or item.get('path')
-    if not code or not path or Path(path).suffix.lower() != '.txt':
+    if not code or not path or Path(path).suffix.lower() not in {'.txt', '.json'}:
         return
     def edit(settings):
         target = next((c for c in settings['courses'] if c['code'] == code), None)

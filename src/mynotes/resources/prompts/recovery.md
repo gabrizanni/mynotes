@@ -28,3 +28,9 @@ defects against the sources. Reorganize and revalidate locally first; use the
 bounded managed targeted correction when a real textual correction is necessary.
 Never edit raw returned prose, evidence or receipts to force success, and never
 restart whole-lesson generation to fix a local validation problem. Ordinary resume also checks saved compatible work.
+
+An attempted writer with no certified successful response cannot be restarted
+by ordinary resume. Preserve the failed attempt and report the actual blocker;
+NO_LOCAL_RECOVERY is not permission to launch a second full generation.
+A correction uses the existing one-attempt hash-anchored repair checkpoint;
+reopening the chat or resuming does not grant a new correction allowance.

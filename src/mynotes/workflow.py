@@ -657,6 +657,21 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     except EvidenceReferenceError as error:
         raise WorkflowError(str(error)) from error
     result = _validate_notes(notes, lecture_id)
+    if style is not None and isinstance(result.get('blocks'), list) and style.get('recap', True):
+        blocks = result['blocks']; start = len(blocks)
+        while start and isinstance(blocks[start-1], dict) and blocks[start-1].get('kind') in {'heading','qa','recap'}:
+            start -= 1
+        footer = blocks[start:]
+        questions = [b for b in footer if b.get('kind') == 'qa']
+        recaps = [b for b in footer if b.get('kind') == 'recap']
+        if questions and len(recaps) == 1:
+            ordered = blocks[:start] + questions + recaps
+            if ordered != blocks:
+                result['blocks'] = ordered
+                result.setdefault('render_normalizations', []).append({
+                    'kind': 'editorial_footer_order', 'footer_start': start,
+                    'removed_wrapper_heading_indices': [start+i for i,b in enumerate(footer) if b['kind']=='heading'],
+                    'narrative_and_answers_unchanged': True})
     # Some providers repeat the document title as a level-2 block even though
     # the Word renderer inserts that heading itself. Remove only that exact
     # duplicate; other unexpected levels remain validation errors.

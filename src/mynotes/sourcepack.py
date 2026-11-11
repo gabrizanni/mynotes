@@ -505,6 +505,9 @@ def _build_source_pack_locked(
         state.record_source_pack(lecture_id, source_pack_path, pack["availability"])
     finally:
         state.close()
+    if transcript_path is not None and transcript_manifest and transcript_manifest.get('imported'):
+        from .source_routes import remember_transcript_folder
+        remember_transcript_folder(workspace, {'course_code': code, 'path': str(transcript_path)})
     return pack
 
 

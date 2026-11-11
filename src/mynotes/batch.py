@@ -21,10 +21,10 @@ from typing import Any
 
 from .configuration import effective_style
 from .provider_limits import CommandSizeError, validate_command_size
-from .providers import (ProviderAdapter, ProviderError, ProviderQuotaError, ProviderCancelledError, ProviderAuthenticationError,
+from .providers import (ProviderAdapter, ProviderError, ProviderQuotaError, ProviderCancelledError, ProviderAuthenticationError, ProviderUnavailableError,
                         ProviderTransportError, ProviderSuspendedError, ProviderTimeoutError, ProviderRequest, ProviderResponse, RequestedModel, _agy_schema,
                         _prompt, _stage_agy_context, invoke_provider, notes_schema, provider_environment,
-                        provider_override_flags, with_phase)
+                        provider_override_flags, with_phase, _agy_uses_parts)
 from .sourcepack import SourcePackError, validate_source_pack
 from .utils import atomic_json_write, file_sha256
 from .workflow import (GENERATION_CONTRACT_VERSION, QUALITY_PHASES, WorkflowError,
@@ -33,7 +33,7 @@ from .workflow import (GENERATION_CONTRACT_VERSION, QUALITY_PHASES, WorkflowErro
                        resolve_model)
 from .workspace import Workspace
 
-BATCH_CONTRACT_VERSION = 3
+BATCH_CONTRACT_VERSION = 4
 NARRATIVE_KINDS = {"paragraph", "bullets", "table", "formula", "visual"}
 
 
@@ -53,10 +53,10 @@ class ContentRevisionError(WorkflowError):
 
 @dataclass(frozen=True)
 class BatchBudget:
-    """Only verified selected-model limits may enable multi-lesson requests.
+    """Optional verified selected-model limits, enforced when supplied.
 
     UTF-8 byte counts are conservative upper bounds, not reported token usage.
-    Visual token reservations must be supplied when a request includes images.
+    Unknown limits permit an explicitly warned autonomous joint attempt.
     """
     verified_for_model: str | None = None
     context_tokens: int | None = None
@@ -73,6 +73,27 @@ class BatchBudget:
 
 def _hash(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def _invocation_guard(root, phase, plan, lectures, continuity):
+    """A code/budget update must not grant a fresh full-writing attempt."""
+    scope = {'phase': phase, 'lectures': lectures,
+             'sources': {lecture: plan['sources'][lecture] for lecture in lectures},
+             'context_sources': plan.get('context_sources', {}), 'continuity': continuity,
+             'requested_model': plan['requested_model'], 'style': plan['style'], 'course': plan['course']}
+    path = root / 'invocation-guards' / (_hash(scope) + '.json')
+    if not path.exists():
+        # Preserve guards written by the first implementation of this policy.
+        # These records are never edited or treated as successful responses.
+        for marker in (root / 'generation-checkpoints').glob(f'*/{phase}-started.json'):
+            intent_path = marker.parent / 'request-intent.json'
+            if not intent_path.is_file():
+                continue
+            prior = _read(intent_path)
+            if all(prior.get(key, {}) == value for key, value in scope.items() if key != 'phase'):
+                _save(path, {**_read(marker), 'historical_checkpoint': str(marker.parent)})
+                break
+    return path
 
 
 def _candidate_digest(path):
@@ -233,7 +254,7 @@ def _prepared_context(workspace, lectures, context_lessons=None, selection=None,
             for row in packs[origin]['evidence']:
                 if row.get('canonical_slide_id'):
                     course_slides.setdefault(row['canonical_slide_id'],
-                        {'uses': {target: {} for target in lectures if target >= origin}})
+                        {'uses': {target: {} for target in lectures}})
         carry_slides(packs, course_slides, lectures)
     inventory = {}
     for lecture in lectures + context_lessons:
@@ -473,6 +494,7 @@ def batch_notes_schema(*, autonomous_organization=False) -> dict:
     if autonomous_organization:
         from .lesson_organization import integrated_schema
         schema['properties']['organization'] = integrated_schema()
+        schema['properties']['organization']['items']['required'].append('owner')
         schema['required'].append('organization')
     return schema
 
@@ -527,12 +549,18 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
     context = {"revision_id": plan.get('fingerprint'), "lessons": lectures, "lesson_evidence": {lecture: list(maps[lecture].values()) for lecture in lectures}, "ownership": ownership, "continuity": [{key: value for key, value in entry.items() if key != "narrative_fingerprints"} for entry in continuity]}
     if plan.get('autonomous_organization'):
         context.update(autonomous_organization=True, final_selected_lesson=lectures[-1] == plan['lectures'][-1],
-            organization_instructions=("While writing this lesson, decide each provisional/deferred/pending visible slide in the organization array. "
-                "Use taught only with this lesson's T evidence_ids, supplement for relevant untaught exam content inline near its concept, "
-                "pending only for untouched content to be reviewed with a later selected complete transcript. "
-                "Pending slides are in the course pool, not required current-lesson content; do not repair or explain them yet. "
-                "The final selected lesson must settle every remaining page; never invent teaching or duplicate a settled main explanation. "
+            organization_instructions=("Read all selected complete transcripts and the unique shared deck. While writing, assign each unresolved page an explicit owner lecture_id from the selected lessons. "
+                "Use taught only with that owner's T evidence_ids; use supplement for unspoken supplied slide content inline near its related concept. "
+                "Cover every provided teaching page across the selected lessons, including when only one lesson is selected. Never leave pending pages, ask the user to map slides, or assign leftovers to the last lesson by default. "
+                "Choose the best thematic placement using all transcripts; never invent teaching or duplicate a settled main explanation. "
                 "Do not change already settled prior ownership. Material exemption needs a visually inspected title/divider structural_review bound to its actual source image hash; never exempt code, data or diagrams."))
+        if plan.get('organization_mode') == 'progressive_legacy':
+            context['organization_instructions'] = (
+                'Continue this historical progressive job without rewriting completed lessons. '
+                'Resolve visible provisional pages using the current complete transcript; pending is allowed only before a later selected lesson. '
+                'Use taught only with current T evidence, supplement for unspoken supplied content, '
+                'and settle every remaining page by the last selected lesson. Preserve settled prior ownership. '
+                'Structural exemptions still require inspected title/divider source image hashes.')
     request = ProviderRequest(lectures[0], plan["course"], {}, plan["requested"], source_pack=pack, run_dir=run_dir,
                               style=plan["style"], response_schema=batch_notes_schema(autonomous_organization=plan.get('autonomous_organization', False)), batch_context=context)
     return request, maps
@@ -553,23 +581,24 @@ def _launch_check(request: ProviderRequest) -> dict:
 
 def _fits(request: ProviderRequest, count: int, budget: BatchBudget) -> bool:
     _launch_check(request)
+    joint = bool((request.batch_context or {}).get('autonomous_organization'))
     if budget.verified_for_model != request.requested.model:
-        return count == 1
+        unspecified = all(value is None for value in asdict(budget).values())
+        return count == 1 or (joint and unspecified)
     # Conservative text estimate, not a measured tokenizer count or proof of
     # hidden CLI context. Enforce known bounds even if image costs are unknown.
     upper_bound = len(_prompt(request).encode()) + len(json.dumps(request.response_schema).encode())
+    images = sum(bool(item.get('image_path')) for item in request.source_pack.get('visuals', []))
+    upper_bound += images * (budget.visual_tokens_per_image or 0)
     reserve = count * budget.output_reserve_per_lesson if budget.output_reserve_per_lesson is not None else None
     if reserve is not None and budget.output_tokens is not None and reserve > budget.output_tokens:
         return False
     if budget.context_tokens is not None and upper_bound + (reserve or 0) > budget.context_tokens:
         return False
     verified = all(value is not None for value in (budget.context_tokens, budget.output_tokens, budget.output_reserve_per_lesson))
-    images = sum(bool(item.get("image_path")) for item in request.source_pack.get("visuals", []))
     if not verified or (images and budget.visual_tokens_per_image is None):
-        return count == 1
-    upper_bound += images * (budget.visual_tokens_per_image or 0)
-    reserve = count * budget.output_reserve_per_lesson
-    return reserve <= budget.output_tokens and upper_bound + reserve <= budget.context_tokens
+        return count == 1 or joint
+    return True
 
 
 def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int], *, provider: str | None = None,
@@ -668,10 +697,15 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
                "prompt_contract": file_sha256(Path(__file__).with_name("providers.py"))}
     if autonomous_organization:
         payload['autonomous_organization'] = True
+        payload['organization_mode'] = (writing_snapshot or {}).get('organization_mode', 'joint')
     fingerprint = _hash(payload)
     plan = {**payload, "batch_id": batch_id, "fingerprint": fingerprint, "status": "NEEDS_SELECTION" if unresolved else "PLANNED",
             "unresolved": unresolved, "groups": [], "published_to_word": False,
             "budget_basis": "verified_context_output_and_cli" if budget.verified_for_model == requested.model and all(value is not None for value in (budget.context_tokens, budget.output_tokens, budget.output_reserve_per_lesson)) and (not any(v.get("image_path") for pack in packs.values() for v in pack.get("visuals", [])) or budget.visual_tokens_per_image is not None) else "cli_only_model_limits_unknown"}
+    if (autonomous_organization and len(lectures) > 1 and plan['organization_mode'] == 'joint'
+            and plan['budget_basis'] == 'cli_only_model_limits_unknown'):
+        plan['warnings'] = [{'code': 'UNVERIFIED_MODEL_LIMITS',
+            'message': 'Il provider non dichiara tutti i limiti del modello. Si tenta la richiesta congiunta senza tagliare fonti; un errore conserva il lavoro disponibile senza rigenerazioni complete automatiche.'}]
     if unresolved:
         return plan
     runtime = {**plan, "packs": packs, "inventory": inventory, "requested": requested}
@@ -679,9 +713,11 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     prior_count = 0
     while remaining:
         chosen = None
-        for count in range(1 if autonomous_organization else len(remaining), 0, -1):
+        progressive = plan.get('organization_mode') == 'progressive_legacy'
+        counts = ([1] if progressive else [len(remaining)]) if autonomous_organization else range(len(remaining), 0, -1)
+        for count in counts:
             group = remaining[:count]
-            if len(group) > 1 and any(row['review_before'] in group for row in organization_pending):
+            if not autonomous_organization and len(group) > 1 and any(row['review_before'] in group for row in organization_pending):
                 continue  # A deferred boundary must be reviewed before writing the next lesson.
             request, _ = _request(runtime, group, workspace.runs_dir / "_batches" / batch_id / fingerprint / f"group-{len(plan['groups']):03d}", prior_continuity + [{"lecture_id": lectures[index], "topics": ["x" * 100] * 30, "recap": "x" * 1600} for index in range(prior_count)])
             # Quality passes resend the prior draft. Reserve its complete
@@ -696,6 +732,8 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
                 chosen = group
                 break
         if chosen is None:
+            if autonomous_organization and len(remaining) > 1:
+                raise WorkflowError('Joint lessons exceed configured context/output/image or CLI limits, or supplied limits name another model. No provider was invoked; the shared deck was not split or truncated.')
             raise WorkflowError(f"Prepared lesson {remaining[0]} cannot fit verified request limits; split its sources explicitly. No evidence was removed or provider invoked.")
         plan["groups"].append(chosen)
         remaining = remaining[len(chosen):]
@@ -735,6 +773,14 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
         normalized, _ = normalize_references(response.notes, valid_ids)
     except EvidenceReferenceError as error:
         raise WorkflowError(str(error)) from error
+    from .generation_diagnostics import recap_language_defects
+    language_defects = recap_language_defects(response, plan, lectures, maps) if final_phase else []
+    if language_defects:
+        first = language_defects[0]
+        block = next(r for r in response.notes['lessons'] if r['lecture_id'] == first['lecture_id'])['notes']['blocks'][int(first['path'][7:-1])]
+        error = ContentRevisionError(first['lecture_id'], int(first['path'][7:-1]), block, first['reason'])
+        error.defects = language_defects
+        raise error
     from .generation_diagnostics import group_defects
     defects=group_defects(response,plan,lectures,maps)
     if defects:
@@ -928,7 +974,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
                    build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update",
-                   writing_snapshot: dict | None = None) -> dict:
+                   writing_snapshot: dict | None = None, review_defects: dict | None = None) -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
     if word_mode not in {'update', 'standalone'}:
         raise WorkflowError('Word mode must be update or standalone')
@@ -941,6 +987,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
     kwargs = dict(provider=provider, quality=quality, selection=selection, budgets=budgets, instructions=instructions, image_limit=image_limit, speaker_focus=speaker_focus, context_lessons=context_lessons, autonomous_organization=autonomous_organization,
                   writing_snapshot=writing_snapshot)
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
+    if review_defects is not None and (len(plan['groups']) != 1 or not autonomous_organization):
+        raise WorkflowError('Reviewed block correction requires a joint notes batch; legacy progressive jobs retain their existing recovery path')
     if batch_id is not None and batch_id != plan["batch_id"]:
         raise WorkflowError("Resume batch ID does not match the selected course and lessons")
     if plan_only:
@@ -993,7 +1041,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         state = WorkflowState(workspace.database_path)
         continuity, results, shared_attempts = deepcopy(plan.get("prior_continuity", [])), [], []
         from .generation_diagnostics import speaker_warning
-        warnings=[{"lecture_id":l,**warning} for l,p in packs.items()
+        warnings=list(plan.get('warnings', [])) + [{"lecture_id":l,**warning} for l,p in packs.items()
                   if (warning:=speaker_warning(p,plan["course"].get("speaker_focus","lecture"))) is not None]
         word_candidates = {}; activity = {}; network_retries = 0
         generation_started = time.monotonic()
@@ -1095,11 +1143,37 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             raise WorkflowError("Validated continuity/prior draft exceeds the selected group budget; replan smaller groups before invoking a provider")
                         _unchanged(runtime)
                         _stage_visuals(active)
+                        started_path = group_dir / f'{phase}-started.json'
+                        guard = _invocation_guard(root, phase, runtime, lectures, continuity)
+                        resumable_parts = (_agy_uses_parts(active)
+                            and any(group_dir.glob('writing-parts/*/state.json')))
+                        explicit_external_resume = (batch_id is not None and guard.exists()
+                            and any(_read(guard).get(key) is True for key in ('paused_quota', 'paused_auth')))
+                        if (guard.exists() or started_path.exists()) and not resumable_parts and not explicit_external_resume:
+                            raise WorkflowError('This paid writing phase was already started without a reusable successful response. Saved attempts preserved; no automatic whole-lesson restart.')
+                        started_record = {'phase': phase, 'lessons': lectures,
+                            'started_at_epoch': time.time(), 'requested': asdict(runtime['requested'])}
+                        _save(started_path, started_record); _save(guard, started_record)
                         from dataclasses import replace
                         activity={**activity,"status":"WRITING", "phase_budget":phase_budget.snapshot()};save_progress()
                         with phase_budget.track(phase) as remaining:
                             active=replace(active,timeout_seconds=remaining)
-                            response = invoke_provider(active, provider_adapter)
+                            try:
+                                response = invoke_provider(active, provider_adapter)
+                            except (ProviderQuotaError, ProviderAuthenticationError) as error:
+                                # A user-requested resume after quota recovery
+                                # can continue this unfinished group. Never
+                                # repeat already successful groups or ERRORs.
+                                stopped_record = {'phase': phase, 'lessons': lectures,
+                                    'paused_quota': isinstance(error, ProviderQuotaError),
+                                    'paused_auth': isinstance(error, ProviderAuthenticationError), 'ended_at_epoch': time.time()}
+                                _save(started_path, stopped_record); _save(guard, stopped_record)
+                                raise
+                            except ProviderUnavailableError:
+                                # The adapter certifies no executable/model call
+                                # was started. Keep its diagnostic receipt.
+                                started_path.unlink(missing_ok=True); guard.unlink(missing_ok=True)
+                                raise
                         # A local validation failure must not discard a paid,
                         # successful transport or trigger another paid write.
                         _save_generation_phase(returned, previous, response)
@@ -1112,20 +1186,34 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             from .batch_recovery import certify_response
                             response=certify_response(response,active,root)
                         if autonomous_organization and phase == 'writing':
-                            from .lesson_organization import integrate_decisions
+                            from .lesson_organization import integrate_group_decisions
                             organization_response = _load_generation_phase(returned, previous=None) or response
                             if repair_lineage and retained_origin:
                                 original = Path(retained_origin['returned'])
                                 organization_response = _load_generation_phase(original, previous=None) or organization_response
-                            ownership, organization = integrate_decisions(organization_response, runtime, lectures[0], maps[lectures[0]])
-                            organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
-                            organization_path = group_dir / 'organization.json'
-                            if organization_path.exists() and _read(organization_path) != organization:
-                                raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
-                            if not organization_path.exists(): _save(organization_path, organization)
+                            ownership, organizations = integrate_group_decisions(organization_response, runtime, lectures, maps)
+                            for lecture, organization in organizations.items():
+                                organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
+                                organization_path = group_dir / f'organization-{lecture}.json'
+                                if organization_path.exists() and _read(organization_path) != organization:
+                                    raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
+                                if not organization_path.exists(): _save(organization_path, organization)
+                                plan.setdefault('organization_receipts', {})[lecture] = {'path': str(organization_path), 'sha256': file_sha256(organization_path)}
                             runtime['ownership'] = plan['ownership'] = ownership
                             plan['pending_course_slides'] = sorted(key for key, choice in ownership.items() if choice['status'] == 'pending')
-                            plan.setdefault('organization_receipts', {})[lectures[0]] = {'path': str(organization_path), 'sha256': file_sha256(organization_path)}
+                        if review_defects is not None and phase == 'writing':
+                            if repair_lineage is not None:
+                                if repair_lineage.get('review_sha256') != _hash(review_defects):
+                                    raise WorkflowError('The saved correction already consumed this revision; no additional automatic correction')
+                            else:
+                                from .batch_recovery import validate_review_defects
+                                defects = validate_review_defects(review_defects, response, lectures, maps)
+                                first = defects[0]
+                                row = next(r for r in response.notes['lessons'] if r['lecture_id'] == first['lecture_id'])
+                                index = int(first['path'][7:-1])
+                                error = ContentRevisionError(first['lecture_id'], index, row['notes']['blocks'][index], first['reason'])
+                                error.defects = defects
+                                raise error
                         validation_started=time.monotonic()
                         activity={**activity,"status":"LOCAL_VALIDATION"};save_progress()
                         with phase_budget.track('local_checks'):
@@ -1147,10 +1235,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                                                   retained_from=retained_from)
                         with phase_budget.track('local_checks'):
                             validated=_validate_group(response,runtime,lectures,maps,final_phase=True,continuity=continuity)
+                        if review_defects is not None:
+                            repair_lineage["review_sha256"] = _hash(review_defects)
                         repair_lineage["base_response"]=str(certified_base)
                         repair_lineage["validated_notes_sha256"]={l:_hash(n) for l,n in validated.items()}
                         atomic_json_write(group_dir/"coverage-repair/lineage.json",repair_lineage)
-                    if not checkpoint.exists():
+                    if not checkpoint.exists() or (review_defects is not None and repair_lineage is not None):
                         _unchanged(runtime)
                         _save_generation_phase(checkpoint, previous, response)
                     phase_metrics.append({"phase":phase,"started_at_epoch":phase_wall,"ended_at_epoch":time.time(),
@@ -1193,7 +1283,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                           json.loads(path.read_text()).get('notes') == notes and
                                           json.loads(path.read_text()).get('source_pack_hash') == payload['source_pack_hash'] and
                                           json.loads(path.read_text()).get('requested_model') == payload['requested_model'])
-                    if not completed_path.exists() and not preserve_candidate:
+                    if (not completed_path.exists() or review_defects is not None) and not preserve_candidate:
                         # Preserve any prior candidate as an immutable version before replacing.
                         if path.exists():
                             old = path.read_bytes()
@@ -1207,9 +1297,15 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     continuity.append(_continuity(lecture, notes))
                     results.append({"lecture_id": lecture, "candidate": str(path), "reused": group_reused or preserve_candidate})
                 completed_payload = {"candidates": group_candidates, "phases": phases,"repair_lineage":repair_lineage}
-                if not completed_path.exists():
+                if review_defects is not None and completed_path.exists():
+                    old_complete = completed_path.read_bytes()
+                    history = group_dir / 'prior-completions' / (hashlib.sha256(old_complete).hexdigest() + '.json')
+                    if not history.exists():
+                        history.parent.mkdir(exist_ok=True)
+                        history.write_bytes(old_complete)
+                if not completed_path.exists() or review_defects is not None:
                     _save(completed_path, completed_payload)
-                if not (version_group / "complete.json").exists():
+                if not (version_group / "complete.json").exists() or review_defects is not None:
                     _save(version_group / "complete.json", completed_payload)
                 shared_attempts.extend({**entry, "group": group_index, "lessons": lectures} for entry in phases)
                 if repair_lineage:

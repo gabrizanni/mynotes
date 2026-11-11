@@ -137,7 +137,7 @@ def test_export_write_failure_offers_save_retry_without_asr(setup,monkeypatch,ca
     assert engine.calls==1 and len(txt.scan(ws))==1
 
 
-def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch):
+def test_agent_prompt_checks_all_txt_when_a_required_transcript_is_missing(setup,monkeypatch):
     from mynotes.chat import launch_chat
     from mynotes.context import task_context
     ws,folder,_=setup
@@ -150,7 +150,7 @@ def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch)
     prompt=' '.join(calls[0])
     assert 'External lecture 35' not in prompt
     task=task_context(config,'notes')['instructions']
-    assert 'Before preparing or generating notes' in task and 'capture pending --json' in task
+    assert 'If a required transcript is missing' in task and 'capture pending --json' in task
     assert 'TXT files without audio/metadata' in task
     pending=links.pending(capture.CaptureStore(ws))['items']
     assert len(pending)==36 and any(item['title']=='External lecture 35' for item in pending)

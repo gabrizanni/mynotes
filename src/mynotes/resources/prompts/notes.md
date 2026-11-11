@@ -93,24 +93,23 @@ status material) only for visually inspected non-teaching covers/dividers; never
 infer this from short text or exempt diagrams. Pages with code/data are not covers.
 This uses the same source review,
 not another writing/review phase. Then resume the same batch.
-Follow numeric lesson order with shared context. A PDF may initially be linked only
-to L01; attachment is not proof that all pages were taught in L01. Review the
-current full transcript and relevant slides locally before writing. For pages
-not yet placed, save status="deferred", owner=current lesson, a reason and
-review_before=the next selected prepared lesson in --selection. Do not claim
-those pages covered or remove them from the course inventory. Finish the current
-candidate, then read the next transcript and resolve NEEDS_ORGANIZATION locally
-by revising --selection and resuming the same batch, without asking the user to
-map slides. No separate AI planning/review phase is needed. A new owner can be a
-later lesson even when the PDF was attached only to L01; MyNotes stages the exact
-source page with its original provenance without modifying prepared originals.
-Never defer a page beyond the selected prepared range to fake course completion.
-At each boundary verify the relevant full previous passages. Give every slide
-one main explanation, using references and distinct transcript-supported insights
-elsewhere. Integrate exam slide content never spoken in class as labelled
-supplementary material at its relevant topic. Reconcile affected prior lessons
-before updating the cumulative Word together; defer their Word candidates while
-their slide placement is pending.
+Ordinary notes requests organize all selected lessons in one writing response,
+using complete transcripts and a deduplicated shared deck. The writer assigns
+one owner per page; the program verifies source links and saves organization
+and image decisions. Do not independently read every transcript and slide in
+the coordinator just to duplicate the writer's work. Inspect headings/content
+only to resolve actual source identity or a reported defect.
+One supplied lesson covers all supplied teaching slides, including clearly
+labelled unspoken supplementary content. Multiple supplied lessons distribute
+all pages by topic and transcript support, never by dumping leftovers into the
+last lesson. Do not ask the user to map slides or defer required pages to an
+unspecified future lesson. Inspected title/divider pages may be exempted with
+an image-bound structural review; diagrams/code/data are substantive.
+Use --budgets FILE when selected-model context/output/image limits are verified;
+never invent limits. Known exceeded limits stop before calling a provider.
+When Agy does not declare limits, MyNotes attempts the joint request and reports
+UNVERIFIED_MODEL_LIMITS; do not split the deck into repeated full analyses.
+A provider failure preserves available results without restarting whole writing.
 An untouched topic from slides belongs inline next to its related explanation,
 labelled as supplementary; preserve the lecturer's actual progression. Repeat
 references and distinct source-supported insights across any lesson, including
@@ -143,6 +142,14 @@ use `mynotes build-batch BATCH_ID --mode both --json`; never concatenate histori
 cumulative Word files. Read the delivery index, render and review the actual files;
 these remain candidates and have not been academically published.
 After generation review the saved content and update all related lessons together
+after inspecting source figures and checking actual recap language and source
+fidelity. An inspected flag or citation is not proof of a correct explanation.
+If a joint batch needs content corrections, collect all observed defects in one
+review and use `mynotes notes CODE --resume BATCH_ID --review-defects PATH.json`.
+The file must bind the exact retained notes hash and existing source-bound block
+paths as documented in docs/NOTES_DELIVERY.md; it uses the same single correction
+allowance. Never call a new whole-lesson generation to fix isolated passages.
+Update the related lessons together
 using `mynotes update COURSE-L01 COURSE-L02`. This builds one cumulative Word on
 the current target and publishes it with one backup and one atomic replacement.
 You may autonomously correct already written lessons when their sources or

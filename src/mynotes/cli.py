@@ -406,6 +406,7 @@ def build_parser() -> argparse.ArgumentParser:
     notes.add_argument("--speaker-focus", choices=("lecture", "professor"))
     notes.add_argument("--context-lessons")
     notes.add_argument("--contiguous-transcripts", action="store_true", help="stop before a missing or explicitly partial transcript; never skip a lesson")
+    notes.add_argument("--review-defects", help="JSON with base_notes_sha256 and source-bound block defects actually observed during review; uses the single retained correction allowance")
     notes.add_argument("--plan-only", action="store_true", help="read existing sources without generation, writes or publication")
     notes.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
     baseline = subparsers.add_parser('import-generated-baseline', help='import the last journal-certified generated Word for safe historical-section updates')
@@ -978,6 +979,7 @@ def _notes(arguments: argparse.Namespace) -> int:
     def progress(stage, detail):
         print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
     result = run_notes(workspace, arguments.course, numbers, resume=arguments.resume,
+                       review_defects=_load_json(arguments.review_defects) if arguments.review_defects else None,
         provider=arguments.provider, quality=arguments.quality, instructions=arguments.instructions,
         image_limit=arguments.image_limit, selection=_load_json(arguments.selection) if arguments.selection else None,
         budgets=_load_json(arguments.budgets) if arguments.budgets else None, speaker_focus=arguments.speaker_focus,
