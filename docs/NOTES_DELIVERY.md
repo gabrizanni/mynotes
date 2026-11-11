@@ -127,6 +127,25 @@ requested. It is not a general language detector. Source citations and an
 `inspected` flag alone cannot prove factual fidelity or that a diagram was
 described accurately; those cases still require actual source and visual review.
 
+For a v2 job stopped before delivery with incorrect transcript references, actual
+source review may submit `notes CODE --resume BATCH_ID --review-references FILE.json`.
+This local operation makes no provider call and grants no narrative correction.
+It retains the original successful response/checkpoints, changes only explicitly
+identified `evidence_ids`, and saves a separate immutable reference-review receipt.
+Normal organization, coverage, Word and source checks still apply. Subsequent
+resume reuses and verifies that receipt; changing it or its base stops the job.
+An already delivered job cannot be overwritten through this recovery command.
+
+The JSON has `version: 1`, `base_notes_sha256`, a concrete `reason` and up to 12
+`changes`. Each change has `target` (`organization` or `block`), zero-based `index`,
+`lecture_id`, `before_sha256` (the canonical hash of the entire original target),
+replacement `evidence_ids`, and `reason`. Indices refer to the original global
+organization array or that lesson's blocks. Hashes use sorted compact UTF-8 JSON.
+Source-page references must stay identical and replacement transcript IDs must
+belong to the stated lesson. No wording, ownership or teaching-status changes are
+accepted. Existence of an ID is not semantic proof: the coordinator must inspect
+the actual source match, preserve uncertainties and never invent links.
+
 ## Measurements and verification boundaries
 
 Private extraction events record source hash, cache hit/miss and local duration.

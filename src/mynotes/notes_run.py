@@ -91,13 +91,13 @@ def _local_word(operation, progress):
             progress('LOCAL_WORD_RETRY', {'reason': str(error), 'provider_invoked': False})
 
 
-def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adapter, autonomy, emit, review_defects=None):
+def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adapter, autonomy, emit, review_defects=None, reference_review=None):
     """A technical local recovery may continue; provider errors never enter a retry loop."""
     for local_attempt in range(2):
         try:
             return batch.generate_batch(workspace, code, numbers, batch_id=resume,
                 provider_adapter=adapter, repair_missing=True, build_word=True,
-                word_mode='standalone', autonomous_organization=autonomy, review_defects=review_defects, **kwargs)
+                word_mode='standalone', autonomous_organization=autonomy, review_defects=review_defects, reference_review=reference_review, **kwargs)
         except PublicationError as error:
             transient = any(marker in str(error).lower() for marker in ('timeout', 'timed out', 'temporarily unavailable'))
             if local_attempt or not transient:
@@ -121,12 +121,14 @@ def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adap
 def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provider=None,
               quality=None, instructions=None, image_limit=None, selection=None,
               budgets=None, speaker_focus=None, context_lessons=None, plan_only=False,
-              contiguous_transcripts=False, provider_adapter=None, progress=None, review_defects=None, regenerate=False):
+              contiguous_transcripts=False, provider_adapter=None, progress=None, review_defects=None, regenerate=False, reference_review=None):
     """Run one explicit request; existing candidate-only commands are unchanged."""
     if regenerate and resume:
         raise WorkflowError('--regenerate and --resume are mutually exclusive')
     if review_defects is not None and (not resume or plan_only):
         raise WorkflowError('Reviewed defects require --resume of an existing batch')
+    if reference_review is not None and (not resume or plan_only or review_defects is not None):
+        raise WorkflowError('Reference rectification requires --resume and cannot rewrite narrative defects')
     code = course_code.upper()
     if isinstance(budgets, batch.BatchBudget):
         budgets = asdict(budgets)
@@ -196,6 +198,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
     observer = progress or (lambda *_: None)
     with _request_lock(root):
         previous = batch._read(state_path) if state_path.exists() else {}
+        if reference_review is not None and previous.get('generation_complete'):
+            raise WorkflowError('Reference rectification is only for stopped jobs before delivery')
         state = {**previous, 'batch_id': resume or plan['batch_id'], 'lectures': plan['lectures'],
                  'requested_lectures': original_lectures, 'pid': os.getpid(),
                  'warnings': list({batch._hash(w): w for w in previous.get('warnings', []) + boundary_warnings}.values()),
@@ -227,6 +231,9 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
             observer(stage, detail or {})
 
         try:
+            if state.get('generation_complete') and (root/'reference-review.json').exists():
+                for lecture in plan['lectures']:
+                    _load_candidate(workspace, lecture)
             if (review_defects is None and previous.get('status') in {'COMPLETED', 'COMPLETED_WITH_WARNINGS'} and state.get('generation_complete')
                     and _valid_files(previous.get('delivery', {}).get('files', []))
                     and previous.get('publication', {}).get('output')
@@ -250,7 +257,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
             if not reusable:
                 emit('GENERATING', {'next_action': 'recover_saved_work_before_provider'})
                 generated = _generate_with_local_recovery(workspace, code, numbers, resume,
-                    kwargs, provider_adapter, autonomy, emit, review_defects)
+                    kwargs, provider_adapter, autonomy, emit, review_defects, reference_review)
                 state['generation'] = {'status': generated['status'], 'fingerprint': generated.get('fingerprint')}
                 if generated['status'] != 'CANDIDATE_READY':
                     emit(generated['status'], generated.get('problem'))

@@ -987,7 +987,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                    instructions: str = "", image_limit: int | None = None, plan_only: bool = False,
                    provider_adapter: ProviderAdapter | None = None, batch_id: str | None = None,
                    build_word: bool = False, repair_missing: bool = False, pause_after: str | None = None, speaker_focus: str | None = None, context_lessons: list[str] | None = None, autonomous_organization: bool = False, word_mode: str = "update",
-                   writing_snapshot: dict | None = None, review_defects: dict | None = None, progressive_protocol: int | None = None, generation_id: str | None = None) -> dict:
+                   writing_snapshot: dict | None = None, review_defects: dict | None = None, progressive_protocol: int | None = None, generation_id: str | None = None, reference_review: dict | None = None) -> dict:
     """Plan or resume ordered candidates. Requires already prepared source packs."""
     if word_mode not in {'update', 'standalone'}:
         raise WorkflowError('Word mode must be update or standalone')
@@ -1002,6 +1002,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
     plan = plan_batch(workspace, course_code, lesson_numbers, **kwargs)
     if review_defects is not None and (len(plan['groups']) != 1 or not autonomous_organization):
         raise WorkflowError('Reviewed block correction requires a joint notes batch; legacy progressive jobs retain their existing recovery path')
+    if reference_review is not None and (not batch_id or len(plan['groups']) != 1 or not autonomous_organization or review_defects is not None):
+        raise WorkflowError('Reference rectification requires a stopped joint batch, without narrative repair')
     if batch_id is not None and batch_id != plan["batch_id"]:
         raise WorkflowError("Resume batch ID does not match the selected course and lessons")
     if plan_only:
@@ -1024,6 +1026,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
         runtime = {**plan, "packs": packs, "sources": snapshots, "inventory": inventory, "requested": RequestedModel(**plan["requested_model"]), "workspace_state":str(workspace.state_dir)}
         root = workspace.runs_dir / "_batches" / plan["batch_id"]
+        reference_path = root / 'reference-review.json'
+        if reference_review is not None and progressive_protocol != 2:
+            raise WorkflowError('Reference rectification requires a certified progressive v2 response')
         version_dir = root / plan["fingerprint"]
         effective_sources = deepcopy(snapshots)
         if context_sources or any(row.get('origin_lecture_id') for p in packs.values() for row in p['evidence']):
@@ -1110,10 +1115,13 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 validated = None
                 phases = []
                 repair_lineage = None
+                reference_lineage = None
                 origin = None
                 phase_metrics = []
                 completed_path = group_dir / "complete.json"
                 group_reused = completed_path.exists()
+                if reference_review is not None and group_reused:
+                    raise WorkflowError('Reference rectification cannot overwrite a completed candidate')
                 if (version_group / "complete.json").exists():
                     _read(version_group / "complete.json")
                 if completed_path.exists():
@@ -1148,6 +1156,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         atomic_json_write(group_dir/"reused-from.json",origin)
                     reused = response is not None
                     if response is None:
+                        if reference_review is not None or reference_path.exists():
+                            raise WorkflowError('Reference rectification needs saved writing; no model call permitted')
                         if batch_id is not None and any(
                                 (workspace.runs_dir / lesson / 'lecture_notes.candidate.json').is_file()
                                 and json.loads((workspace.runs_dir / lesson / 'lecture_notes.candidate.json').read_text()).get('batch_id') == plan['batch_id']
@@ -1200,6 +1210,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         # successful transport or trigger another paid write.
                         _save_generation_phase(returned, previous, response)
                     try:
+                        response_before_reference_review = None
                         from .evidence_refs import normalize_references
                         _, transformations=normalize_references(response.notes,{r['id'] for r in active.source_pack['evidence']})
                         if transformations:
@@ -1207,15 +1218,23 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         if phase == 'writing' and repair_lineage is None:
                             from .batch_recovery import certify_response
                             response=certify_response(response,active,root)
+                        if phase == 'writing' and (reference_review is not None or reference_path.exists()):
+                            from .reference_review import rectify
+                            response_before_reference_review = response
+                            response, reference_lineage = rectify(response, active, returned, reference_path, reference_review)
                         if autonomous_organization and phase == 'writing':
                             from .lesson_organization import integrate_group_decisions
                             organization_response = _load_generation_phase(returned, previous=None) or response
                             if repair_lineage and retained_origin:
                                 original = Path(retained_origin['returned'])
                                 organization_response = _load_generation_phase(original, previous=None) or organization_response
+                            if reference_lineage:
+                                organization_response = response
                             ownership, organizations = integrate_group_decisions(organization_response, runtime, lectures, maps)
                             for lecture, organization in organizations.items():
                                 organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
+                                if reference_lineage:
+                                    organization['reference_review'] = reference_lineage
                                 organization_path = group_dir / f'organization-{lecture}.json'
                                 if organization_path.exists() and _read(organization_path) != organization:
                                     raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
@@ -1265,7 +1284,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         atomic_json_write(group_dir/"coverage-repair/lineage.json",repair_lineage)
                     if not checkpoint.exists() or (review_defects is not None and repair_lineage is not None):
                         _unchanged(runtime)
-                        _save_generation_phase(checkpoint, previous, response)
+                        _save_generation_phase(checkpoint, previous, response_before_reference_review or response)
                     if progressive_protocol == 2:
                         from .visual_memory import save as save_inspections
                         save_inspections(workspace.state_dir/'visual-inspections',active,response)
@@ -1305,6 +1324,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     if repair_lineage:
                         payload["repair_lineage"]={"path":str(group_dir/"coverage-repair/lineage.json"),"sha256":file_sha256(group_dir/"coverage-repair/lineage.json")}
                         if repair_lineage.get("repair_attempt"):payload["shared_attempt_paths"].append(repair_lineage["repair_attempt"])
+                    if reference_lineage:
+                        payload['reference_review'] = reference_lineage
                     preserve_candidate = (origin is not None and origin.get('kind') != 'organization_revalidation' and path.is_file() and
                                           json.loads(path.read_text()).get('notes') == notes and
                                           json.loads(path.read_text()).get('source_pack_hash') == payload['source_pack_hash'] and

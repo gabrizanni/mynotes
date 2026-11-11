@@ -9,6 +9,16 @@ truncation, stream errors and retries stop the owned invocation with logs retain
 Do not revive an ERROR result or modify raw receipts. This policy supersedes the
 historical v1 retry/whole-group rules below only for jobs with progressive_protocol=2.
 
+If saved successful writing is stopped only by wrong transcript IDs, inspect the
+actual sources and use `notes CODE --resume BATCH_ID --review-references FILE.json`.
+This explicit, local source-link rectification changes only evidence_ids, never
+prose, source pages, page owners or teaching status. It is separate from a second
+automatic narrative correction and invokes no model. The file binds the original
+notes hash and each target hash; supply only verified current-lesson transcript
+IDs and a concrete reason. See the --review-references help and NOTES_DELIVERY
+contract. Raw results and correction allowances stay unchanged. If the source
+match is uncertain, stop for review; never guess references to make checks pass.
+
 Use supported local recovery for metadata, checkpoint and Word errors; do not
 edit MyNotes implementation, the installed runtime, raw responses or receipts
 to turn a failure into success. Never accept an Agy ERROR envelope, weaken

@@ -248,7 +248,7 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
     assert result.returncode==0
 
 
-def install_fake_transport(monkeypatch, calls, invalid=False):
+def install_fake_transport(monkeypatch, calls, invalid=False, transform=None):
     from mynotes import agy_parts
     from mynotes.providers import _save_attempt
     from mynotes.execution import AttemptStart
@@ -259,6 +259,7 @@ def install_fake_transport(monkeypatch, calls, invalid=False):
     def run(command,prompt,accept,**kwargs):
         req=holder['request'];calls.append(req);kwargs['on_event']({'event':'init','conversation_id':'same-conversation'})
         legacy=IntegratedWriter().generate(req).notes
+        if transform:transform(legacy,req)
         aliases={row['canonical_slide_id']:row['evidence_id'] for row in req.batch_context['ownership']}
         events=[]
         for index,row in enumerate(legacy['lessons']):
