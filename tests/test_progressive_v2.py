@@ -313,6 +313,24 @@ def test_invalid_first_section_stops_before_publication_or_next_section(tmp_path
     assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))
 
 
+@pytest.mark.parametrize('quality,classification,graphic,expected',[
+    ('standard','text',False,0),('standard','text',True,1),
+    ('standard','diagram',False,1),('standard','table',False,1),
+    ('standard','uncertain',False,1),('standard',None,False,1),
+    ('approfondito','text',False,1),('revisione','text',False,1)])
+def test_standard_reuses_text_inspection_without_hiding_graphics_or_sources(tmp_path,quality,classification,graphic,expected):
+    req=request(tmp_path,quality);value,_=w.validate_unit(req,unit(),[])
+    req.source_pack['visuals']=[{'evidence_id':'S001','image_path':str(tmp_path/'source.png')}]
+    known={'S001':classification} if classification else {}
+    req=replace(req,batch_context={**req.batch_context,'review_visual_classifications':known})
+    target={'block_id':'B1','base_sha256':r.digest(value['blocks'][1]),'block':value['blocks'][1],
+            'reasons':['source_graphic_choice'] if graphic else ['numbers_or_dates']}
+    packet=r.packet_request(req,[target],value,tmp_path/'review')
+    assert len(packet.source_pack['visuals'])==expected
+    assert packet.source_pack['evidence']==[row for row in req.source_pack['evidence'] if row['id'] in target['block']['evidence_ids']]
+    assert req.source_pack['visuals'][0]['image_path'].endswith('source.png')
+
+
 def test_visual_cache_is_bound_to_bytes_effort_and_does_not_become_instructions(tmp_path):
     from PIL import Image
     from mynotes.visual_memory import scope,load,certificate_access

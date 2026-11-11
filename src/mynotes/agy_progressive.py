@@ -95,6 +95,7 @@ def run_single(request, instruction=None):
         'Respect existing_visual_ids: never add a second copy of an image already placed. Keep recap and qa replacements as footer content; do not append narrative after them. '
         'For V: targets approve the observation and use visual_updates if the classification/choice needs correction; the narrative will follow later. '
         'Inspect every supplied source image before deciding; distinguish a diagram from its list of labels. '
+        'Only emit visual_updates for images actually supplied and inspected in this request. '
         'Return only the decisions and visual_updates schema via finish; maximum 24 KiB JSON.\n'+inputs)
     if instruction is not None: prompt=instruction+'\n'+inputs
     answer = {}; access = []; started = AttemptStart(); completed = None
@@ -246,7 +247,9 @@ def generate(request):
         image_check(request,unit,access)
         save(status='RISK_CHECK',current_unit=index)
         review_started=time.time()
-        effective,reviews=review_unit(request,unit,root,invoke_review)
+        inspected=[*request.batch_context.get('cached_visual_inspections', []),
+                   *[v for prior in [*units,unit] for v in prior['visual_delta']]]
+        effective,reviews=review_unit(request,unit,root,invoke_review,inspected_visuals=inspected)
         review_ended=time.time()
         image_check(request,effective,access)
         wire.validate_content(request,effective,units)

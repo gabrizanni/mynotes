@@ -80,6 +80,15 @@ def packet_request(request, targets, unit, directory):
         context_mode='thorough')
     if len(_context(candidate).encode()) + size(candidate.response_schema) > MAX_REVIEW_INPUT:
         raise ProviderError('NEEDS_REVIEW: one risk block has overly broad references; no sources truncated')
+    # Preserve the original capacity/grouping check above, including for saved
+    # reviews. Standard needs source text, not another screenshot of known text.
+    known = request.batch_context.get('review_visual_classifications', {})
+    graphic_targets = {i for target in targets if 'source_graphic_choice' in target['reasons']
+                       for i in target['block']['evidence_ids']}
+    if request.requested.quality == 'standard' and known:
+        visuals = [v for v in visuals if known.get(v['evidence_id']) != 'text'
+                   or v['evidence_id'] in graphic_targets]
+        candidate = replace(candidate, source_pack={**candidate.source_pack, 'visuals': visuals})
     return candidate
 
 
@@ -174,8 +183,11 @@ def apply_review(request, original, targets, reply):
     return unit
 
 
-def review_unit(request, unit, root, invoke):
+def review_unit(request, unit, root, invoke, *, inspected_visuals=None):
     """Durable packet allowance is spent before invoking the provider."""
+    if inspected_visuals:
+        request = replace(request, batch_context={**request.batch_context,
+            'review_visual_classifications': {v['evidence_id']:v['content_kind'] for v in inspected_visuals}})
     directory = root / f'review-{unit["part_index"]:03d}'
     tasks = packets(request, unit, directory)
     effective = deepcopy(unit); refs = []

@@ -62,6 +62,14 @@ returns approval, minimal replacement or unresolved in one call. Sources are
 never truncated to fit; a single oversized target stops as NEEDS_REVIEW. An
 approval is evidence of that scoped check, not certification of every sentence.
 
+Standard reuses the writer's observed text-slide classification: ordinary
+text-only screenshots are omitted from subsequent risk packets while their
+complete extracted source text stays present. Diagram/table/formula/uncertain
+images and explicit source-graphic-choice risks retain their images; unknown
+classifications stay conservative. Packet targets and original capacity checks
+are unchanged, so historical reviews keep their grouping and correction limits.
+This reduces input images, not a promised or automatically measured latency.
+
 Every unit is saved only after the level's checks. Each block has one automatic
 correction opportunity, retained across reopen. Unrelated blocks/anchors never
 enter the packet. Residual defects stop the job without another corrective round
