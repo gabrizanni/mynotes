@@ -191,6 +191,8 @@ def review_unit(request, unit, root, invoke):
             response = verify_single(saved['attempt'], packet_dir, review_schema())
             if response != saved['response']: raise ProviderError('Saved risk review differs from SUCCESS')
         else:
+            if getattr(request,'local_only',False):
+                raise ProviderError('NEEDS_REVIEW: this packet lacks a saved result; no new model call permitted')
             if (packet_dir/'started.json').exists():
                 raise ProviderError('NEEDS_REVIEW: this risk packet already consumed its automatic attempt')
             atomic_json_write(packet_dir/'started.json', task)

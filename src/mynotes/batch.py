@@ -1173,7 +1173,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         _save(started_path, started_record); _save(guard, started_record)
                         from dataclasses import replace
                         activity={**activity,"status":"WRITING", "phase_budget":phase_budget.snapshot()};save_progress()
-                        with phase_budget.track(phase) as remaining:
+                        accounting_phase = phase
+                        if progressive_protocol == 2 and phase_budget.model_block_reasons:
+                            from .agy_progressive import local_validation_request
+                            active = local_validation_request(active)
+                            accounting_phase = 'local_checks'
+                        with phase_budget.track(accounting_phase) as remaining:
                             active=replace(active,timeout_seconds=remaining)
                             try:
                                 response = invoke_provider(active, provider_adapter)

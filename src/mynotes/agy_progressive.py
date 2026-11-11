@@ -1,6 +1,6 @@
 """Agy v2: bounded writing, source-observed figures and durable scoped review."""
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import asdict, replace, dataclass, fields
 import json
 import os
 from pathlib import Path
@@ -17,6 +17,15 @@ from .providers import (ProviderError, ProviderResponse, ProviderRequest, Reques
     provider_executable, provider_override_flags)
 from .utils import atomic_json_write, file_sha256
 from .execution import AttemptStart, prevent_idle_sleep
+
+
+@dataclass(frozen=True)
+class LocalValidationRequest(ProviderRequest):
+    local_only: bool = True
+
+
+def local_validation_request(request):
+    return LocalValidationRequest(**{field.name:getattr(request,field.name) for field in fields(ProviderRequest)})
 
 
 def observed_access(event, directory):
@@ -70,6 +79,7 @@ def command(request, schema, log):
 
 
 def run_single(request, instruction=None):
+    if getattr(request,'local_only',False):raise ProviderError('NEEDS_REVIEW: only saved review results may be used while model invocation state is uncertain')
     from .agy_parts import run_session
     request.run_dir.mkdir(parents=True, exist_ok=True)
     request = stage_images(request); _stage_agy_writer(request.run_dir)
@@ -200,7 +210,7 @@ def generate(request):
         *[line for line in _editorial_instructions(request.style,request.course.get('languages',{}).get('notes','en')) if not line.startswith('Top-level')],
         staged,f'Required part_index: {len(units)}'])
     if units:prompt=protocol()+f'\nResume part_index {len(units)}. Continue at: '+units[-1]['next_topic']
-    started=AttemptStart();completed=None;last={}
+    started=AttemptStart();completed=None;last={};writer_started=False
     def save(**updates):
         state.update(updates);state['units']=refs;atomic_json_write(state_path,state)
     def observe(event):
@@ -295,7 +305,9 @@ def generate(request):
             atomic_json_write(root/'local-scope-recovery.json',{'state':str(snapshot),'returned':str(pending),
                 'returned_sha256':original_hash,'review_results_reused':True,'whole_writing_restarted':False})
         if completed is None:
+            if getattr(request,'local_only',False):raise ProviderError('NEEDS_REVIEW: local validation cannot start or resume a writer')
             save(status='WRITING',invocation_started=True)
+            writer_started=True
             with prevent_idle_sleep():
                 completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
                     on_event=observe,abort_errors=True,log_file=root/'provider.log')
@@ -322,7 +334,7 @@ def generate(request):
             out=getattr(error,'output',b'');err=getattr(error,'stderr',b'')
             completed=subprocess.CompletedProcess(args,None,out.decode(errors='replace') if isinstance(out,bytes) else out,
                 err.decode(errors='replace') if isinstance(err,bytes) else err)
-        attempt=_save_attempt(request,command=args,completed=completed,started=started,error=str(error),
+        attempt=_save_attempt(request,command=args,completed=completed,started=started,error=str(error),invocation_started=writer_started,
             envelope={'transport':'agy_progressive_v2','status':'ERROR'})
         save(status='INTERRUPTED' if isinstance(error,KeyboardInterrupt) else 'NEEDS_REVIEW',problem=str(error),attempt=str(attempt))
         if isinstance(error,(KeyboardInterrupt,SystemExit)):raise

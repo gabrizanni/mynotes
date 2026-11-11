@@ -402,12 +402,19 @@ def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provid
     with pytest.raises(ProviderError,match='completion'):a.generate(req)
     monkeypatch.setattr(w,'validate_unit',old)
     monkeypatch.setattr(agy_parts,'run_session',lambda *args,**kwargs:pytest.fail('Local terminal recovery must not invoke writing'))
-    result=a.generate(replace(req,resume_authorized=True));record=json.loads(Path(result.attempt_path).read_text())
+    result=a.generate(a.local_validation_request(replace(req,resume_authorized=True)));record=json.loads(Path(result.attempt_path).read_text())
     assert record['envelope']['completion_kind']=='local_revalidation' and record['invocation_started'] is False
     assert len(calls)==1 and a.verify_receipt(record,tmp_path)==result.notes
     source=Path(record['envelope']['source_attempt']['path']);data=json.loads(source.read_text())
     data['stdout']=json.dumps({'event':'result','result':{'status':'ERROR'}});atomic_json_write(source,data)
     with pytest.raises(ProviderError,match='source attempt changed'):a.verify_receipt(record,tmp_path)
+
+
+def test_local_only_request_cannot_spend_a_missing_review_allowance(tmp_path):
+    req=a.local_validation_request(request(tmp_path));value,_=w.validate_unit(req,unit(),[])
+    with pytest.raises(ProviderError,match='no new model call'):
+        r.review_unit(req,value,tmp_path,lambda _:pytest.fail('A local-only request cannot invoke a model'))
+    assert not list(tmp_path.glob('review-*/*/started.json'))
 
 
 def test_required_final_visual_review_runs_before_any_course_replace(tmp_path,monkeypatch):
