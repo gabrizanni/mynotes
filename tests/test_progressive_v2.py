@@ -66,6 +66,17 @@ def test_units_reconstruct_once_without_parallel_narrative(tmp_path):
     with pytest.raises(ProviderError,match='repeats settled'):w.validate_unit(req,repeated,[one])
 
 
+def test_identical_graphic_classification_is_reused_but_conflicts_remain_errors(tmp_path):
+    req=request(tmp_path);first=unit();v={'evidence_id':'S001','decision':'exclude','content_kind':'text','inspected':True,'reason':'Observed text slide'}
+    first['visual_delta']=[v];one,_=w.validate_unit(req,first,[])
+    raw=unit(1,True);raw['visual_delta']=[{**v,'reason':'Same inspected page, phrased again'}]
+    two,proof=w.validate_unit(req,raw,[one])
+    assert two['visual_delta']==[] and proof[-1]['kind']=='unchanged_visual_decision'
+    assert raw['visual_delta'][0]['reason']=='Same inspected page, phrased again'
+    raw['visual_delta'][0]['content_kind']='diagram'
+    with pytest.raises(ProviderError,match='conflicts'):w.validate_unit(req,raw,[one])
+
+
 def test_unit_limits_apply_before_another_model_request(tmp_path):
     req=request(tmp_path);value=unit();value['blocks'][1]['text']='x'*(w.MAX_UNIT_BYTES+1)
     with pytest.raises(ProviderError,match='32 KiB'):w.validate_unit(req,value,[])

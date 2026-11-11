@@ -162,7 +162,8 @@ def generate(request):
     state=json.loads(state_path.read_text()) if state_path.exists() else {'identity':identity,'units':[]}
     if state.get('identity')!=identity:raise ProviderError('Progressive identity changed')
     recover_local = (request.resume_authorized and state.get('status')=='NEEDS_REVIEW'
-        and state.get('problem') in {'Risk correction cites sources outside its target','Risk visual update lacks an inspected target'})
+        and state.get('problem') in {'Risk correction cites sources outside its target','Risk visual update lacks an inspected target',
+                                   'Progressive unit repeats settled source metadata'})
     if (state.get('status') in {'FAILED','NEEDS_REVIEW'} and not recover_local) or (state.get('status')=='INTERRUPTED' and not request.resume_authorized):
         raise ProviderError('NEEDS_REVIEW: stopped progressive job retained; no automatic retry')
     if state.get('invocation_started') and not state.get('conversation_id'):

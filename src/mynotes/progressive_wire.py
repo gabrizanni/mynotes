@@ -149,6 +149,17 @@ def validate_unit(request, raw, previous):
     validate_shape(raw,schema(request))
     valid = {r['id'] for r in request.source_pack['evidence']}
     unit, proof = expand(raw, valid, origins(request))
+    settled_visuals={v['evidence_id']:v for p in previous for v in p['visual_delta']}
+    new_visuals=[]
+    for decision in unit['visual_delta']:
+        old=settled_visuals.get(decision['evidence_id'])
+        if old is not None:
+            if any(old.get(k)!=decision.get(k) for k in ('decision','content_kind','inspected')):
+                raise ProviderError('Progressive visual decision conflicts with settled inspection')
+            proof.append({'kind':'unchanged_visual_decision','evidence_id':decision['evidence_id'],
+                'prior':deepcopy(old),'returned':deepcopy(decision)})
+        else:new_visuals.append(decision)
+    unit['visual_delta']=new_visuals
     lessons = request.batch_context['lessons']; lecture = unit['lecture_id']
     if lecture not in lessons:
         raise ProviderError('Progressive unit has an unknown lesson')
