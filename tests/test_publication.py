@@ -216,9 +216,13 @@ def test_rendered_source_ids_stay_in_metadata_and_caption_uses_description(tmp_p
                      {'kind':'visual','visual_id':'S001','text':'Six related dimensions.','evidence_ids':['S001']}],
            'visual_decisions':[{'evidence_id':'S001','decision':'include','reason':'Already present; internal inspection details.'}]}
     before=json.dumps(notes,sort_keys=True);document=_new_document({}, {})
-    append_note_blocks(document,notes,{'visuals':[{'evidence_id':'S001','image_path':str(image),'source_file':'deck.pdf','page':2}]})
+    notes['blocks'].insert(1,{'kind':'paragraph','text':'Global source (T2151, T2161).','evidence_ids':['T936','T946']})
+    before=json.dumps(notes,sort_keys=True)
+    append_note_blocks(document,notes,{'_render_reference_ids':['T2151','T2161'],
+        'visuals':[{'evidence_id':'S001','image_path':str(image),'source_file':'deck.pdf','page':2}]})
     text='\n'.join(p.text for p in document.paragraphs)
     assert 'Evidence.' in text and '(S001' not in text
+    assert 'Global source.' in text and 'T2151' not in text
     assert 'Figure — Six related dimensions. (deck.pdf, page 2)' in text
     assert 'internal inspection' not in text and json.dumps(notes,sort_keys=True)==before
 

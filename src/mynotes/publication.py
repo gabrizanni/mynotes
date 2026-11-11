@@ -694,7 +694,8 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
             block = deepcopy(original_block)
             for field in ('text', 'question', 'answer'):
                 if isinstance(block.get(field), str) and block['kind'] != 'formula':
-                    block[field] = _display_source_citations(block[field], block.get('evidence_ids', []))
+                    block[field] = _display_source_citations(block[field],
+                        [*block.get('evidence_ids', []), *pack.get('_render_reference_ids', [])])
             kind = block["kind"]
             if kind == "overview":
                 _heading(document, "Argomenti della lezione" if italian else "Lecture overview", 3)
@@ -1180,7 +1181,18 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                 continue
             if record.get("envelope", {}).get("transport") == "agy_progressive_v2":
                 from .agy_progressive import verify_receipt
-                verify_receipt(record, workspace.root)
+                verified_notes = verify_receipt(record, workspace.root)
+                # A joint response uses global IDs; lesson candidates use local
+                # IDs. Only aliases proven by the intact transport may be hidden
+                # in display text. Do not infer aliases from unverified prose.
+                def references(value):
+                    if isinstance(value, dict):
+                        return [i for key,item in value.items() for i in
+                                (item if key == 'evidence_ids' and isinstance(item,list) else references(item))]
+                    if isinstance(value, list):
+                        return [i for item in value for i in references(item)]
+                    return []
+                pack['_render_reference_ids'] = sorted(set(pack.get('_render_reference_ids', [])) | set(references(verified_notes)))
                 envelope = record['envelope']
             elif record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
