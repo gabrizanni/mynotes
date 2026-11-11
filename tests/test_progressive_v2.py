@@ -522,3 +522,75 @@ def test_required_final_visual_review_runs_before_any_course_replace(tmp_path,mo
     with pytest.raises(ProviderError,match='rendered page'):
         course_update.update_course(ws,['OPS7-L01'],before_publish=reject)
     assert (target.read_bytes() if target.exists() else None)==original
+
+
+@pytest.mark.parametrize('quality,policy,expected',[
+    ('standard',3,False),('base',3,False),('approfondito',1,False),
+    ('approfondito',3,True),('revisione',3,True)])
+def test_extended_context_is_relevant_bounded_and_absent_from_standard(tmp_path,quality,policy,expected):
+    req=request(tmp_path,quality)
+    req=replace(req,batch_context={**req.batch_context,'risk_policy_version':policy})
+    previous=unit();previous['blocks']=[{'kind':'paragraph','text':f'Prior passage {n}',
+        'evidence_ids':['S001','T001']} for n in range(66)]
+    current=unit(1,True);current['blocks'][1]['prior_lecture_id']='TEST-L01'
+    target={'block_id':'B1','base_sha256':r.digest(current['blocks'][1]),
+            'block':current['blocks'][1],'reasons':['extended_source_review']}
+    packet=r.packet_request(req,[target],current,tmp_path/'review',previous_units=[previous])
+    task=packet.batch_context['review_task'];anchors=task.get('context_anchors_not_independent_evidence',[])
+    assert bool(anchors)==expected
+    encoded=_context(packet)
+    trusted=json.loads(encoded.splitlines()[1])
+    assert 'context_anchors_not_independent_evidence' not in json.dumps(trusted)
+    if expected:
+        assert len(anchors)==1 and anchors[0]['block']['text']=='Prior passage 65'
+        assert anchors[0]['for_block_ids']==['B1']
+        assert 'Prior passage 0' not in encoded
+        assert {row['id'] for row in packet.source_pack['evidence']}=={'S001','S002','T001','T003'}
+        assert r.review_task(req,[target],current,[previous])['context_anchors_sha256']==r.digest(anchors)
+    else:
+        assert 'Prior passage' not in encoded
+        assert {row['id'] for row in packet.source_pack['evidence']}=={'S002','T003'}
+
+
+def test_extended_anchor_counts_toward_input_limit_without_truncation(tmp_path):
+    req=request(tmp_path,'approfondito')
+    req=replace(req,batch_context={**req.batch_context,'risk_policy_version':3})
+    previous=unit();previous['blocks']=[{'kind':'paragraph','text':'x'*70000,'evidence_ids':['S001']}]
+    current=unit(1,True);target={'block_id':'B1','base_sha256':r.digest(current['blocks'][1]),
+        'block':current['blocks'][1],'reasons':['extended_source_review']}
+    with pytest.raises(ProviderError,match='no sources truncated'):
+        r.packet_request(req,[target],current,tmp_path/'review',previous_units=[previous])
+    assert len(previous['blocks'][0]['text'])==70000
+
+
+def test_extended_review_saves_context_and_reopens_without_any_model(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    from test_autonomous_organization import prepared
+    from test_publication import fake_render
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(cfg)
+    writing=[];install_fake_transport(monkeypatch,writing);invoke=a.run_single;seen=[]
+    def review(packet,*args):
+        seen.append(packet)
+        return invoke(packet,*args)
+    monkeypatch.setattr(a,'run_single',review)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    first=notes_run.run_notes(ws,'OPS',[1,2],provider='agy',quality='approfondito')
+    assert first['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},first.get('problem')
+    assert any(anchor['lecture_id']=='OPS-L01' for packet in seen
+        for anchor in packet.batch_context['review_task'].get('context_anchors_not_independent_evidence',[]))
+    count=len(seen)
+    again=notes_run.run_notes(ws,'OPS',resume=first['batch_id'])
+    assert again['reused'] and len(writing)==1 and len(seen)==count
+    original_anchors=r.context_anchors
+    def changed_context(*args,**kwargs):
+        anchors=original_anchors(*args,**kwargs)
+        if anchors:anchors[0]['block']['text']+=' Different context.'
+        return anchors
+    monkeypatch.setattr(r,'context_anchors',changed_context)
+    state=json.loads(next(ws.runs_dir.rglob('progressive-v2/state.json')).read_text())
+    record=json.loads(Path(state['attempt']).read_text())
+    with pytest.raises(ProviderError,match='review context changed'):
+        a.verify_receipt(record,ws.runs_dir)
+    assert len(writing)==1 and len(seen)==count

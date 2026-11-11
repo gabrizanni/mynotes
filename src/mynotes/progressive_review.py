@@ -108,16 +108,63 @@ def review_schema():
         'visual_updates':{'type':'array','items':visual}},'required':['decisions','visual_updates']}
 
 
-def packet_request(request, targets, unit, directory):
+def context_anchors(request, targets, unit, previous_units=()):
+    """Relevant narrative neighbors for extended checks, never a whole ledger."""
+    if (request.requested.quality not in {'approfondito','revisione'}
+            or request.batch_context.get('risk_policy_version',1)<3):
+        return []
+    entries=[]
+    for prior in [*previous_units,unit]:
+        for index,block in enumerate(prior['blocks']):
+            entries.append({'lecture_id':prior['lecture_id'],'part_index':prior.get('part_index',0),
+                            'block_index':index,'block':block})
+    offset=len(entries)-len(unit['blocks'])
+    target_positions={offset+int(t['block_id'][1:]) for t in targets if t['block_id'].startswith('B')}
+    substantive={'paragraph','table','formula','visual'}
+    selected={}
+    def add(position,target):
+        if position in target_positions:return
+        if position not in selected and len(selected)==3:return
+        anchor=selected.setdefault(position,{**deepcopy(entries[position]),'for_block_ids':[]})
+        if target['block_id'] not in anchor['for_block_ids']:anchor['for_block_ids'].append(target['block_id'])
+    for target in targets:
+        if not target['block_id'].startswith('B'):continue
+        position=offset+int(target['block_id'][1:])
+        prior_lecture=target['block'].get('prior_lecture_id')
+        if prior_lecture:
+            linked=[i for i,e in enumerate(entries[:offset]) if e['lecture_id']==prior_lecture
+                    and e['block']['kind'] in substantive]
+            if linked:
+                ids=set(target['block']['evidence_ids'])
+                best=max(linked,key=lambda i:(len(ids & set(entries[i]['block']['evidence_ids'])),i))
+                add(best,target)
+        for positions in (range(position-1,-1,-1),range(position+1,len(entries))):
+            neighbor=next((i for i in positions if entries[i]['block']['kind'] in substantive),None)
+            if neighbor is not None:add(neighbor,target)
+    return list(selected.values())
+
+
+def review_task(request, targets, unit, previous_units=()):
+    task={'unit_sha256':digest(unit),'targets':targets}
+    anchors=context_anchors(request,targets,unit,previous_units)
+    if anchors:task['context_anchors_sha256']=digest(anchors)
+    return task
+
+
+def packet_request(request, targets, unit, directory, *, previous_units=()):
     ids = {i for t in targets for i in t['block']['evidence_ids']}
+    anchors=context_anchors(request,targets,unit,previous_units)
+    ids.update(i for a in anchors for i in a['block']['evidence_ids'])
     selected = [deepcopy(r) for r in request.source_pack['evidence'] if r['id'] in ids]
     visuals = [deepcopy(v) for v in request.source_pack.get('visuals', []) if v['evidence_id'] in ids and v.get('image_path')]
-    # No whole-lesson anchors, continuity arrays or completed narrative.
+    # Standard has no narrative anchors. Extended checks get only relevant
+    # neighbors/explicit prior-lesson links, with their actual source evidence.
     context = {'progressive_protocol': 2, 'review_task': {'lecture_id': unit['lecture_id'], 'targets': targets,
         'visual_decisions': [v for v in unit['visual_delta'] if v['evidence_id'] in ids],
         'existing_visual_ids': [b['visual_id'] for b in unit['blocks'] if b.get('kind')=='visual']}}
     if request.batch_context.get('risk_policy_version', 1) >= 3:
         context['risk_policy_version'] = request.batch_context['risk_policy_version']
+    if anchors:context['review_task']['context_anchors_not_independent_evidence']=anchors
     candidate = replace(request, phase='progressive_review', source_pack={
         'lecture_id': unit['lecture_id'], 'evidence': selected, 'visuals': visuals},
         batch_context=context, response_schema=review_schema(), previous_notes=None, run_dir=directory,
@@ -136,7 +183,7 @@ def packet_request(request, targets, unit, directory):
     return candidate
 
 
-def packets(request, unit, directory):
+def packets(request, unit, directory, *, previous_units=()):
     evidence = {r['id']:r for r in request.source_pack['evidence']}
     source_visuals = {v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
     def graphical(v):
@@ -166,11 +213,11 @@ def packets(request, unit, directory):
         attempt = current + [target]
         try:
             if len(attempt) > MAX_REVIEW_BLOCKS: raise ProviderError('packet full')
-            packet_request(request, attempt, unit, directory)
+            packet_request(request, attempt, unit, directory, previous_units=previous_units)
         except ProviderError:
             if not current: raise
             result.append(current); current = [target]
-            packet_request(request, current, unit, directory)
+            packet_request(request, current, unit, directory, previous_units=previous_units)
         else: current = attempt
     if current: result.append(current)
     return result
@@ -228,19 +275,19 @@ def apply_review(request, original, targets, reply):
     return unit
 
 
-def review_unit(request, unit, root, invoke, *, inspected_visuals=None):
+def review_unit(request, unit, root, invoke, *, inspected_visuals=None, previous_units=()):
     """Durable packet allowance is spent before invoking the provider."""
     if inspected_visuals:
         request = replace(request, batch_context={**request.batch_context,
             'review_visual_classifications': {v['evidence_id']:v['content_kind'] for v in inspected_visuals}})
     directory = root / f'review-{unit["part_index"]:03d}'
-    tasks = packets(request, unit, directory)
+    tasks = packets(request, unit, directory, previous_units=previous_units)
     effective = deepcopy(unit); refs = []
     # Apply each packet in original coordinates, then combine by raw index.
     edits = {}; visual_updates = {}
     for number, targets in enumerate(tasks):
         packet_dir = directory / f'{number:03d}'; packet_dir.mkdir(parents=True, exist_ok=True)
-        path = packet_dir / 'review.json'; task = {'unit_sha256':digest(unit), 'targets':targets}
+        path = packet_dir / 'review.json'; task = review_task(request,targets,unit,previous_units)
         if path.exists():
             saved = json.loads(path.read_text())
             if saved['task'] != task: raise ProviderError('Saved risk review inputs changed')
@@ -253,7 +300,7 @@ def review_unit(request, unit, root, invoke, *, inspected_visuals=None):
             if (packet_dir/'started.json').exists():
                 raise ProviderError('NEEDS_REVIEW: this risk packet already consumed its automatic attempt')
             atomic_json_write(packet_dir/'started.json', task)
-            response, attempt = invoke(packet_request(request, targets, unit, packet_dir))
+            response, attempt = invoke(packet_request(request, targets, unit, packet_dir,previous_units=previous_units))
             saved = {'task':task,'response':response,'attempt':str(attempt),'attempt_sha256':file_sha256(attempt)}
             atomic_json_write(path, saved)
         changed = apply_review(request, unit, targets, saved['response'])

@@ -61,6 +61,12 @@ contains at most three targets, 64 KiB text/schema input and 24 KiB output. It
 returns approval, minimal replacement or unresolved in one call. Sources are
 never truncated to fit; a single oversized target stops as NEEDS_REVIEW. An
 approval is evidence of that scoped check, not certification of every sentence.
+New extended checks include at most three relevant narrative anchors: nearest
+substantive neighbors and explicit prior-lecture links, with their cited source
+text/images. These generated excerpts remain untrusted context, not independent
+evidence or editable targets. They count toward the same input limit and their
+hash is bound to the saved review. Standard/Base and historical jobs receive no
+extra narrative context or calls.
 
 New progressive jobs freeze risk policy version 3. It also recognizes the
 imported transcript's actual `needs_review` flag, spelled-out quantities and
