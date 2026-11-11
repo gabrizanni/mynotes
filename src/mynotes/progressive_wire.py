@@ -218,6 +218,25 @@ def assemble(request, units):
         visuals.update({row['evidence_id']: row for row in unit['visual_delta']})
     for lecture, note in lessons.items():
         cited = {i for b in note['blocks'] for i in b['evidence_ids']}
+        source_rows={r['id']:r for r in request.source_pack['evidence']}
+        if any(u['lecture_id']==lecture and u['lesson_complete'] for u in units):
+            for choice in organization:
+                identifier=choice['canonical_slide_id'];source=source_rows.get(identifier,{})
+                if choice['owner']!=lecture or identifier in cited or visuals.get(identifier,{}).get('content_kind')!='text':continue
+                resource=source_resource(source)
+                if resource is None:continue
+                title,url=resource
+                prefix='Integrazione dalle slide: ' if request.course.get('languages',{}).get('notes')=='it' else 'Supplementary slide material: '
+                block={'kind':'paragraph','text':prefix+title+' — '+url,'evidence_ids':[identifier],
+                    'coverage_role':'supplement','supplement_labelled':True,
+                    'source_derivation':{'kind':'exact_source_resource','source_evidence_id':identifier}}
+                # Keep the exact provided resource next to its source topic,
+                # before subsequent material and the program-owned footer.
+                before=[index for index,b in enumerate(note['blocks']) if b['kind'] in {'paragraph','bullets','table','formula','visual'}
+                    and any(source_rows.get(i,{}).get('source_file')==source.get('source_file')
+                        and 0<source_rows.get(i,{}).get('page',0)<source.get('page',0) for i in b['evidence_ids'])]
+                position=max(before)+1 if before else next((i for i,b in enumerate(note['blocks']) if b['kind'] in {'qa','recap'}),len(note['blocks']))
+                note['blocks'].insert(position,block);cited.add(identifier)
         placed = {b.get('visual_id') for b in note['blocks'] if b['kind'] == 'visual'}
         # This is a citation ledger, not a semantic correctness claim.
         note['evidence_coverage'] = [{'evidence_id': i, 'disposition': 'used',
@@ -232,6 +251,19 @@ def assemble(request, units):
                 'inspected': decision['inspected'],
                 'reason': decision['reason'] if decision['decision'] == 'exclude' or identifier in placed else 'No image placement in this lesson; shared source decision retained.'})
     return {'organization': organization, 'lessons': [{'lecture_id': l, 'notes': n} for l, n in lessons.items()]}
+
+
+def source_resource(source):
+    """Only a short title and one supplied video URL, never data or a lecture."""
+    from urllib.parse import urlparse
+    text=str(source.get('content',source.get('text',''))).strip()
+    urls=re.findall(r'https?://[^\s<>]+',text)
+    if len(urls)!=1 or urlparse(urls[0]).hostname not in {'youtube.com','www.youtube.com','youtu.be','vimeo.com','www.vimeo.com'}:
+        return None
+    title=text.replace(urls[0],'').strip()
+    if source.get('page') is not None:title=re.sub(r'\s+'+re.escape(str(source['page']))+r'\s*$','',title).strip()
+    if not title or len(title.split())>16 or re.search(r'\d|[▪•=\\$%]',title):return None
+    return title,urls[0]
 
 
 def validate_content(request, unit, previous):

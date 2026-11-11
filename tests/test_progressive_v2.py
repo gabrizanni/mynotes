@@ -77,6 +77,24 @@ def test_identical_graphic_classification_is_reused_but_conflicts_remain_errors(
     with pytest.raises(ProviderError,match='conflicts'):w.validate_unit(req,raw,[one])
 
 
+def test_only_exact_title_and_video_link_are_locally_preserved_as_source_resources(tmp_path):
+    req=request(tmp_path);source=req.source_pack['evidence'][0]
+    source.update(content='Who is responsible for automated decisions? https://www.youtube.com/watch?v=test 5',page=5,source_file='deck.pdf')
+    req.source_pack['visuals']=[{'evidence_id':'S001','visual_decision':'candidate'}]
+    value=unit()
+    for block in value['blocks']:block['evidence_ids']=['S002']
+    value['visual_delta']=[{'evidence_id':'S001','decision':'exclude','content_kind':'text','inspected':True,'reason':'Exact source title and video link'}]
+    normalized,_=w.validate_unit(req,value,[])
+    notes=w.assemble(req,[normalized])['lessons'][0]['notes']
+    resource=next(b for b in notes['blocks'] if b.get('source_derivation'))
+    assert resource['text']=='Supplementary slide material: Who is responsible for automated decisions? — https://www.youtube.com/watch?v=test'
+    assert resource['evidence_ids']==['S001']
+    w.validate_content(req,normalized,[])
+    assert w.source_resource({**source,'content':'False positives are 35% of actual negatives. https://www.youtube.com/watch?v=test'}) is None
+    assert w.source_resource({**source,'content':'▪ Responsibility has several conditions https://www.youtube.com/watch?v=test'}) is None
+    assert w.source_resource({**source,'content':'A source article https://example.com/article'}) is None
+
+
 def test_unit_limits_apply_before_another_model_request(tmp_path):
     req=request(tmp_path);value=unit();value['blocks'][1]['text']='x'*(w.MAX_UNIT_BYTES+1)
     with pytest.raises(ProviderError,match='32 KiB'):w.validate_unit(req,value,[])
