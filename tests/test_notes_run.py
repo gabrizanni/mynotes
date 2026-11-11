@@ -67,6 +67,21 @@ def test_word_transient_failure_is_local_retry_without_model(tmp_path, monkeypat
     assert result['status'] == 'COMPLETED' and len(calls) == 2
 
 
+def test_renderer_change_rebuilds_only_word_and_preserves_notes(tmp_path, monkeypatch):
+    ws,batch_id=finished_batch(tmp_path,monkeypatch)
+    first=nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
+    originals={p:p.read_bytes() for p in ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json')}
+    current=pub.word_renderer_hash()+'-synthetic-update'
+    monkeypatch.setattr(pub,'word_renderer_hash',lambda:current)
+    monkeypatch.setattr(bd,'word_renderer_hash',lambda:current)
+    monkeypatch.setattr('mynotes.batch.generate_batch',lambda *a,**k:pytest.fail('Renderer recovery must not regenerate notes'))
+    result=nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
+    assert result['status']=='COMPLETED' and result['delivery']['renderer_hash']==current
+    assert first['delivery']['files']!=result['delivery']['files']
+    assert all(p.read_bytes()==data for p,data in originals.items())
+    assert nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())['reused']
+
+
 def test_failure_after_words_resumes_publication_without_generation(tmp_path, monkeypatch):
     from mynotes import course_update
     ws, batch_id = finished_batch(tmp_path, monkeypatch)

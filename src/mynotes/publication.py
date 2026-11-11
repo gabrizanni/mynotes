@@ -673,6 +673,14 @@ def _lesson_heading(lecture_id: str, title: str) -> str:
     return f"Lecture {lesson_number}: {clean_title}" if clean_title else f"Lecture {lesson_number}"
 
 
+def _display_source_citations(text: str, evidence_ids: list[str]) -> str:
+    """Keep technical source IDs in metadata, removing only exact cited lists."""
+    known = set(evidence_ids)
+    protected = ['`[^`]*`', *[re.escape(value) for value in _inline_math_tokens(text)]]
+    pattern = '|'.join(protected) + r'|[ \t]*\((?P<ids>[ST]\d+(?:\s*[,;]\s*[ST]\d+)*)\)'
+    return re.sub(pattern, lambda m: '' if m['ids'] and set(re.findall(r'[ST]\d+', m['ids'])) <= known else m[0], text)
+
+
 def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, language: str = "en", recap_language: str = "it") -> None:
     """Shared native Word narrative renderer for lectures and standalone study guides."""
     italian = language.lower().startswith("it")
@@ -682,7 +690,11 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
     if blocks:
         key_terms = _key_terms(blocks)
         qa_heading_added = False
-        for block in blocks:
+        for original_block in blocks:
+            block = deepcopy(original_block)
+            for field in ('text', 'question', 'answer'):
+                if isinstance(block.get(field), str) and block['kind'] != 'formula':
+                    block[field] = _display_source_citations(block[field], block.get('evidence_ids', []))
             kind = block["kind"]
             if kind == "overview":
                 _heading(document, "Argomenti della lezione" if italian else "Lecture overview", 3)
@@ -733,7 +745,10 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
                 identifier = str(block["visual_id"])
                 if identifier not in visuals or decisions.get(identifier, {}).get("decision") != "include":
                     raise PublicationError("Ordered visual is unavailable or not approved")
-                _append_visual(document, visuals[identifier], decisions[identifier])
+                # The reviewed visual description is a caption; the decision's
+                # reason is an internal inclusion/inspection audit trail.
+                _append_visual(document, visuals[identifier], {**decisions[identifier],
+                    'reason': block.get('text') or decisions[identifier].get('reason', 'Relevant course visual')})
 
 
 def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, page_break_before: bool = False, language: str = "en", recap_language: str = "it") -> None:

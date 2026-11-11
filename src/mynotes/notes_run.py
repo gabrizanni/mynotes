@@ -231,11 +231,15 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
             observer(stage, detail or {})
 
         try:
+            from .publication import word_renderer_hash
+            if (state.get('delivery') and state['delivery'].get('renderer_hash') != word_renderer_hash()):
+                # Rebuild Word locally; preserve certified notes and model work.
+                state.pop('delivery', None)
             if state.get('generation_complete') and (root/'reference-review.json').exists():
                 for lecture in plan['lectures']:
                     _load_candidate(workspace, lecture)
             if (review_defects is None and previous.get('status') in {'COMPLETED', 'COMPLETED_WITH_WARNINGS'} and state.get('generation_complete')
-                    and _valid_files(previous.get('delivery', {}).get('files', []))
+                    and state.get('delivery') and _valid_files(state['delivery'].get('files', []))
                     and previous.get('publication', {}).get('output')
                     and Path(previous['publication']['output']).is_file()
                     and file_sha256(Path(previous['publication']['output'])) == previous['publication'].get('output_hash')):
