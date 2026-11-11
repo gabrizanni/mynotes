@@ -108,6 +108,20 @@ def test_risk_patch_is_anchored_and_cannot_touch_other_blocks(tmp_path):
     with pytest.raises(ProviderError,match='stale'):r.apply_review(req,value,[target],reply)
 
 
+def test_review_can_attach_exact_source_supplied_by_another_target_and_classify_it(tmp_path):
+    req=request(tmp_path);value,_=w.validate_unit(req,unit(),[])
+    value['blocks'][1]['evidence_ids']=['T001','T002']
+    targets=[{'block_id':f'B{i}','base_sha256':r.digest(value['blocks'][i]),'block':value['blocks'][i],'reasons':['test']} for i in [0,1]]
+    reply={'decisions':[{'block_id':'B0','base_sha256':targets[0]['base_sha256'],'status':'approved','reason':'Supported','blocks':[]},
+        {'block_id':'B1','base_sha256':targets[1]['base_sha256'],'status':'patch','reason':'Link the supplied slide',
+         'blocks':[{**value['blocks'][1],'evidence_ids':['S001','T001','T002']}]}],
+        'visual_updates':[{'evidence_id':'S001','content_kind':'text','decision':'exclude','inspected':True,'reason':'Observed text slide'}]}
+    changed=r.apply_review(req,value,targets,reply)
+    assert 'S001' in changed['blocks'][1]['evidence_ids'] and changed['visual_delta'][0]['evidence_id']=='S001'
+    reply['decisions'][1]['blocks'][0]['evidence_ids']=['S002']
+    with pytest.raises(ProviderError,match='outside'):r.apply_review(req,value,targets,reply)
+
+
 def test_falsely_claimed_image_inspection_is_blocked(tmp_path):
     from PIL import Image
     req=request(tmp_path);image=tmp_path/'page.png';Image.new('RGB',(20,20),'orange').save(image)
@@ -282,6 +296,36 @@ def test_explicit_user_resume_can_continue_only_intact_interrupted_prefix(tmp_pa
     monkeypatch.setattr(agy_parts,'run_session',resumed)
     result=a.generate(replace(req,resume_authorized=True))
     assert len(result.notes['lessons'])==2 and len(calls)==1
+
+
+def test_local_scope_recovery_reuses_successful_review_without_a_second_attempt(tmp_path,monkeypatch):
+    from mynotes import agy_parts
+    from mynotes.providers import _save_attempt
+    from mynotes.execution import AttemptStart
+    req=request(tmp_path);monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    original=r.apply_review;reviews=[];streams=[]
+    def single(packet):
+        reviews.append(1);targets=packet.batch_context['review_task']['targets']
+        reply={'decisions':[{'block_id':t['block_id'],'base_sha256':t['base_sha256'],'status':'approved','reason':'Supported','blocks':[]} for t in targets],'visual_updates':[]}
+        envelope={'status':'SUCCESS','response':json.dumps(reply)}
+        attempt=_save_attempt(packet,command=['synthetic'],completed=subprocess.CompletedProcess(['synthetic'],0,json.dumps({'event':'result','result':envelope}),''),started=AttemptStart(),envelope={'status':'SUCCESS','source_access':[]})
+        return reply,attempt
+    monkeypatch.setattr(a,'run_single',single)
+    def run(command,prompt,accept,**kwargs):
+        streams.append(1);kwargs['on_event']({'event':'init','conversation_id':'same-conversation'})
+        raw=unit() if len(streams)==1 else unit(1,True)
+        envelope={'status':'SUCCESS','conversation_id':'same-conversation','response':json.dumps(raw)}
+        accept(envelope)
+        return subprocess.CompletedProcess(command,0,json.dumps({'event':'result','result':envelope}),'')
+    monkeypatch.setattr(agy_parts,'run_session',run)
+    monkeypatch.setattr(r,'apply_review',lambda *args: (_ for _ in ()).throw(ProviderError('Risk correction cites sources outside its target')))
+    with pytest.raises(ProviderError,match='outside'):a.generate(req)
+    raw_path=tmp_path/'progressive-v2/returned-000.json';raw_bytes=raw_path.read_bytes()
+    monkeypatch.setattr(r,'apply_review',original)
+    result=a.generate(replace(req,resume_authorized=True))
+    assert len(reviews)==2  # one per recap, with the first certified result reused
+    assert len(streams)==2 and raw_path.read_bytes()==raw_bytes
+    assert a.verify_receipt(json.loads(Path(result.attempt_path).read_text()),tmp_path)==result.notes
 
 
 def test_required_final_visual_review_runs_before_any_course_replace(tmp_path,monkeypatch):

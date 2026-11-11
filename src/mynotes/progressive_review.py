@@ -128,6 +128,7 @@ def apply_review(request, original, targets, reply):
     if set(reply) != {'decisions','visual_updates'}:
         raise ProviderError('Risk review changed its response contract')
     known = {t['block_id']: t for t in targets}; seen = set(); unit = deepcopy(original)
+    supplied = {identifier for target in targets for identifier in target['block']['evidence_ids']}
     replacements = {}
     for decision in reply['decisions']:
         key = decision.get('block_id'); target = known.get(key)
@@ -144,7 +145,7 @@ def apply_review(request, original, targets, reply):
         if key.startswith('V:'):
             raise ProviderError('NEEDS_REVIEW: graphic without a narrative anchor cannot be invented by a review')
         expanded, _ = expand(decision['blocks'], {r['id'] for r in request.source_pack['evidence']}, origins(request))
-        allowed = set(target['block']['evidence_ids'])
+        allowed = supplied
         for block in expanded:
             if not block.get('evidence_ids') or set(block['evidence_ids']) - allowed:
                 raise ProviderError('Risk correction cites sources outside its target')
@@ -156,7 +157,7 @@ def apply_review(request, original, targets, reply):
     decisions = {v['evidence_id']: v for v in unit['visual_delta']}
     for update in reply['visual_updates']:
         identifier = update.get('evidence_id')
-        if identifier not in allowed_visuals or identifier not in decisions or update.get('inspected') is not True:
+        if identifier not in allowed_visuals or update.get('inspected') is not True:
             raise ProviderError('Risk visual update lacks an inspected target')
         decisions[identifier] = deepcopy(update)
     unit['visual_delta'] = list(decisions.values())
@@ -194,5 +195,6 @@ def review_unit(request, unit, root, invoke):
         merge_visual_updates(visual_updates,saved['response']['visual_updates'])
         refs.append({'path':str(path),'sha256':file_sha256(path)})
     effective['blocks'] = [b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]
-    effective['visual_delta'] = [visual_updates.get(v['evidence_id'],v) for v in unit['visual_delta']]
+    effective['visual_delta'] = [visual_updates.pop(v['evidence_id'],v) for v in unit['visual_delta']]
+    effective['visual_delta'].extend(visual_updates.values())
     return effective, refs

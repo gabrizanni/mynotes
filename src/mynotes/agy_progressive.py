@@ -161,7 +161,9 @@ def generate(request):
     if not (root/'request.json').exists():atomic_json_write(root/'request.json',proof)
     state=json.loads(state_path.read_text()) if state_path.exists() else {'identity':identity,'units':[]}
     if state.get('identity')!=identity:raise ProviderError('Progressive identity changed')
-    if state.get('status') in {'FAILED','NEEDS_REVIEW'} or (state.get('status')=='INTERRUPTED' and not request.resume_authorized):
+    recover_local = (request.resume_authorized and state.get('status')=='NEEDS_REVIEW'
+        and state.get('problem') in {'Risk correction cites sources outside its target','Risk visual update lacks an inspected target'})
+    if (state.get('status') in {'FAILED','NEEDS_REVIEW'} and not recover_local) or (state.get('status')=='INTERRUPTED' and not request.resume_authorized):
         raise ProviderError('NEEDS_REVIEW: stopped progressive job retained; no automatic retry')
     if state.get('invocation_started') and not state.get('conversation_id'):
         raise ProviderError('NEEDS_REVIEW: prior conversation identity unavailable; no cold restart')
@@ -248,6 +250,23 @@ def generate(request):
             raise ProviderError('NEEDS_REVIEW: progressive block allowance exhausted; sources retained without truncation')
         return protocol()+f'\nRequired part_index: {len(units)}. Do not reread unchanged sources or repeat accepted content. Continue at: '+effective['next_topic']+ '\nAccepted risk corrections to respect (not independent evidence): '+json.dumps({'blocks':effective['blocks'] if unit['blocks']!=effective['blocks'] else [], 'visual_decisions':[v for v in effective['visual_delta'] if v not in unit['visual_delta']]},ensure_ascii=False)
     try:
+        if recover_local:
+            snapshot=root/('state-before-local-scope-recovery-'+digest(state)+'.json')
+            if not snapshot.exists():atomic_json_write(snapshot,state)
+            pending=root/f'returned-{len(units):03d}.json'
+            retained=json.loads(pending.read_text())
+            envelope=retained['envelope']
+            if envelope.get('status')!='SUCCESS' or envelope.get('conversation_id')!=state.get('conversation_id'):
+                raise ProviderError('Local scope recovery needs intact same-conversation SUCCESS')
+            decoded=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy')
+            if decoded!=retained['raw']:raise ProviderError('Retained unit differs from its SUCCESS')
+            original_hash=file_sha256(pending)
+            next_prompt=accept(envelope)
+            if file_sha256(pending)!=original_hash:raise ProviderError('Local scope recovery changed the original return')
+            if next_prompt is None:raise ProviderError('Local complete-result recovery requires a final transport certificate')
+            prompt=next_prompt
+            atomic_json_write(root/'local-scope-recovery.json',{'state':str(snapshot),'returned':str(pending),
+                'returned_sha256':original_hash,'review_results_reused':True,'whole_writing_restarted':False})
         save(status='WRITING',invocation_started=True)
         with prevent_idle_sleep():
             completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
@@ -313,7 +332,8 @@ def verify_receipt(record, workspace_root):
                 if d['status']=='patch':edits[int(d['block_id'][1:])],_=wire.expand(d['blocks'],{e['id'] for e in request.source_pack['evidence']},wire.origins(request))
             merge_visual_updates(visuals,reply['visual_updates'])
         effective['blocks']=[b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]
-        effective['visual_delta']=[visuals.get(v['evidence_id'],v) for v in unit['visual_delta']]
+        effective['visual_delta']=[visuals.pop(v['evidence_id'],v) for v in unit['visual_delta']]
+        effective['visual_delta'].extend(visuals.values())
         if effective!=row['effective']:raise ProviderError('Effective unit differs from its certified patches')
         image_check(request,effective,saved['access']);wire.validate_content(request,effective,units);units.append(effective)
     notes=wire.assemble(request,units)
