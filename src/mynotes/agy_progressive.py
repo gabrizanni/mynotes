@@ -163,7 +163,7 @@ def generate(request):
     if state.get('identity')!=identity:raise ProviderError('Progressive identity changed')
     recover_local = (request.resume_authorized and state.get('status')=='NEEDS_REVIEW'
         and (state.get('problem') in {'Risk correction cites sources outside its target','Risk visual update lacks an inspected target',
-                                    'Progressive unit repeats settled source metadata'}
+                                    'Progressive unit repeats settled source metadata','Progressive completion is inconsistent'}
              or str(state.get('problem','')).startswith('Candidate omits required evidence coverage: ')))
     if (state.get('status') in {'FAILED','NEEDS_REVIEW'} and not recover_local) or (state.get('status')=='INTERRUPTED' and not request.resume_authorized):
         raise ProviderError('NEEDS_REVIEW: stopped progressive job retained; no automatic retry')
@@ -252,6 +252,7 @@ def generate(request):
             raise ProviderError('NEEDS_REVIEW: progressive block allowance exhausted; sources retained without truncation')
         return protocol()+f'\nRequired part_index: {len(units)}. Do not reread unchanged sources or repeat accepted content. Continue at: '+effective['next_topic']+ '\nAccepted risk corrections to respect (not independent evidence): '+json.dumps({'blocks':effective['blocks'] if unit['blocks']!=effective['blocks'] else [], 'visual_decisions':[v for v in effective['visual_delta'] if v not in unit['visual_delta']]},ensure_ascii=False)
     try:
+        local_terminal_source=None
         if recover_local:
             snapshot=root/('state-before-local-scope-recovery-'+digest(state)+'.json')
             if not snapshot.exists():atomic_json_write(snapshot,state)
@@ -263,25 +264,43 @@ def generate(request):
             decoded=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy')
             if decoded!=retained['raw']:raise ProviderError('Retained unit differs from its SUCCESS')
             original_hash=file_sha256(pending)
+            prior_attempt=Path(state['attempt']);prior_record=json.loads(prior_attempt.read_text())
             next_prompt=accept(envelope)
             if file_sha256(pending)!=original_hash:raise ProviderError('Local scope recovery changed the original return')
-            if next_prompt is None:raise ProviderError('Local complete-result recovery requires a final transport certificate')
-            prompt=next_prompt
+            if next_prompt is None:
+                from .providers import _jsonl_events
+                results=[e['result'] for e in _jsonl_events(prior_record['stdout']) if e.get('event')=='result']
+                if (not results or any(r.get('status')!='SUCCESS' for r in results) or results[-1]!=envelope
+                        or prior_record.get('error') != json.loads(snapshot.read_text()).get('problem')):
+                    raise ProviderError('Local completion needs an intact SUCCESS terminal, not a provider ERROR')
+                local_terminal_source={'path':str(prior_attempt),'sha256':file_sha256(prior_attempt),
+                    'local_problem':prior_record['error']}
+                completed=subprocess.CompletedProcess(['local-validation'],0,prior_record['stdout'],'')
+            else:prompt=next_prompt
             atomic_json_write(root/'local-scope-recovery.json',{'state':str(snapshot),'returned':str(pending),
                 'returned_sha256':original_hash,'review_results_reused':True,'whole_writing_restarted':False})
-        save(status='WRITING',invocation_started=True)
-        with prevent_idle_sleep():
-            completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
-                on_event=observe,abort_errors=True,log_file=root/'provider.log')
+        if completed is None:
+            save(status='WRITING',invocation_started=True)
+            with prevent_idle_sleep():
+                completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
+                    on_event=observe,abort_errors=True,log_file=root/'provider.log')
         if completed.returncode or not units or not units[-1]['complete']:raise ProviderError('Incomplete progressive job')
         notes=wire.assemble(request,units)
         receipt=root/'complete.json'
         atomic_json_write(receipt,{'protocol':2,'request':str(root/'request.json'),'request_sha256':file_sha256(root/'request.json'),
             'units':refs,'notes_sha256':digest(notes),'access':access})
-        attempt=_save_attempt(request,command=args,completed=completed,started=started,envelope={
+        final_envelope={
             'transport':'agy_progressive_v2','status':'SUCCESS','receipt':str(receipt),'receipt_sha256':file_sha256(receipt),
-            'usage':{'session_cumulative':last.get('usage',{}),'scope':'Writer cumulative only; risk packet attempts are distinct'}})
-        save(status='CONTENT_VERIFIED',finalized=True,attempt=str(attempt))
+            'usage':{'session_cumulative':last.get('usage',{}),'scope':'Writer cumulative only; risk packet attempts are distinct'}}
+        if local_terminal_source is not None:
+            attempt=root/'local-completion.json'
+            atomic_json_write(attempt,{'requested':asdict(request.requested),'returncode':0,'error':None,
+                'stdout':completed.stdout,'invocation_started':False,'command':['local-validation'],
+                'envelope':{**final_envelope,'completion_kind':'local_revalidation','source_attempt':local_terminal_source},
+                'timing_scope':'Local certificate only; no new writing invocation. Original provider attempts remain immutable.'})
+        else:
+            attempt=_save_attempt(request,command=args,completed=completed,started=started,envelope=final_envelope)
+        save(status='CONTENT_VERIFIED',finalized=True,attempt=str(attempt),problem=None)
         return ProviderResponse(notes,'agy','','',{},str(attempt))
     except BaseException as error:
         if hasattr(error,'output'):
@@ -303,6 +322,13 @@ def verify_receipt(record, workspace_root):
     if envelope.get('status')!='SUCCESS' or path.is_symlink() or not path.resolve().is_relative_to(workspace_root.resolve()) or file_sha256(path)!=envelope['receipt_sha256']:
         raise ProviderError('Progressive receipt changed or lies outside its workspace')
     saved=json.loads(path.read_text());proof=Path(saved['request'])
+    if envelope.get('completion_kind')=='local_revalidation':
+        source=envelope['source_attempt'];source_path=Path(source['path'])
+        if source_path.is_symlink() or not source_path.resolve().is_relative_to(workspace_root.resolve()) or file_sha256(source_path)!=source['sha256']:
+            raise ProviderError('Local completion source attempt changed')
+        original=json.loads(source_path.read_text())
+        if original.get('stdout')!=record['stdout'] or original.get('error')!=source['local_problem'] or original.get('requested')!=record.get('requested'):
+            raise ProviderError('Local completion differs from its original source transport')
     if not proof.resolve().is_relative_to(workspace_root.resolve()) or file_sha256(proof)!=saved['request_sha256']:raise ProviderError('Progressive source proof changed')
     p=json.loads(proof.read_text());request=ProviderRequest(p['lecture_id'],p['course'],{},RequestedModel(**p['requested']),
         source_pack=p['source_pack'],style=p['style'],batch_context=p['batch_context'])

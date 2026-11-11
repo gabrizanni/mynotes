@@ -93,6 +93,8 @@ def test_only_exact_title_and_video_link_are_locally_preserved_as_source_resourc
     assert w.source_resource({**source,'content':'False positives are 35% of actual negatives. https://www.youtube.com/watch?v=test'}) is None
     assert w.source_resource({**source,'content':'▪ Responsibility has several conditions https://www.youtube.com/watch?v=test'}) is None
     assert w.source_resource({**source,'content':'A source article https://example.com/article'}) is None
+    multi={**source,'content':'Who is responsible? https://www.youtube.com/watch?v=one Should robots have rights? https://www.youtube.com/watch?v=two 5'}
+    assert w.source_resources(multi)==[('Who is responsible?','https://www.youtube.com/watch?v=one'),('Should robots have rights?','https://www.youtube.com/watch?v=two')]
 
 
 def test_unit_limits_apply_before_another_model_request(tmp_path):
@@ -100,6 +102,15 @@ def test_unit_limits_apply_before_another_model_request(tmp_path):
     with pytest.raises(ProviderError,match='32 KiB'):w.validate_unit(req,value,[])
     value=unit();value['blocks']*=2
     with pytest.raises(ProviderError,match='six blocks'):w.validate_unit(req,value,[])
+
+
+def test_terminal_marker_is_canonicalized_only_when_every_completion_flag_matches(tmp_path):
+    req=request(tmp_path);one,_=w.validate_unit(req,unit(),[])
+    raw=unit(1,True);raw['next_topic']='Course Complete'
+    got,proof=w.validate_unit(req,raw,[one]);assert got['next_topic']=='' and proof[-1]['kind']=='redundant_terminal_marker'
+    assert raw['next_topic']=='Course Complete'
+    raw['next_topic']='Explain the missing legal case'
+    with pytest.raises(ProviderError,match='completion'):w.validate_unit(req,raw,[one])
 
 
 def test_standard_selects_weak_points_without_unknown_or_term_only(tmp_path):
@@ -355,6 +366,34 @@ def test_local_scope_recovery_reuses_successful_review_without_a_second_attempt(
     assert len(reviews)==2  # one per recap, with the first certified result reused
     assert len(streams)==2 and raw_path.read_bytes()==raw_bytes
     assert a.verify_receipt(json.loads(Path(result.attempt_path).read_text()),tmp_path)==result.notes
+
+
+def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provider_error(tmp_path,monkeypatch):
+    from mynotes import agy_parts
+    req=request(tmp_path,'base');monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    old=w.validate_unit;calls=[]
+    def reject_terminal(request,raw,previous):
+        if raw['complete']:raise ProviderError('Progressive completion is inconsistent')
+        return old(request,raw,previous)
+    def run(command,prompt,accept,**kwargs):
+        calls.append(1);kwargs['on_event']({'event':'init','conversation_id':'same-conversation'});events=[]
+        try:
+            for raw in [unit(),unit(1,True)]:
+                if raw['complete']:raw['next_topic']='Course Complete'
+                env={'status':'SUCCESS','conversation_id':'same-conversation','response':json.dumps(raw)}
+                events.append({'event':'result','result':env});accept(env)
+        except ProviderError as error:
+            error.output='\n'.join(json.dumps(e) for e in events).encode();error.stderr=b'';raise
+    monkeypatch.setattr(w,'validate_unit',reject_terminal);monkeypatch.setattr(agy_parts,'run_session',run)
+    with pytest.raises(ProviderError,match='completion'):a.generate(req)
+    monkeypatch.setattr(w,'validate_unit',old)
+    monkeypatch.setattr(agy_parts,'run_session',lambda *args,**kwargs:pytest.fail('Local terminal recovery must not invoke writing'))
+    result=a.generate(replace(req,resume_authorized=True));record=json.loads(Path(result.attempt_path).read_text())
+    assert record['envelope']['completion_kind']=='local_revalidation' and record['invocation_started'] is False
+    assert len(calls)==1 and a.verify_receipt(record,tmp_path)==result.notes
+    source=Path(record['envelope']['source_attempt']['path']);data=json.loads(source.read_text())
+    data['stdout']=json.dumps({'event':'result','result':{'status':'ERROR'}});atomic_json_write(source,data)
+    with pytest.raises(ProviderError,match='source attempt changed'):a.verify_receipt(record,tmp_path)
 
 
 def test_required_final_visual_review_runs_before_any_course_replace(tmp_path,monkeypatch):

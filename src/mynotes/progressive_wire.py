@@ -149,6 +149,11 @@ def validate_unit(request, raw, previous):
     validate_shape(raw,schema(request))
     valid = {r['id'] for r in request.source_pack['evidence']}
     unit, proof = expand(raw, valid, origins(request))
+    if (unit.get('complete') is True and unit.get('lesson_complete') is True
+            and unit.get('lecture_id') == request.batch_context['lessons'][-1]
+            and unit.get('next_topic','').strip().casefold() in {'complete','completed','course complete','done','fine','corso completato'}):
+        proof.append({'kind':'redundant_terminal_marker','original':unit['next_topic'],'canonical':''})
+        unit['next_topic']=''
     settled_visuals={v['evidence_id']:v for p in previous for v in p['visual_delta']}
     new_visuals=[]
     for decision in unit['visual_delta']:
@@ -223,11 +228,12 @@ def assemble(request, units):
             for choice in organization:
                 identifier=choice['canonical_slide_id'];source=source_rows.get(identifier,{})
                 if choice['owner']!=lecture or identifier in cited or visuals.get(identifier,{}).get('content_kind')!='text':continue
-                resource=source_resource(source)
-                if resource is None:continue
-                title,url=resource
+                resources=source_resources(source)
+                if resources is None:continue
                 prefix='Integrazione dalle slide: ' if request.course.get('languages',{}).get('notes')=='it' else 'Supplementary slide material: '
-                block={'kind':'paragraph','text':prefix+title+' — '+url,'evidence_ids':[identifier],
+                content=({'kind':'paragraph','text':prefix+resources[0][0]+' — '+resources[0][1]} if len(resources)==1 else
+                         {'kind':'bullets','items':[prefix+title+' — '+url for title,url in resources]})
+                block={**content,'evidence_ids':[identifier],
                     'coverage_role':'supplement','supplement_labelled':True,
                     'source_derivation':{'kind':'exact_source_resource','source_evidence_id':identifier}}
                 # Keep the exact provided resource next to its source topic,
@@ -255,15 +261,25 @@ def assemble(request, units):
 
 def source_resource(source):
     """Only a short title and one supplied video URL, never data or a lecture."""
+    resources=source_resources(source)
+    return resources[0] if resources is not None and len(resources)==1 else None
+
+
+def source_resources(source):
+    """Preserve a supplied list of short video titles without inventing contents."""
     from urllib.parse import urlparse
     text=str(source.get('content',source.get('text',''))).strip()
-    urls=re.findall(r'https?://[^\s<>]+',text)
-    if len(urls)!=1 or urlparse(urls[0]).hostname not in {'youtube.com','www.youtube.com','youtu.be','vimeo.com','www.vimeo.com'}:
-        return None
-    title=text.replace(urls[0],'').strip()
-    if source.get('page') is not None:title=re.sub(r'\s+'+re.escape(str(source['page']))+r'\s*$','',title).strip()
-    if not title or len(title.split())>16 or re.search(r'\d|[▪•=\\$%]',title):return None
-    return title,urls[0]
+    if source.get('page') is not None:text=re.sub(r'\s+'+re.escape(str(source['page']))+r'\s*$','',text).strip()
+    matches=list(re.finditer(r'https?://[^\s<>]+',text))
+    if not matches:return None
+    resources=[];start=0
+    for match in matches:
+        url=match.group();title=text[start:match.start()].strip()
+        if (urlparse(url).hostname not in {'youtube.com','www.youtube.com','youtu.be','vimeo.com','www.vimeo.com'}
+                or not title or len(title.split())>16 or re.search(r'\d|[▪•=\\$%]',title)):return None
+        resources.append((title,url));start=match.end()
+    if text[start:].strip():return None
+    return resources
 
 
 def validate_content(request, unit, previous):
