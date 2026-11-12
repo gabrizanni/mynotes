@@ -166,6 +166,8 @@ def test_ordinary_flow_resolves_a_source_link_and_delivers_warnings_without_manu
         return reply,attempt
     monkeypatch.setattr(a,'run_single',review)
     monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    from test_progressive_v2 import save_historical_job
+    save_historical_job(ws)
     finished=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
     assert finished['status']=='COMPLETED_WITH_WARNINGS',finished.get('problem')
     assert len(writers)==1 and any(t['block_id'].startswith('C:') for group in reviews for t in group)

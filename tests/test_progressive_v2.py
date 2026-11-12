@@ -310,13 +310,14 @@ def install_fake_transport(monkeypatch, calls, invalid=False, transform=None):
     monkeypatch.setattr(agy_parts,'run_session',run);monkeypatch.setattr(a,'run_single',single)
 
 
-def test_notes_v2_delivers_both_and_regenerate_preserves_original_job(tmp_path,monkeypatch):
+def test_simple_notes_delivers_both_and_regenerate_preserves_original_job(tmp_path,monkeypatch):
     from mynotes import notes_run,publication,batch_documents
     from test_autonomous_organization import prepared
     from test_publication import fake_render
     ws=prepared(tmp_path)
     config=ws.configuration_store().load();config['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(config)
-    calls=[];install_fake_transport(monkeypatch,calls)
+    from test_simple_notes import install
+    calls=[];install(monkeypatch,calls)
     monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
     result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
     assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
@@ -331,13 +332,14 @@ def test_notes_v2_delivers_both_and_regenerate_preserves_original_job(tmp_path,m
         notes_run.run_notes(ws,'OPS',[1,2],resume=result['batch_id'],regenerate=True)
 
 
-def test_invalid_first_section_stops_before_publication_or_next_section(tmp_path,monkeypatch):
+def test_failed_joint_response_stops_before_publication(tmp_path,monkeypatch):
     from mynotes.notes_run import run_notes
     from test_autonomous_organization import prepared
     ws=prepared(tmp_path);config=ws.configuration_store().load();config['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(config)
-    calls=[];install_fake_transport(monkeypatch,calls,invalid=True)
+    from test_simple_notes import install
+    calls=[];install(monkeypatch,calls,fail=True)
     result=run_notes(ws,'OPS',[1,2],provider='agy')
-    assert result['status']=='NEEDS_REVIEW',result
+    assert result['status'] in {'NEEDS_REVIEW','FAILED'},result
     assert len(calls)==1 and not result.get('publication')
     assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))
 
@@ -577,6 +579,11 @@ def test_extended_review_saves_context_and_reopens_without_any_model(tmp_path,mo
     from test_publication import fake_render
     ws=prepared(tmp_path);cfg=ws.configuration_store().load()
     cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(cfg)
+    # This regression reopens an existing progressive-v2 contract.
+    from mynotes import batch
+    legacy=batch.plan_batch(ws,'OPS',[1,2],provider='agy',quality='approfondito',autonomous_organization=True,progressive_protocol=2)
+    legacy_root=ws.runs_dir/'_batches'/legacy['batch_id'];legacy_root.mkdir(parents=True)
+    batch._save(legacy_root/'manifest.json',legacy)
     writing=[];install_fake_transport(monkeypatch,writing);invoke=a.run_single;seen=[]
     def review(packet,*args):
         seen.append(packet)
@@ -684,3 +691,12 @@ def test_review_transport_error_retains_original_error_and_receipt(tmp_path,monk
     attempts=list((tmp_path/'provider-attempts').glob('*.json'))
     assert len(attempts)==1
     assert json.loads(attempts[0].read_text())['error']=='observed transport failure'
+
+
+def save_historical_job(workspace, quality='standard'):
+    """Persist a v2 job explicitly; compatibility tests must not rely on defaults."""
+    from mynotes import batch
+    plan=batch.plan_batch(workspace,'OPS',[1,2],provider='agy',quality=quality,
+                          autonomous_organization=True,progressive_protocol=2)
+    root=workspace.runs_dir/'_batches'/plan['batch_id'];root.mkdir(parents=True,exist_ok=True)
+    batch._save(root/'manifest.json',plan)

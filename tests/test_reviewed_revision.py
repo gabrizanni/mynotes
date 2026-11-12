@@ -47,6 +47,8 @@ def finished(tmp_path,monkeypatch,*,already_patched=False):
     install_fake_transport(monkeypatch,writing,transform=add_detail)
     monkeypatch.setattr(transport,'run_single',reviewer([],patch=already_patched))
     monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    from test_progressive_v2 import save_historical_job
+    save_historical_job(ws)
     result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
     assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
     root=ws.runs_dir/'_batches'/result['batch_id'];base=next(root.rglob('returned-writing-*.json'))

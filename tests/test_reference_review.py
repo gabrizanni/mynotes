@@ -73,6 +73,8 @@ def test_stopped_real_controller_can_rectify_refs_deliver_and_reuse_without_mode
         row=next(r for r in notes['organization'] if r['owner']=='OPS-L02');row['evidence_ids']=['T001']
     install_fake_transport(monkeypatch,calls,transform=bad_refs)
     monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    from test_progressive_v2 import save_historical_job
+    save_historical_job(ws)
     stopped=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
     assert stopped['status']=='FAILED' and 'transcript evidence' in stopped['problem']['message']
     root=ws.runs_dir/'_batches'/stopped['batch_id'];base=next(root.rglob('returned-writing-*.json'))
@@ -109,6 +111,8 @@ def test_page_attachment_derives_organization_receipts_without_overwriting_previ
         target['evidence_ids']=['S001']  # Its existing prose still explains S002.
     install_fake_transport(monkeypatch,calls,transform=omit_link)
     monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    from test_progressive_v2 import save_historical_job
+    save_historical_job(ws)
     stopped=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
     assert stopped['status']=='FAILED' and 'full explanation' in stopped['problem']['message'],stopped.get('problem')
     root=ws.runs_dir/'_batches'/stopped['batch_id'];original={p:file_sha256(p) for p in root.rglob('organization-*.json')}

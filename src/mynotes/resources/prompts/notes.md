@@ -1,12 +1,14 @@
-New Agy complete notes jobs use progressive v2: six-block bounded writing units,
-standard risk-only verification, and one correction opportunity per block.
-Standard is not an exhaustive review; approfondito covers all blocks and revisione
-also checks the merged rendered pages. Keep all source content even in base.
-Use notes CODE --regenerate --lessons RANGE only for an explicitly requested new
-writing revision. It preserves the prior job and is incompatible with --resume.
-Check batch-status accepted_sections/progressive_status. A first saved section
-is not full delivery. NEEDS_REVIEW means retain the concrete defect without a
-second automatic corrective round. Historical jobs retain their saved contracts.
+New complete notes requests use one joint writing response for all selected
+lessons. Shared slide pages appear once beside all complete transcripts. The
+writer integrates lecture clarification into each topic's main explanation;
+later lessons add only distinct developments and short references.
+Standard uses local checks and warning comments only: do not start a model
+review, model repair or another writing request to perfect its output. Base
+retains mandatory local checks; extended quality levels are explicit choices.
+Use the ordinary notes command through delivery. Historical progressive-v2 jobs
+keep their recorded protocol and correction limits when resumed. New requests
+have no section queue or six/twelve-block writing turns. A successful provider
+response is saved before local processing; ERROR is never publishable.
 
 A concrete operational request takes precedence over optional setup. Reuse saved
 courses, folders, languages and style. Ask only for indispensable missing source

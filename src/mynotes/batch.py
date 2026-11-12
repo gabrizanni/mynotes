@@ -570,9 +570,11 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 'Use taught only with current T evidence, supplement for unspoken supplied content, '
                 'and settle every remaining page by the last selected lesson. Preserve settled prior ownership. '
                 'Structural exemptions still require inspected title/divider source image hashes.')
-    if plan.get('progressive_protocol') == 2:
-        context['progressive_protocol'] = 2
-        if plan.get('risk_policy_version'):
+    if plan.get('progressive_protocol') in {2,3}:
+        context['progressive_protocol'] = plan['progressive_protocol']
+        if plan.get('progressive_protocol')==3:
+            context['risk_policy_version']=6
+        elif plan.get('risk_policy_version'):
             context['risk_policy_version'] = plan['risk_policy_version']
         from .visual_memory import load
         prior_proof = run_dir/'progressive-v2/request.json'
@@ -583,6 +585,9 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 pack['visuals'],plan['requested_model']) if plan.get('workspace_state') else []
     request = ProviderRequest(lectures[0], plan["course"], {}, plan["requested"], source_pack=pack, run_dir=run_dir,
                               style=plan["style"], response_schema=batch_notes_schema(autonomous_organization=plan.get('autonomous_organization', False)), batch_context=context)
+    if plan.get('progressive_protocol')==3:
+        visual=request.response_schema['properties']['lessons']['items']['properties']['notes']['properties']['visual_decisions']['items']['properties']
+        visual['content_kind']={'type':'string','enum':['text','table','formula','chart','diagram','decoration','uncertain']}
     return request, maps
 
 
@@ -803,6 +808,15 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
         raise WorkflowError(str(error)) from error
     from .generation_diagnostics import recap_language_defects
     language_defects = recap_language_defects(response, plan, lectures, maps) if final_phase else []
+    if language_defects and plan.get('progressive_protocol')==3 and plan['requested_model']['quality']=='standard':
+        from .note_assembly import attach_comments
+        from .progressive_review import digest
+        for defect in language_defects:
+            note=next(row['notes'] for row in normalized['lessons'] if row['lecture_id']==defect['lecture_id'])
+            block=note['blocks'][int(defect['path'][7:-1])]
+            attach_comments(note,[{'block_sha256':digest(block),'issue_code':'minor_editorial',
+                'reason':'Il riepilogo sembra in inglese anziché nella lingua italiana richiesta. Segnalazione locale; testo conservato senza riscrittura automatica.'}])
+        language_defects=[]
     if language_defects:
         first = language_defects[0]
         block = next(r for r in response.notes['lessons'] if r['lecture_id'] == first['lecture_id'])['notes']['blocks'][int(first['path'][7:-1])]
@@ -1242,9 +1256,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             from .reference_review import rectify
                             response_before_reference_review = response
                             response, reference_lineage = rectify(response, active, returned, reference_path, reference_review)
+                        if progressive_protocol==3 and phase=='writing':
+                            from .simple_notes import project
+                            response=replace(response,notes=project(active,response.notes))
                         if autonomous_organization and phase == 'writing':
                             from .lesson_organization import integrate_group_decisions
-                            organization_response = _load_generation_phase(returned, previous=None) or response
+                            organization_response = response if progressive_protocol==3 else (_load_generation_phase(returned, previous=None) or response)
                             if repair_lineage and retained_origin:
                                 original = Path(retained_origin['returned'])
                                 organization_response = _load_generation_phase(original, previous=None) or organization_response
@@ -1285,7 +1302,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         retained_repair = retained_from/'coverage-repair/repair.json' if retained_from else None
                         cached_repair = ((group_dir/'coverage-repair/repair.json').is_file()
                                          or bool(retained_repair and retained_repair.is_file()))
-                        if progressive_protocol == 2: raise
+                        if progressive_protocol in {2,3}: raise
                         if not repair_missing or phase != "writing" or (phase_budget.remaining('coverage_repair') <= 0 and not cached_repair):raise
                         certified_base=group_dir/'certified-base.json'
                         if certified_base.exists():
@@ -1306,7 +1323,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                     if not checkpoint.exists() or (review_defects is not None and repair_lineage is not None):
                         _unchanged(runtime)
                         _save_generation_phase(checkpoint, previous, response_before_reference_review or response)
-                    if progressive_protocol == 2:
+                    if progressive_protocol in {2,3}:
                         from .visual_memory import save as save_inspections
                         save_inspections(workspace.state_dir/'visual-inspections',active,response)
                     phase_metrics.append({"phase":phase,"started_at_epoch":phase_wall,"ended_at_epoch":time.time(),

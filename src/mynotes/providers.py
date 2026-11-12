@@ -239,13 +239,13 @@ def _context(request: ProviderRequest) -> str:
         evidence = []
         for item in pack.get("evidence", []):
             identifier = str(item.get("id", ""))
-            if request.context_mode == "reduced" and identifier.startswith("T") and float(item.get("confidence", 1)) < 0.80 and not item.get('uncertainty_codes'):
+            if (request.batch_context or {}).get('progressive_protocol')!=3 and request.context_mode == "reduced" and identifier.startswith("T") and float(item.get("confidence", 1)) < 0.80 and not item.get('uncertainty_codes'):
                 continue
             evidence.append({
                 **{key: item[key] for key in ("id", "kind", "source_file", "page", "paragraph", "sheet", "row", "cell", "start_seconds", "end_seconds", "speaker", "speaker_role", "speaker_role_source", "speaker_role_confidence", "uncertainty_codes", "asr_alternative", "checked_by") if key in item},
                 "content": item.get("content", item.get("text", "")), "untrusted_evidence": True,
             })
-            if (request.batch_context or {}).get('progressive_protocol') == 2:
+            if (request.batch_context or {}).get('progressive_protocol') in {2,3}:
                 evidence[-1].update({key:item[key] for key in ('confidence','origin_lecture_id','origin_evidence_id') if key in item})
                 # Imported ASR uses these fields, not only uncertainty_codes /
                 # asr_alternative. Keep its actual uncertainty in the lossless
@@ -275,7 +275,7 @@ def _context(request: ProviderRequest) -> str:
             defaults[prefix] = common
         evidence_view["evidence_defaults"] = defaults
         evidence_view["evidence"] = [{key: value for key, value in row.items() if key not in defaults[row["id"][:1]] and value is not None} for row in evidence]
-        if (request.batch_context or {}).get('progressive_protocol') == 2:
+        if (request.batch_context or {}).get('progressive_protocol') in {2,3}:
             from .progressive_wire import compact_sources
             evidence_view = compact_sources(evidence_view,
                 imported_asr=request.batch_context.get('risk_policy_version', 1) >= 3)
@@ -820,6 +820,8 @@ def _agy_uses_parts(request: ProviderRequest) -> bool:
     """One writing phase, with durable portions for nontrivial source packs."""
     if request.requested.provider != 'agy' or request.phase != 'writing' or request.source_pack is None or request.run_dir is None:
         return False
+    if (request.batch_context or {}).get('progressive_protocol') == 3:
+        return False
     if (request.batch_context or {}).get('progressive_protocol') == 2:
         return True
     policy = os.environ.get('MYNOTES_AGY_PARTS', 'auto')
@@ -836,6 +838,9 @@ class AgyAdapter:
             attempt = _save_attempt(request, command=[self.executable], completed=None,
                                     started=AttemptStart(), error=message, invocation_started=False)
             raise ProviderUnavailableError(f"{message} (attempt: {attempt})")
+        if request.phase == 'writing' and (request.batch_context or {}).get('progressive_protocol') == 3:
+            from .simple_notes import generate
+            return generate(request)
         if request.phase == 'writing' and (request.batch_context or {}).get('progressive_protocol') == 2:
             from .agy_progressive import generate
             return generate(request)

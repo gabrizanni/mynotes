@@ -251,6 +251,9 @@ def certify_response(response,request,root):
     if record.get('envelope',{}).get('transport')=='agy_progressive_v2':
         from .agy_progressive import verify_receipt
         raw=verify_receipt(record,root)
+    elif record.get('envelope',{}).get('transport')=='agy_joint_v1':
+        from .simple_notes import certified
+        raw=certified(record,request)
     elif record.get('envelope',{}).get('transport')=='agy_parts_v1':
         from .agy_parts import verify_receipt
         raw=verify_receipt(record,root)

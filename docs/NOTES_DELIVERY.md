@@ -1,3 +1,23 @@
+# Current simple joint flow (new requests)
+
+New `notes` requests use contract marker `progressive_protocol=3`: one joint
+writing response, complete transcripts and a single copy of shared slide pages.
+This marker distinguishes persisted behavior; it does not enable progressive
+sections. Standard performs only local checks and source-uncertainty comments,
+without a model reviewer or automatic model repair. Requested extended quality
+levels retain their additional phases. Source inspection distinguishes grouped
+selection previews from full images; included figures need observed full access.
+
+The program recovers only unambiguous page assignments already established by
+explicit narrative links, then uses the common layout and Word validation path.
+Provider responses, source hashes and requested settings remain retained. The
+performance target is eight minutes per lesson at medium effort; it is not yet
+measured for this contract. The twelve-block preparation is not the new default.
+
+The sections below describe preserved behavior, including historical progressive
+jobs. Where progressive review or section limits are mentioned, they apply to
+those saved contracts, not new Standard requests.
+
 # Source-grounded notes and verified Word delivery
 
 An ordinary `mynotes notes CODE --lessons RANGE` request freezes the effective

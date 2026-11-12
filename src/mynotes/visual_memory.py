@@ -43,18 +43,26 @@ def certificate_access(cached, requested):
 def save(directory, request, response):
     """Called only after batch source/content validation, never on ERROR."""
     record=json.loads(Path(response.attempt_path).read_text())
-    if record.get('error') or record.get('envelope',{}).get('transport')!='agy_progressive_v2':return
-    receipt=json.loads(Path(record['envelope']['receipt']).read_text())
-    access={row['sha256']:row for row in receipt['access']}
-    decisions={}
-    for ref in receipt['units']:
-        unit=json.loads((Path(record['envelope']['receipt']).parent/ref['file']).read_text())['effective']
-        decisions.update({v['evidence_id']:v for v in unit['visual_delta']})
-    if receipt.get('visual_review'):
-        reviewed=json.loads(Path(receipt['visual_review']['path']).read_text())
-        for choice in reviewed['changes']:
-            decisions[choice['evidence_id']]={'content_kind':choice['content_kind'],
-                'reason':'Explicit visual review: '+choice['reason']}
+    if record.get('error'):return
+    transport=record.get('envelope',{}).get('transport')
+    if transport=='agy_joint_v1':
+        from .simple_notes import certified
+        raw=certified(record,request)
+        access={row['sha256']:row for row in record['envelope']['source_access']}
+        decisions={v['evidence_id']:v for row in raw['lessons'] for v in row['notes']['visual_decisions'] if v.get('content_kind')}
+    elif transport=='agy_progressive_v2':
+        receipt=json.loads(Path(record['envelope']['receipt']).read_text())
+        access={row['sha256']:row for row in receipt['access']}
+        decisions={}
+        for ref in receipt['units']:
+            unit=json.loads((Path(record['envelope']['receipt']).parent/ref['file']).read_text())['effective']
+            decisions.update({v['evidence_id']:v for v in unit['visual_delta']})
+        if receipt.get('visual_review'):
+            reviewed=json.loads(Path(receipt['visual_review']['path']).read_text())
+            for choice in reviewed['changes']:
+                decisions[choice['evidence_id']]={'content_kind':choice['content_kind'],
+                    'reason':'Explicit visual review: '+choice['reason']}
+    else:return
     directory.mkdir(parents=True,exist_ok=True)
     for visual in request.source_pack.get('visuals',[]):
         decision=decisions.get(visual['evidence_id'])

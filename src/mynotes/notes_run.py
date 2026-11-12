@@ -96,7 +96,7 @@ def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adap
     for local_attempt in range(2):
         try:
             return batch.generate_batch(workspace, code, numbers, batch_id=resume,
-                provider_adapter=adapter, repair_missing=True, build_word=True,
+                provider_adapter=adapter, repair_missing=True, build_word=kwargs.get('progressive_protocol')!=3,
                 word_mode='standalone', autonomous_organization=autonomy, review_defects=review_defects, reference_review=reference_review, **kwargs)
         except PublicationError as error:
             transient = any(marker in str(error).lower() for marker in ('timeout', 'timed out', 'temporarily unavailable'))
@@ -104,7 +104,7 @@ def _generate_with_local_recovery(workspace, code, numbers, resume, kwargs, adap
                 raise
             emit('LOCAL_WORD_RETRY', {'reason': str(error), 'provider_invoked': False})
         except WorkflowError:
-            if local_attempt or kwargs.get('progressive_protocol') == 2:
+            if local_attempt or kwargs.get('progressive_protocol') in {2,3}:
                 raise
             # This diagnosis cannot call a provider or alter a retained attempt.
             # Apply only a certified, complete locally recoverable result.
@@ -173,7 +173,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                   speaker_focus=speaker_focus or options.get('speaker_focus'),
                   context_lessons=context_lessons if context_lessons is not None else saved.get('context_lessons'),
                   writing_snapshot=saved if saved.get('course') and saved.get('style') else None,
-                  progressive_protocol=saved.get('progressive_protocol') if saved else (2 if selected_model.provider=='agy' else None), generation_id=generation_id)
+                  progressive_protocol=saved.get('progressive_protocol') if saved else 3, generation_id=generation_id)
     # A settled legacy job keeps its exact historical writing request. New
     # requests integrate organization into the normal writing response.
     # Explicit complete requests migrate unfinished historical placement too;
