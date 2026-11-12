@@ -90,3 +90,36 @@ def test_stopped_real_controller_can_rectify_refs_deliver_and_reuse_without_mode
     receipt=root/'reference-review.json';receipt.write_text('{}')
     blocked=notes_run.run_notes(ws,'OPS',resume=stopped['batch_id'])
     assert blocked['status'] not in {'COMPLETED','COMPLETED_WITH_WARNINGS'} and len(calls)==1
+
+
+def test_page_attachment_derives_organization_receipts_without_overwriting_previous_ones(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    from test_autonomous_organization import prepared
+    from test_progressive_v2 import install_fake_transport
+    from test_publication import fake_render
+    from mynotes.utils import file_sha256
+    ws=prepared(tmp_path);config=ws.configuration_store().load()
+    config['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(config)
+    calls=[]
+    def omit_link(notes,request):
+        note=notes['lessons'][0]['notes']
+        note['blocks'][0]['evidence_ids'].append('S002')  # Overview alone is not substantive coverage.
+        target=next(b for b in note['blocks'] if b.get('kind')=='paragraph' and b['evidence_ids']==['S002'])
+        target['evidence_ids']=['S001']  # Its existing prose still explains S002.
+    install_fake_transport(monkeypatch,calls,transform=omit_link)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render);monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    stopped=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert stopped['status']=='FAILED' and 'full explanation' in stopped['problem']['message'],stopped.get('problem')
+    root=ws.runs_dir/'_batches'/stopped['batch_id'];original={p:file_sha256(p) for p in root.rglob('organization-*.json')}
+    assert original
+    base=next(root.rglob('returned-writing-*.json'));response=json.loads(base.read_text())['payload']['response']['notes']
+    blocks=response['lessons'][0]['notes']['blocks'];index=next(i for i,b in enumerate(blocks) if b.get('kind')=='paragraph' and 'slide S002 ' in b.get('text',''))
+    target=blocks[index];review={'version':2,'base_notes_sha256':digest(response),'reason':'Explicit existing-source link review.',
+        'changes':[{'target':'block','index':index,'lecture_id':'OPS-L01','before_sha256':digest(target),
+            'evidence_ids':[*target['evidence_ids'],'S002'],'reason':'Existing prose explains this source page.'}]}
+    finished=notes_run.run_notes(ws,'OPS',resume=stopped['batch_id'],reference_review=review)
+    assert finished['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},finished.get('problem')
+    assert len(calls)==1 and all(file_sha256(p)==h for p,h in original.items())
+    assert list(root.rglob('organization-*-reference-*.json'))
+    reused=notes_run.run_notes(ws,'OPS',resume=stopped['batch_id'])
+    assert reused['provider_invoked'] is False and reused['reused'] and len(calls)==1

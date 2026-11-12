@@ -1243,7 +1243,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                 organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
                                 if reference_lineage:
                                     organization['reference_review'] = reference_lineage
-                                organization_path = group_dir / f'organization-{lecture}.json'
+                                suffix = '-reference-' + reference_lineage['sha256'][:16] if reference_lineage else ''
+                                organization_path = group_dir / f'organization-{lecture}{suffix}.json'
                                 if organization_path.exists() and _read(organization_path) != organization:
                                     raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
                                 if not organization_path.exists(): _save(organization_path, organization)
