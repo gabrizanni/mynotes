@@ -113,7 +113,7 @@ def run_single(request, instruction=None):
           'with one short source-backed paragraph or bullet block, coverage_role=supplement, keeping open questions '
           'open and adding no outside answer. Do not duplicate concepts already explained in the candidates. '
           if request.batch_context.get('risk_policy_version',1)>=4 else '')+
-        'Return only the decisions and visual_updates schema via finish; maximum 24 KiB JSON.\n'+contextual+inputs)
+        'Return only fields allowed by the supplied response schema via finish; maximum 24 KiB JSON.\n'+contextual+inputs)
     if instruction is not None: prompt=instruction+'\n'+inputs
     answer = {}; access = []; started = AttemptStart(); completed = None
     def observe(event):
