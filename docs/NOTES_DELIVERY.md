@@ -7,6 +7,14 @@ sections. Standard performs only local checks and source-uncertainty comments,
 without a model reviewer or automatic model repair. Requested extended quality
 levels retain their additional phases. Source inspection distinguishes grouped
 selection previews from full images; included figures need observed full access.
+New preview metadata is explicitly listed among allowed image inputs. Observed
+preview access is bound to sheet and member hashes, never recorded as full
+inspection. Textual/decorative covers may use preview-backed structural review;
+figures, visual data, uncertain pages and explicitly required images still need
+the complete source. False full-inspection claims are normalized only with an
+observed matching preview, with a warning. Unobserved or changed inputs remain
+blocking. Material-page metadata may drop its own S alias from speech evidence;
+no transcript citation is invented.
 
 The program recovers only unambiguous page assignments already established by
 explicit narrative links, then uses the common layout and Word validation path.

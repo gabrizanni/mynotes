@@ -227,6 +227,8 @@ def _context(request: ProviderRequest) -> str:
     }
     if request.batch_context is not None:
         configuration["coordinated_batch"] = {key: value for key, value in request.batch_context.items() if key != "continuity"}
+        if 'preview_sheets' in configuration['coordinated_batch']:
+            derived_source_data['preview_sheets']=configuration['coordinated_batch'].pop('preview_sheets')
         if 'cached_visual_inspections' in configuration['coordinated_batch']:
             configuration['coordinated_batch'].pop('cached_visual_inspections')
             derived_source_data['cached_visual_inspections'] = [{k:v for k,v in row.items() if k != 'certificate'} for row in request.batch_context['cached_visual_inspections']]

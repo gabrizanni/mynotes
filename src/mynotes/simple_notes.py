@@ -1,6 +1,6 @@
 """One joint writing turn; derived local layout never starts a reviewer."""
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import subprocess
@@ -20,24 +20,15 @@ def certified(record, request):
     return _normalize_transport_notes(_decode_agy(results[0]),request.response_schema,provider='agy')
 
 
-def project(request, notes, *, access=None):
+def project(request, notes, *, access=None, preview_sheets=None):
     """Recover explicit metadata, then use the common figure/layout assembler."""
     from .source_organization import reconcile
     from .note_assembly import compile_notes
-    if access is not None:
-        observed={r['sha256'] for r in access}
-        available={v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
-        for lesson in notes.get('lessons',[]):
-            for choice in lesson['notes']['visual_decisions']:
-                if choice.get('decision')!='include' and choice.get('inspected') is not True:continue
-                visual=available.get(choice['evidence_id'])
-                if not visual or file_sha256(Path(visual['image_path'])) not in observed:
-                    raise ProviderError('NEEDS_REVIEW: source inspection claim lacks observed full access: '+choice['evidence_id'])
-        for choice in notes.get('organization',[]):
-            structural=choice.get('structural_review')
-            if structural and structural.get('image_sha256') not in observed:
-                raise ProviderError('NEEDS_REVIEW: structural exemption lacks observed full-source inspection')
     result=deepcopy(notes)
+    notices=[]
+    if access is not None:
+        from .source_inspection import validate
+        notices=validate(result,request,access,preview_sheets or [])
     rows={row['evidence_id']:row['canonical_slide_id'] for row in request.batch_context['ownership']}
     aliases={canonical:identifier for identifier,canonical in rows.items()}
     organization=[{**choice,'canonical_slide_id':aliases.get(choice['canonical_slide_id'],choice['canonical_slide_id'])}
@@ -51,6 +42,19 @@ def project(request, notes, *, access=None):
     for row in result['lessons']:
         for visual in row['notes']['visual_decisions']:visual.pop('content_kind',None)
     result=compile_notes(request,result,decisions)
+    if notices:
+        from .note_assembly import attach_comments
+        for row in result['lessons']:
+            from .progressive_review import digest
+            ids={i for b in row['notes']['blocks'] for i in b.get('evidence_ids',[])}
+            owned={c['canonical_slide_id'] for c in result['organization'] if c['owner']==row['lecture_id']}
+            applicable=[]
+            for notice in notices:
+                if notice['evidence_id'] not in ids|owned:continue
+                if notice['evidence_id'] not in ids and row['notes']['blocks']:
+                    notice={**notice,'block_sha256':digest(row['notes']['blocks'][0])}
+                applicable.append(notice)
+            attach_comments(row['notes'],applicable)
     if request.requested.quality=='standard':
         from .progressive_review import risks,digest
         from .note_assembly import attach_comments
@@ -78,7 +82,7 @@ def previews(request):
             x=(index%3)*400;y=(index//3)*225
             sheet.paste(thumb,(x,y+22));draw.text((x+6,y+4),visual['evidence_id'],fill='black')
         path=request.run_dir/f'preview-{offset//12:03d}.png';sheet.save(path)
-        sheets.append({'path':str(path),'sha256':file_sha256(path),'members':[
+        sheets.append({'path':str(path),'image_path':str(path),'sha256':file_sha256(path),'members':[
             {'evidence_id':v['evidence_id'],'source_sha256':file_sha256(Path(v['image_path']))} for v in members]})
     return sheets
 
@@ -89,9 +93,10 @@ def generate(request):
     request=stage_images(request)
     root=request.run_dir;root.mkdir(parents=True,exist_ok=True)
     _stage_agy_writer(root)
-    context=_stage_agy_context(request,root)
     sheets=previews(request)
-    context+='\nGrouped previews for selection only: '+json.dumps(sheets)+'\nInspect grouped previews once. Open full image_path for included figures, numerical visual data, structural exemptions and uncertain pages. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection.'
+    request=replace(request,batch_context={**request.batch_context,'preview_sheets':sheets})
+    context=_stage_agy_context(request,root)
+    context+='\nThe declared preview_sheets are for selection only. Inspect grouped previews once. Open full image_path for included figures, numerical visual data and uncertain pages. Covers/separators may be classified from an opened grouped preview. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection.'
     args=command(request,request.response_schema,root/'joint-provider.log')
     from .visual_memory import certificate_access
     access=certificate_access(request.batch_context.get('cached_visual_inspections',[]),asdict(request.requested))
@@ -107,7 +112,7 @@ def generate(request):
         return None
     try:
         with prevent_idle_sleep():
-            completed=run_session(args,_prompt(request,context=context),accept,cwd=str(root),
+            completed=run_session(args,'Open the explicitly provided preview sheet images before choosing exclusions. They are allowed source images. Preview-only inspection must use inspected=false. '+_prompt(request,context=context),accept,cwd=str(root),
                 env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},on_event=observe,
                 abort_errors=True,log_file=root/'joint-provider.log')
         if completed.returncode or len(envelopes)!=1:raise ProviderError('Joint writing did not complete')

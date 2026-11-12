@@ -1257,7 +1257,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         if progressive_protocol==3 and phase=='writing':
                             from .simple_notes import project
                             proof=json.loads(Path(response.attempt_path).read_text()).get('envelope',{}) if response.attempt_path else {}
-                            response=replace(response,notes=project(active,response.notes,access=proof.get('source_access',[]) if active.requested.provider=='agy' else None))
+                            response=replace(response,notes=project(active,response.notes,access=proof.get('source_access',[]) if active.requested.provider=='agy' else None,preview_sheets=proof.get('preview_sheets',[])))
                         if autonomous_organization and phase == 'writing':
                             from .lesson_organization import integrate_group_decisions
                             organization_response = response if progressive_protocol==3 else (_load_generation_phase(returned, previous=None) or response)
