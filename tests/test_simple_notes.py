@@ -136,3 +136,22 @@ def test_minor_recap_language_issue_delivers_with_comment_not_model_repair(tmp_p
     for row in result['delivery']['files']:
         with ZipFile(row['path']) as doc:
             assert 'riepilogo' in doc.read('word/comments.xml').decode()
+
+
+def test_local_inspection_failure_preserves_successful_writing_for_resume(tmp_path,monkeypatch):
+    from mynotes import notes_run
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    def unobserved(result,request):
+        result['lessons'][0]['notes']['visual_decisions']=[{'evidence_id':'S001','decision':'include','inspected':True,'reason':'Unobserved test figure'}]
+    calls=[];install(monkeypatch,calls,transform=unobserved)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status']=='NEEDS_REVIEW'
+    attempts=list(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/provider-attempts/*.json'))
+    assert len(attempts)==1
+    record=json.loads(attempts[0].read_text())
+    assert record['error'] is None and record['envelope']['status']=='SUCCESS'
+    assert list(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/returned-writing-*.json'))
+    again=notes_run.run_notes(ws,'OPS',resume=result['batch_id'])
+    assert again['status']=='NEEDS_REVIEW' and calls==[1]
+    assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))

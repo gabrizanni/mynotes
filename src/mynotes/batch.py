@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import os
@@ -1140,7 +1140,6 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                 version_group = version_dir / f"group-{group_index:03d}"
                 request, maps = _request(runtime, lectures, group_dir, continuity)
                 if progressive_protocol == 2:
-                    from dataclasses import replace
                     request = replace(request, resume_authorized=batch_id is not None)
                 retained_response = retained_origin = retained_lineage = None
                 if autonomous_organization:
@@ -1215,7 +1214,6 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         started_record = {'phase': phase, 'lessons': lectures,
                             'started_at_epoch': time.time(), 'requested': asdict(runtime['requested'])}
                         _save(started_path, started_record); _save(guard, started_record)
-                        from dataclasses import replace
                         activity={**activity,"status":"WRITING", "phase_budget":phase_budget.snapshot()};save_progress()
                         accounting_phase = phase
                         if progressive_protocol == 2 and phase_budget.model_block_reasons:
@@ -1258,7 +1256,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             response, reference_lineage = rectify(response, active, returned, reference_path, reference_review)
                         if progressive_protocol==3 and phase=='writing':
                             from .simple_notes import project
-                            response=replace(response,notes=project(active,response.notes))
+                            proof=json.loads(Path(response.attempt_path).read_text()).get('envelope',{}) if response.attempt_path else {}
+                            response=replace(response,notes=project(active,response.notes,access=proof.get('source_access',[]) if active.requested.provider=='agy' else None))
                         if autonomous_organization and phase == 'writing':
                             from .lesson_organization import integrate_group_decisions
                             organization_response = response if progressive_protocol==3 else (_load_generation_phase(returned, previous=None) or response)

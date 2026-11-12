@@ -20,10 +20,23 @@ def certified(record, request):
     return _normalize_transport_notes(_decode_agy(results[0]),request.response_schema,provider='agy')
 
 
-def project(request, notes):
+def project(request, notes, *, access=None):
     """Recover explicit metadata, then use the common figure/layout assembler."""
     from .source_organization import reconcile
     from .note_assembly import compile_notes
+    if access is not None:
+        observed={r['sha256'] for r in access}
+        available={v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
+        for lesson in notes.get('lessons',[]):
+            for choice in lesson['notes']['visual_decisions']:
+                if choice.get('decision')!='include' and choice.get('inspected') is not True:continue
+                visual=available.get(choice['evidence_id'])
+                if not visual or file_sha256(Path(visual['image_path'])) not in observed:
+                    raise ProviderError('NEEDS_REVIEW: source inspection claim lacks observed full access: '+choice['evidence_id'])
+        for choice in notes.get('organization',[]):
+            structural=choice.get('structural_review')
+            if structural and structural.get('image_sha256') not in observed:
+                raise ProviderError('NEEDS_REVIEW: structural exemption lacks observed full-source inspection')
     result=deepcopy(notes)
     rows={row['evidence_id']:row['canonical_slide_id'] for row in request.batch_context['ownership']}
     aliases={canonical:identifier for identifier,canonical in rows.items()}
@@ -98,18 +111,6 @@ def generate(request):
                 env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},on_event=observe,
                 abort_errors=True,log_file=root/'joint-provider.log')
         if completed.returncode or len(envelopes)!=1:raise ProviderError('Joint writing did not complete')
-        observed={r['sha256'] for r in access}
-        available={v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
-        for lesson in answer.get('lessons',[]):
-            for choice in lesson['notes']['visual_decisions']:
-                if choice.get('decision')!='include' and choice.get('inspected') is not True:continue
-                visual=available.get(choice['evidence_id'])
-                if not visual or file_sha256(Path(visual['image_path'])) not in observed:
-                    raise ProviderError('Included figure lacks observed full-source inspection')
-        for choice in answer.get('organization',[]):
-            structural=choice.get('structural_review')
-            if structural and structural.get('image_sha256') not in observed:
-                raise ProviderError('Structural exemption lacks observed full-source inspection')
         attempt=_save_attempt(request,command=args,completed=completed,started=started,
             envelope={'transport':'agy_joint_v1','status':'SUCCESS','source_access':access,'preview_sheets':sheets})
         model,effort=_reported_settings(envelopes)
