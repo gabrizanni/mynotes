@@ -131,7 +131,7 @@ def test_unit_limits_apply_before_another_model_request(tmp_path):
     with pytest.raises(ProviderError,match='six blocks'):w.validate_unit(req,value,[])
 
 
-@pytest.mark.parametrize('marker',['Course Complete','Course completed'])
+@pytest.mark.parametrize('marker',['Course Complete','Course completed','End of Course'])
 def test_terminal_marker_is_canonicalized_only_when_every_completion_flag_matches(tmp_path,marker):
     req=request(tmp_path);one,_=w.validate_unit(req,unit(),[])
     raw=unit(1,True);raw['next_topic']=marker
@@ -476,7 +476,8 @@ def test_local_scope_recovery_reuses_successful_review_without_a_second_attempt(
     assert a.verify_receipt(json.loads(Path(result.attempt_path).read_text()),tmp_path)==result.notes
 
 
-def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provider_error(tmp_path,monkeypatch):
+@pytest.mark.parametrize('marker',['Course Complete','End of Course'])
+def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provider_error(tmp_path,monkeypatch,marker):
     from mynotes import agy_parts
     req=request(tmp_path,'base');monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
     old=w.validate_unit;calls=[]
@@ -487,7 +488,7 @@ def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provid
         calls.append(1);kwargs['on_event']({'event':'init','conversation_id':'same-conversation'});events=[]
         try:
             for raw in [unit(),unit(1,True)]:
-                if raw['complete']:raw['next_topic']='Course Complete'
+                if raw['complete']:raw['next_topic']=marker
                 env={'status':'SUCCESS','conversation_id':'same-conversation','response':json.dumps(raw)}
                 events.append({'event':'result','result':env});accept(env)
         except ProviderError as error:

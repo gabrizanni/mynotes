@@ -164,6 +164,7 @@ def protocol():
         'All teaching, formulas, tables and visual blocks need coverage_role. End each lesson with qa then a concise recap in the saved language. '
         'A video title/URL is not its contents: use only actual transcribed speech; otherwise present the provided link/topic without inventing arguments. '
         'Set lesson_complete only after its questions/recap; complete only after ALL selected lessons and every supplied page. '
+        'When complete=true, next_topic must be the empty string; otherwise name the next unfinished topic. '
         'Finish a coherent small section promptly instead of drafting the entire job internally. No skills, terminal, code reads or delegation. ')
 
 
