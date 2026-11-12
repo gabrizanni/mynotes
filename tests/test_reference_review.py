@@ -25,6 +25,30 @@ def test_reference_rectification_changes_only_ids_and_preserves_original():
     assert changed['organization'][0]['evidence_ids']==['S001','T002']
 
 
+def test_explicit_missing_page_attachment_preserves_prose_and_every_existing_reference():
+    notes,review=fixture();notes['organization'].append({'canonical_slide_id':'S002','owner':'A-L02','status':'taught'})
+    target=notes['lessons'][0]['notes']['blocks'][0]
+    review.update(version=2,base_notes_sha256=digest(notes),changes=[{
+        'target':'block','index':0,'lecture_id':'A-L02','before_sha256':digest(target),
+        'evidence_ids':['S001','T001','S002'],'reason':'The existing explanation was checked against both source pages.'}])
+    changed=apply(notes,review,{'A-L02':['S001','S002','T001']})
+    assert changed['lessons'][0]['notes']['blocks'][0]=={**target,'evidence_ids':['S001','T001','S002']}
+    assert changed['organization']==notes['organization']
+
+
+@pytest.mark.parametrize('problem',['transcript','remove','owner','footer'])
+def test_page_attachment_cannot_change_other_references_or_manufacture_coverage_in_footer(problem):
+    notes,review=fixture();notes['organization'].append({'canonical_slide_id':'S002','owner':'A-L02','status':'taught'})
+    target=notes['lessons'][0]['notes']['blocks'][0];ids=['S001','T001','S002']
+    if problem=='transcript':ids.append('T002')
+    if problem=='remove':ids.remove('S001')
+    if problem=='owner':notes['organization'][1]['owner']='A-L01'
+    if problem=='footer':target['kind']='recap'
+    review.update(version=2,base_notes_sha256=digest(notes),changes=[{'target':'block','index':0,'lecture_id':'A-L02',
+        'before_sha256':digest(target),'evidence_ids':ids,'reason':'Explicit source review.'}])
+    with pytest.raises(WorkflowError):apply(notes,review,{'A-L02':['S001','S002','T001','T002']})
+
+
 @pytest.mark.parametrize('defect',['stale','foreign','page','text','duplicate'])
 def test_reference_rectification_rejects_stale_foreign_and_narrative_changes(defect):
     notes,review=fixture();change=review['changes'][0]

@@ -194,6 +194,12 @@ belong to the stated lesson. No wording, ownership or teaching-status changes ar
 accepted. Existence of an ID is not semantic proof: the coordinator must inspect
 the actual source match, preserve uncertainties and never invent links.
 
+A version-2 reference review may attach a missing owned slide ID to a paragraph
+or bullet explanation already checked against that page. It preserves every
+existing reference, all prose and page ownership; it cannot change transcript
+IDs or attach a page owned by another lesson. It is an explicit source-link
+rectification, never an automatic substitute for writing missing content.
+
 ## Explicit source figure restoration
 
 `mynotes visual-review BATCH --workspace PATH --file REVIEW.json` records a local

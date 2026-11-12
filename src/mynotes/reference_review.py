@@ -11,7 +11,7 @@ from .workflow import WorkflowError, _load_generation_phase
 
 def apply(notes, review, lesson_evidence):
     if (set(review) != {'version', 'base_notes_sha256', 'reason', 'changes'}
-            or review['version'] != 1 or review['base_notes_sha256'] != digest(notes)
+            or type(review['version']) is not int or review['version'] not in {1,2} or review['base_notes_sha256'] != digest(notes)
             or not isinstance(review['reason'], str) or not review['reason'].strip()
             or not isinstance(review['changes'], list) or not 1 <= len(review['changes']) <= 12):
         raise WorkflowError('Reference review needs an unchanged base, reason and bounded explicit changes')
@@ -42,9 +42,21 @@ def apply(notes, review, lesson_evidence):
         if (digest(target) != change['before_sha256'] or not isinstance(ids, list)
                 or not 1 <= len(ids) <= 256 or any(not isinstance(i, str) for i in ids)
                 or len(set(ids)) != len(ids) or set(ids) - set(lesson_evidence[owner])
-                or {i for i in ids if not i.startswith('T')} != {i for i in before if not i.startswith('T')}
-                or not any(i.startswith('T') for i in ids)):
+                or (review['version']==1 and (
+                    {i for i in ids if not i.startswith('T')} != {i for i in before if not i.startswith('T')}
+                    or not any(i.startswith('T') for i in ids)))):
             raise WorkflowError('Reference review has stale, foreign or changed source-page references')
+        if review['version']==2:
+            # An explicit operator may attach a missing source page only after
+            # checking that its explanation is already present. This is not an
+            # automatic coverage fallback or permission to invent an explanation.
+            added=set(ids)-set(before)
+            owners={row['canonical_slide_id']:row['owner'] for row in notes['organization']
+                    if row['status'] in {'taught','supplement'}}
+            if (change['target']!='block' or target.get('kind') not in {'paragraph','bullets'}
+                    or not set(before)<=set(ids) or not added
+                    or any(not i.startswith('S') or owners.get(i)!=owner for i in added)):
+                raise WorkflowError('Source-page attachment may only add owned slide IDs to an existing explanation')
         # Everything except this field stays byte-for-byte equivalent as JSON.
         target['evidence_ids'] = list(ids)
     return result
