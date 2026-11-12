@@ -182,9 +182,9 @@ def _editorial_instructions(style: dict[str, Any], notes_language: str) -> list[
         recap_language = notes_language
     legacy_preferences = _compact(style.get("freeform_preferences", ""))
     writing = {
-        "clear_study": "Write clear study prose with definitions, causal links and concrete examples; explain technical terms on first use.",
+        "clear_study": "Write clear study prose explaining the definitions, relationships and concrete examples actually present in the sources; explain source technical terms on first use without expanding the syllabus.",
         "concise": "Write concise study prose while preserving the assumptions, examples and steps needed to understand the lecture.",
-        "detailed": "Write detailed, connected explanations and worked examples without padding or unsupported claims.",
+        "detailed": "Write detailed, connected explanations of the supplied material and its worked examples, without adding external examples, theories or unsupported claims.",
     }.get(writing_style, "Write clear study prose with definitions, causal links and concrete examples.")
     lists = {
         "balanced": "Prefer connected paragraphs for explanations; use real bullet lists for parallel points, steps or comparisons.",
@@ -200,6 +200,7 @@ def _editorial_instructions(style: dict[str, Any], notes_language: str) -> list[
     return [
         f"Write the polished lesson in the configured notes language ({notes_language}); keep the lecturer's sequence and the source terminology accurate.",
         writing, lists, images,
+        "Source scope governs style: requests for clarity, detail, examples or definitions do not authorize adding outside theories, taxonomies, case details or legal conclusions. Clarify source concepts at the instructor's level. When exam scope is slides, use transcript passages to explain those concepts; omit unrelated classroom digressions. Explain each concept once in its main topic; later references add only a distinct source-supported contribution, not a paraphrase of the same explanation.",
         f"Include at most {style['image_limit']} inspected source images per lesson; this is a maximum, never a quota. Source image inspection needed to verify tables is still required." if style.get("image_limit") is not None else "",
         f"Explicit instructions for this requested lesson/run: {style['lesson_instructions']}" if style.get("lesson_instructions") else "",
         "Start blocks with one overview block listing the main lecture topics in teaching order. Word adds the numbering: each item must be plain topic text without a written '1.', '2)', or similar prefix. This is an outline, not an executive summary or a repeated course title.",

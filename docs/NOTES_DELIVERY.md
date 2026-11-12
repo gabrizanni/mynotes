@@ -277,3 +277,30 @@ the writer. Final delivery waits for all checks. Raw drafts, reviewed units and
 writer transport completion have separate durable checkpoints. Explicit resume
 replays saved drafts and receipts before continuing the same conversation.
 Historical jobs retain their original sequential policy and correction limits.
+
+## Simplifying the flow: policy 6 preparation
+
+The operational target is eight minutes per lesson with medium effort, measured
+through usable Word delivery. This is an acceptance target, not a timeout that
+discards a productive job and not a measured performance claim.
+
+The legacy flow's useful properties are combined writing/figure selection and
+local document checks. The new flow must also avoid repeated explanations and
+retain bounded source-risk verification. Removing the reviewer wholesale would
+leave the unsupported additions observed in the failed medium trial untouched.
+
+Policy 6 is preparatory and is not yet the default. It permits up to twelve
+blocks in a natural teaching section, with the existing 32 KiB response bound
+and 192-block job ceiling. Historical six-block jobs keep their original schema.
+The application may recover a missing page assignment from an existing full or
+supplementary explanation only when one lesson unambiguously owns that explicit
+page citation. Spoken attribution requires actual transcript links from that
+lesson; a slide citation alone does not prove the professor taught it. Shared,
+ambiguous and uncited pages are left unresolved. This adds no content or source
+citations and does not replace semantic coverage validation.
+
+Before activation, Standard risk selection and review dispatch must be reduced
+and qualified together. The intended path is source-grounded writing, one
+scoped verification pass per lesson, then local Word build/checks. A pass may
+need bounded packets; it must not silently become a second complete writing
+phase. Broader writing units alone do not establish the speed target.

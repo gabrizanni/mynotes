@@ -130,6 +130,10 @@ def expand(value, evidence, source_origins):
     return visit(value), report
 
 
+def max_blocks(request):
+    return 12 if request.batch_context.get('risk_policy_version',1)>=6 else MAX_BLOCKS
+
+
 def schema(request):
     from .lesson_organization import integrated_schema
     block = deepcopy(notes_schema(compact=True)['properties']['blocks']['items'])
@@ -152,7 +156,7 @@ def schema(request):
         'lecture_id': {'type': 'string', 'enum': request.batch_context['lessons']},
         'header': {'type': ['object', 'null'], 'additionalProperties': False,
             'properties': {'title': {'type': 'string','maxLength':240}, 'summary': {'type': 'string','maxLength':1600}}, 'required': ['title', 'summary']},
-        'blocks': {'type': 'array', 'minItems': 1, 'maxItems': MAX_BLOCKS, 'items': block},
+        'blocks': {'type': 'array', 'minItems': 1, 'maxItems': max_blocks(request), 'items': block},
         'organization_delta': organization,
         'visual_delta': {'type': 'array', 'items': decisions},
         'lesson_complete': {'type': 'boolean'}, 'complete': {'type': 'boolean'}, 'next_topic': {'type': 'string'}},
@@ -166,8 +170,10 @@ def validate_unit(request, raw, previous):
     if raw.get('version') != VERSION or raw.get('part_index') != len(previous):
         raise ProviderError('Progressive unit version/order changed')
     blocks = raw.get('blocks')
-    if not isinstance(blocks, list) or not 1 <= len(blocks) <= MAX_BLOCKS:
-        raise ProviderError('Progressive unit needs one to six blocks')
+    if not isinstance(blocks, list) or not 1 <= len(blocks) <= max_blocks(request):
+        raise ProviderError('Progressive unit needs one to six blocks' if max_blocks(request)==6 else 'Progressive unit needs one to twelve blocks')
+    if request.batch_context.get('risk_policy_version',1)>=6 and sum(len(p['blocks']) for p in previous)+len(blocks)>192:
+        raise ProviderError('Progressive total block allowance exhausted; no source truncation')
     validate_shape(raw,schema(request))
     valid = {r['id'] for r in request.source_pack['evidence']}
     unit, proof = expand(raw, valid, origins(request))
@@ -233,6 +239,9 @@ def validate_unit(request, raw, previous):
 
 def assemble(request, units):
     """Project accepted content and explicit decisions to the existing validator."""
+    if request.batch_context.get('risk_policy_version',1)>=6:
+        from .source_organization import reconcile
+        units=reconcile(units,request)
     if request.batch_context.get('risk_policy_version',1)>=4:
         from .note_assembly import project_units
         units=project_units(units)
