@@ -1,3 +1,12 @@
+For new simple joint jobs (progressive_protocol=3), use the ordinary
+`notes CODE --resume BATCH_ID` to reuse certified successful writing and finish
+local metadata, layout and Word processing. Standard does not call a model
+reviewer or repair worker. Preserve an ERROR result without publishing or
+automatically restarting it. Do not construct diagnostic correction JSON for
+the ordinary flow. A real unresolved blocking defect remains reported.
+
+The procedures below describe saved historical jobs and explicit additional
+review. They do not add phases or retries to new Standard requests.
 For progressive v2 Agy jobs, inspect batch-status before acting. NEEDS_REVIEW
 retains the failed unit/packet and does not grant another automatic attempt.
 A corrected block is never automatically corrected a second time. Risk review is

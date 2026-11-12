@@ -217,7 +217,7 @@ def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]
     return packs, snapshots, inventory
 
 
-def _prepared_context(workspace, lectures, context_lessons=None, selection=None, autonomous_organization=False):
+def _prepared_context(workspace, lectures, context_lessons=None, selection=None, autonomous_organization=False, joint_speech=False):
     """Import explicitly relevant other lessons with stable local IDs/provenance."""
     context_lessons = sorted(set(context_lessons or []) - set(lectures))
     packs, snapshots, _ = _packs(workspace, lectures + context_lessons)
@@ -226,7 +226,8 @@ def _prepared_context(workspace, lectures, context_lessons=None, selection=None,
         pack = packs[lecture]
         counters = {prefix: max((int(row['id'][1:]) for row in pack['evidence'] if row['id'].startswith(prefix)), default=0) for prefix in 'TSHWK'}
         canonical_ids = {row['canonical_slide_id']: row['id'] for row in pack['evidence'] if row.get('canonical_slide_id')}
-        for other in context_lessons:
+        related=sorted(set(context_lessons)|((set(lectures)-{lecture}) if joint_speech else set()))
+        for other in related:
             foreign = originals[other]; mapping = {}
             for row in foreign['evidence']:
                 canonical = row.get('canonical_slide_id')
@@ -503,17 +504,23 @@ def batch_notes_schema(*, autonomous_organization=False) -> dict:
 
 def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[dict]) -> tuple[ProviderRequest, dict]:
     shared, unique, counters, maps, visuals = [], {}, {}, {}, {}
+    primary={(lecture,row['id']):row for lecture in lectures for row in plan['packs'][lecture]['evidence']
+             if row.get('origin_lecture_id',lecture)==lecture}
     for lecture in lectures:
         pack = plan["packs"][lecture]
         maps[lecture] = {}
         for item in pack["evidence"]:
             canonical = item.get("canonical_slide_id")
-            key = canonical or _hash({"lecture": lecture, "evidence": item})
+            original=item;origin=lecture
+            if plan.get('progressive_protocol')==3 and str(item['id']).startswith('T'):
+                origin=item.get('origin_lecture_id',lecture)
+                original=primary.get((origin,item.get('origin_evidence_id',item['id'])),item)
+            key = canonical or _hash({"lecture": origin, "evidence": original})
             if key not in unique:
                 prefix = str(item["id"])[0]
                 counters[prefix] = counters.get(prefix, 0) + 1
                 unique[key] = f"{prefix}{counters[prefix]:03d}"
-                shared.append({**item, "id": unique[key]})
+                shared.append({**original, "id": unique[key]})
             maps[lecture][item["id"]] = unique[key]
         for visual in pack.get("visuals", []):
             identifier = maps[lecture].get(visual.get("evidence_id"))
@@ -549,6 +556,11 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
     for choice in ownership:
         choice["uses"] = {lesson: {**use, "evidence_ids": [maps[lesson][i] for i in use["evidence_ids"]]} for lesson, use in choice.get("uses", {}).items() if lesson in maps}
     context = {"revision_id": plan.get('fingerprint'), "lessons": lectures, "lesson_evidence": {lecture: list(maps[lecture].values()) for lecture in lectures}, "ownership": ownership, "continuity": [{key: value for key, value in entry.items() if key != "narrative_fingerprints"} for entry in continuity]}
+    if plan.get('progressive_protocol')==3:
+        # Input contains each original turn once. Per-document aliases may also
+        # cite the other selected lecture, but never relabel it as current speech.
+        context['lesson_evidence']={lecture:[maps[lecture][row['id']] for row in plan['packs'][lecture]['evidence']
+            if not row['id'].startswith('T') or row.get('origin_lecture_id',lecture)==lecture] for lecture in lectures}
     required=[choice['evidence_id'] for choice in ownership if choice.get('required_visual')]
     if required:
         if plan['style'].get('image_policy')=='none' or plan['style'].get('image_limit')==0:
@@ -563,6 +575,11 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 "Cover every provided teaching page across the selected lessons, including when only one lesson is selected. Never leave pending pages, ask the user to map slides, or assign leftovers to the last lesson by default. "
                 "Choose the best thematic placement using all transcripts; never invent teaching or duplicate a settled main explanation. "
                 "Do not change already settled prior ownership. Material exemption needs a visually inspected title/divider structural_review bound to its actual source image hash; never exempt code, data or diagrams."))
+        if plan.get('progressive_protocol')==3:
+            context['organization_instructions'] += (
+                ' Narrative explanations may cite clarifications from any selected transcript. '
+                'lesson_evidence identifies the original speaker lesson, not a ban on cross-lesson narrative citations; '
+                'a taught ownership decision still needs only the owner lesson\'s actual speech.')
         if plan.get('organization_mode') == 'progressive_legacy':
             context['organization_instructions'] = (
                 'Continue this historical progressive job without rewriting completed lessons. '
@@ -684,7 +701,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
             course = deepcopy(old_course)
     budget = budgets if isinstance(budgets, BatchBudget) else BatchBudget(**(budgets or {}))
     try:
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization, progressive_protocol==3)
     except WorkflowError:
         pending = []
         for lecture in lectures + context_lessons:
@@ -1053,7 +1070,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if plan["status"] != "PLANNED":
             _save(workspace.runs_dir / "_batches" / plan["batch_id"] / "manifest.json", plan)
             return plan
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection, autonomous_organization)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection, autonomous_organization, progressive_protocol==3)
         if snapshots != plan["sources"]:
             raise WorkflowError("Sources changed while preparing the batch request; no provider was invoked")
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
@@ -1272,6 +1289,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                 if reference_lineage:
                                     organization['reference_review'] = reference_lineage
                                 suffix = '-reference-' + reference_lineage['sha256'][:16] if reference_lineage else ''
+                                if progressive_protocol==3 and not reference_lineage:
+                                    suffix='-local-'+_hash(organization_response.notes)[:16]
                                 organization_path = group_dir / f'organization-{lecture}{suffix}.json'
                                 if organization_path.exists() and _read(organization_path) != organization:
                                     raise WorkflowError('Saved integrated organization changed; no automatic writing retry')

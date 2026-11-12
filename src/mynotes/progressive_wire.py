@@ -28,6 +28,11 @@ def native_schema(contract):
     result = deepcopy(contract)
     def visit(node):
         if isinstance(node,dict):
+            props=node.get('properties',{})
+            if 'text' in props and 'heading' in props.get('kind',{}).get('enum',[]):
+                # Gemini sometimes names a heading's text after its kind. Accept
+                # that transport alias so finish does not regenerate the draft.
+                props['heading']=deepcopy(props['text'])
             refs=node.get('properties',{}).get('evidence_ids',{})
             if refs.get('items',{}).get('type')=='string':
                 refs['items']['pattern']=r'^(?:[TSHWK][0-9]{3,}|T[0-9]+\.\.T[0-9]+)$'

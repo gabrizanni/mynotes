@@ -1209,6 +1209,22 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                     return []
                 pack['_render_reference_ids'] = sorted(set(pack.get('_render_reference_ids', [])) | set(references(verified_notes)))
                 envelope = record['envelope']
+            elif record.get("envelope", {}).get("transport") == "agy_joint_v1":
+                from .simple_notes import certified
+                from .providers import ProviderRequest, RequestedModel
+                from .batch import batch_notes_schema
+                expected=candidate.get('requested_model',record['requested'])
+                request=ProviderRequest(lecture_id,{}, {},RequestedModel(**expected),
+                    response_schema=batch_notes_schema(autonomous_organization=True))
+                verified_notes=certified(record,request)
+                def joint_references(value):
+                    if isinstance(value,dict):
+                        return [i for key,item in value.items() for i in
+                            (item if key=='evidence_ids' and isinstance(item,list) else joint_references(item))]
+                    if isinstance(value,list):return [i for item in value for i in joint_references(item)]
+                    return []
+                pack['_render_reference_ids']=sorted(set(pack.get('_render_reference_ids',[]))|set(joint_references(verified_notes)))
+                envelope=record['envelope']
             elif record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
                 verify_receipt(record, workspace.root)

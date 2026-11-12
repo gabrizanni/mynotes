@@ -18,12 +18,14 @@ def validate(notes, request, access, sheets):
             visual=visuals.get(member['evidence_id'])
             if visual and file_sha256(Path(visual['image_path']))==member['source_sha256']:
                 preview.add(member['evidence_id'])
-    decisions={v['evidence_id']:v for lesson in notes['lessons'] for v in lesson['notes']['visual_decisions']}
+    all_choices=[v for lesson in notes['lessons'] for v in lesson['notes']['visual_decisions']]
+    decisions={v['evidence_id']:v for v in all_choices}
     def opened(identifier):
         visual=visuals.get(identifier)
         return bool(visual and file_sha256(Path(visual['image_path'])) in full)
     notices=[]
-    for identifier,choice in decisions.items():
+    for choice in all_choices:
+        identifier=choice['evidence_id']
         if opened(identifier):continue
         if (choice.get('decision')=='include' or choice.get('content_kind') in {'chart','diagram','table','formula','uncertain'}):
             raise ProviderError('NEEDS_REVIEW: source needs observed full access: '+identifier)

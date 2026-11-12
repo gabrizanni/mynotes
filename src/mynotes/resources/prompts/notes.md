@@ -27,10 +27,11 @@ changes this rule. Source-image inspection and automated headless DOCX/render
 checks remain part of normal source review; never claim a manual check was done.
 A source pack is at runs/COURSE-LNN/source_pack.json; its sources list identifies
 an imported_transcript path, reusable with `prepare COURSE-LNN --transcript PATH`.
-Inspect source inventory and freshness to route the task. Read the relevant
-recordings and existing passages to organize shared slides and cross-lesson
-connections autonomously; the writing worker still reads the complete staged
-academic evidence. Do not repeat unrelated full-course extraction or ASR. Review content and source coverage after generation.
+Inspect source inventory and freshness to route the task. The joint writer reads
+the complete staged evidence and organizes shared slides and cross-lesson
+connections. The coordinator inspects source content only for actual identity
+or reported defects; it does not repeat the writer's full reading. Do not repeat
+unrelated full-course extraction or ASR. Read the returned delivery and warnings.
 Use relevant --help only when the required command fails or a genuinely unknown
 option is necessary. Do not explore course/config help or directories merely to
 rediscover saved paths. `mynotes config show --json` is available for explicit configuration inspection.
@@ -58,7 +59,9 @@ An accepted request is owned through its full requested lesson range and Word
 delivery. A background launch, plan, checkpoint or first finished batch is not
 completion. Monitor the specific live job, consume its result and continue the
 next authorized batch; do not hand the task back after saying it was started.
-When an error occurs, inspect the same batch with `batch-status`, then use
+For a new simple job, resume successful writing with the ordinary notes command
+to finish local processing; Standard never adds model review or correction.
+For a historical recovery problem, inspect the same batch with `batch-status`, then use
 `recover-batch BATCH_ID --json`. Apply --apply only to LOCALLY_RECOVERABLE work
 and resume `notes CODE --resume BATCH_ID`. Reuse successful writing/corrections;
 a local metadata, validation or rendering exception does not prove the provider
@@ -153,6 +156,8 @@ that lesson. For separate and cumulative documents from a fully validated batch,
 use `mynotes build-batch BATCH_ID --mode both --json`; never concatenate historical
 cumulative Word files. Read the delivery index, render and review the actual files;
 these remain candidates and have not been academically published.
+The following explicit content-repair procedure applies to historical jobs and
+user-requested additional review, not the ordinary new Standard flow.
 After generation review the saved content and update all related lessons together
 after inspecting source figures and checking actual recap language and source
 fidelity. An inspected flag or citation is not proof of a correct explanation.

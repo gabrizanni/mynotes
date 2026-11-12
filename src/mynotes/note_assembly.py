@@ -62,6 +62,21 @@ def compile_notes(request, notes, decisions):
     for row in result['lessons']:
         lecture=row['lecture_id'];note=row['notes']
         own={r['canonical_slide_id'] for r in result['organization'] if r['owner']==lecture}
+        if request.batch_context.get('progressive_protocol')==3:
+            from .progressive_wire import source_resources
+            for identifier in sorted(own):
+                source=sources.get(identifier,{})
+                resources=source_resources(source)
+                if resources is None or any(b['kind'] in NARRATIVE and b.get('coverage_role') in {'full','supplement','new_insight'} and identifier in b.get('evidence_ids',[]) for b in note['blocks']):continue
+                # Preserve only the provided titles/URLs, never the unseen videos' contents.
+                prefix='Integrazione dalle slide: ' if request.course.get('languages',{}).get('notes')=='it' else 'Supplementary slide material: '
+                content=({'kind':'paragraph','text':prefix+resources[0][0]+' — '+resources[0][1]} if len(resources)==1 else
+                    {'kind':'bullets','items':[prefix+title+' — '+url for title,url in resources]})
+                note['blocks'].append({**content,'evidence_ids':[identifier],'coverage_role':'supplement',
+                    'supplement_labelled':True,'source_derivation':{'kind':'exact_source_resource','source_evidence_id':identifier}})
+                coverage={v['evidence_id']:v for v in note['evidence_coverage']}
+                coverage[identifier]={'evidence_id':identifier,'disposition':'used','reason':'Exact supplied resource titles/URLs preserved; video content not inferred.'}
+                note['evidence_coverage']=list(coverage.values())
         placed={b.get('visual_id') for b in note['blocks'] if b['kind']=='visual'}
         for identifier,decision in decisions.items():
             if identifier not in own or (decision.get('decision')!='include' and identifier not in required) or identifier in placed:continue

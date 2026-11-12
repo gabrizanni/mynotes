@@ -406,6 +406,12 @@ def _transport_normalization(notes: dict[str, Any], schema: dict[str, Any], *, p
         if isinstance(value, dict):
             properties = contract.get("properties", {})
             required = set(contract.get("required", []))
+            if value.get('kind')=='heading' and 'heading' in value and 'text' in properties:
+                if not isinstance(value['heading'],str) or ('text' in value and value['text']!=value['heading']):
+                    raise ProviderError('Conflicting or invalid heading text alias')
+                value={**value,'text':value['heading']}
+                value.pop('heading')
+                transformations.append({'kind':'heading_text_alias','path':[*path,'heading']})
             result = {}
             for key, item in value.items():
                 location = [*path, key]

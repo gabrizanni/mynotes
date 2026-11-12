@@ -16,6 +16,22 @@ observed matching preview, with a warning. Unobserved or changed inputs remain
 blocking. Material-page metadata may drop its own S alias from speech evidence;
 no transcript citation is invented.
 
+Pure resource slides retain only their exact supplied video titles and URLs;
+missing unseen video contents never trigger model writing or a fabricated
+explanation. Program-derived resource blocks share the figure/topic placement
+pass and are idempotent. Local projection changes create a versioned organization
+receipt while preserving the earlier receipt. Word publication verifies the
+joint stream's single SUCCESS rather than trying to parse its event journal as
+one JSON object. The native finish schema also accepts `heading` as a transport
+alias for a heading block's `text`, normalized locally; conflicting values remain
+errors. This prevents a full response rewrite for a field-name mismatch.
+
+Selected transcripts occur once in the joint input. Each document can cite a
+clarification from another selected lesson through a derived source view that
+retains its original lesson and evidence IDs. Slide ownership still requires
+the owner's actual speech; a foreign clarification never proves it was taught
+in that lesson. Original prepared packs remain unchanged.
+
 The program recovers only unambiguous page assignments already established by
 explicit narrative links, then uses the common layout and Word validation path.
 Provider responses, source hashes and requested settings remain retained. The

@@ -20,7 +20,7 @@ def install(monkeypatch, calls, *, fail=False, transform=None):
         if transform:transform(result,request)
         envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(result)}
         assert accept(envelope) is None
-        return subprocess.CompletedProcess(command,0,json.dumps({'event':'result','result':envelope}),'')
+        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in [{'event':'init','conversation_id':'one'},{'event':'result','result':envelope}]),'')
     active=[];original=simple.generate
     def generate(req):active[:]=[req];return original(req)
     monkeypatch.setattr(simple,'generate',generate)
@@ -50,6 +50,14 @@ def test_one_joint_write_delivers_and_reopens_without_model(tmp_path,monkeypatch
     assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused']
     assert calls==[1]
     assert len(renders)==len(set(renders)), 'Same document rendered twice'
+    # Publication must verify the actual stream, not assume a decoded outer JSON is SUCCESS.
+    from mynotes.publication import _load_candidate,PublicationError
+    attempt=next(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/provider-attempts/*.json'))
+    record=json.loads(attempt.read_text());events=[json.loads(line) for line in record['stdout'].splitlines()]
+    events[-1]['result']['status']='ERROR'
+    record['stdout']='\n'.join(json.dumps(event) for event in events)
+    attempt.write_text(json.dumps(record))
+    with pytest.raises(PublicationError,match='transport'):_load_candidate(ws,'OPS-L01')
 
 
 def test_error_retains_attempt_and_cannot_restart(tmp_path,monkeypatch):
@@ -154,4 +162,87 @@ def test_local_inspection_failure_preserves_successful_writing_for_resume(tmp_pa
     assert list(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/returned-writing-*.json'))
     again=notes_run.run_notes(ws,'OPS',resume=result['batch_id'])
     assert again['status']=='NEEDS_REVIEW' and calls==[1]
+    assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))
+
+
+def test_provided_video_links_are_preserved_locally_not_invented_as_a_lecture(tmp_path):
+    from test_progressive_v2 import request,unit
+    from mynotes import progressive_wire as wire
+    req=request(tmp_path)
+    one,_=wire.validate_unit(req,unit(),[]);two,_=wire.validate_unit(req,unit(1,True),[one])
+    notes=wire.assemble(req,[one,two])
+    req.batch_context.update(progressive_protocol=3,ownership=[{'evidence_id':'S001','canonical_slide_id':'deck:page:1'},{'evidence_id':'S002','canonical_slide_id':'deck:page:2'}])
+    req.source_pack['evidence'][1].update(content='First video https://www.youtube.com/watch?v=one Second video https://youtu.be/two 2',page=2,source_file='deck.pdf')
+    owner=notes['lessons'][1]['notes'];owner['blocks']=[b for b in owner['blocks'] if b.get('coverage_role') not in {'full','supplement'}]
+    before=deepcopy(notes)
+    after=simple.project(req,notes)
+    blocks=after['lessons'][1]['notes']['blocks']
+    derived=[b for b in blocks if b.get('source_derivation',{}).get('kind')=='exact_source_resource']
+    assert len(derived)==1 and len(derived[0]['items'])==2
+    assert 'First video' in derived[0]['items'][0] and 'https://youtu.be/two' in derived[0]['items'][1]
+    assert blocks.index(derived[0])<next(i for i,b in enumerate(blocks) if b['kind']=='qa')
+    assert simple.project(req,after)==after
+    assert notes==before
+
+
+def test_native_heading_alias_is_normalized_without_rewriting_content():
+    from mynotes.batch import batch_notes_schema
+    from mynotes.progressive_wire import native_schema
+    from mynotes.providers import _transport_normalization
+    contract=batch_notes_schema(autonomous_organization=True)
+    native=native_schema(contract)
+    props=native['properties']['lessons']['items']['properties']['notes']['properties']['blocks']['items']['properties']
+    assert 'heading' in props
+    raw={'lessons':[{'lecture_id':'TEST-L01','notes':{'blocks':[{'kind':'heading','heading':'Source concept','level':3,'evidence_ids':['S001']}]}}]}
+    normalized,receipt=_transport_normalization(raw,contract,provider='agy')
+    block=normalized['lessons'][0]['notes']['blocks'][0]
+    assert block=={'kind':'heading','text':'Source concept','level':3,'evidence_ids':['S001']}
+    assert receipt['transformations'][0]['kind']=='heading_text_alias'
+    assert raw['lessons'][0]['notes']['blocks'][0]['heading']=='Source concept'
+    raw['lessons'][0]['notes']['blocks'][0]['text']='Conflicting concept'
+    with pytest.raises(ProviderError,match='Conflicting'):_transport_normalization(raw,contract,provider='agy')
+
+
+def test_joint_clarification_can_cite_both_transcripts_without_copying_input(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    originals={p:p.read_bytes() for p in ws.runs_dir.glob('OPS-L*/source_pack.json')}
+    def clarify(result,request):
+        speech=[r for r in request.source_pack['evidence'] if r['id'].startswith('T')]
+        assert len(speech)==2
+        assert {r['text'] for r in speech}=={f'Complete transcript for distinct lecture {n} topics.' for n in (1,2)}
+        assert len([r for r in request.source_pack['evidence'] if r['id'].startswith('S')])==4
+        own=request.batch_context['lesson_evidence']
+        turns={lesson:[i for i in ids if i.startswith('T')] for lesson,ids in own.items()}
+        assert all(len(ids)==1 for ids in turns.values())
+        assert turns['OPS-L01']!=turns['OPS-L02']
+        paragraph=next(b for b in result['lessons'][0]['notes']['blocks'] if b['kind']=='paragraph')
+        paragraph['evidence_ids']+=turns['OPS-L01']+turns['OPS-L02']
+        paragraph['text']='One main explanation integrates the later transcript clarification.'
+    calls=[];install(monkeypatch,calls,transform=clarify)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
+    assert calls==[1]
+    candidate=json.loads((ws.runs_dir/'OPS-L01/lecture_notes.candidate.json').read_text())
+    pack=json.loads(Path(candidate['source_pack']).read_text())
+    foreign=next(r for r in pack['evidence'] if r.get('origin_lecture_id')=='OPS-L02' and r['id'].startswith('T'))
+    block=next(b for b in candidate['notes']['blocks'] if b.get('text','').startswith('One main explanation'))
+    assert foreign['id'] in block['evidence_ids'] and foreign['origin_evidence_id']=='T001'
+    assert {p:p.read_bytes() for p in originals}==originals
+    assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused'] and calls==[1]
+
+
+def test_foreign_clarification_does_not_prove_the_owner_taught_a_slide(tmp_path,monkeypatch):
+    from mynotes import notes_run
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    def foreign_proof(result,request):
+        result['organization'][0]['evidence_ids']=[i for i in request.batch_context['lesson_evidence']['OPS-L02'] if i.startswith('T')]
+    calls=[];install(monkeypatch,calls,transform=foreign_proof)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status'] in {'FAILED','NEEDS_REVIEW'} and calls==[1]
+    assert 'transcript' in json.dumps(result.get('problem')).lower()
     assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))

@@ -63,3 +63,10 @@ def test_preview_manifest_is_source_data_not_trusted_configuration(tmp_path):
     assert 'preview_sheets' not in trusted['coordinated_batch']
     assert untrusted['preview_sheets']==[sheet]
     assert sheet['image_path']==sheet['path']
+
+
+def test_foreign_lesson_exclusion_cannot_hide_an_uninspected_included_figure(tmp_path):
+    req,notes,sheet,access=case(tmp_path)
+    notes['lessons'][0]['notes']['visual_decisions'][0].update(decision='include',content_kind='diagram')
+    notes['lessons'].append({'lecture_id':'TEST-L02','notes':{'visual_decisions':[{'evidence_id':'S001','decision':'exclude','inspected':False,'content_kind':'text'}]}})
+    with pytest.raises(ProviderError,match='full access'):validate(notes,req,access,[sheet])
