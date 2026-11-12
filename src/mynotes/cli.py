@@ -392,6 +392,10 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--resume", metavar="BATCH_ID", help="resume a saved batch without repeating its lesson selection")
     batch.add_argument("--build-word", action="store_true", help="build each validated lesson as a Word candidate before advancing")
     batch.add_argument("--stop-after", type=int, help="pause for review after this lesson without changing the selected batch")
+    visual_review = subparsers.add_parser("visual-review", help="restore explicitly reviewed source figures on a stopped notes job without changing prose or model allowances")
+    visual_review.add_argument("batch_id")
+    visual_review.add_argument("--workspace")
+    visual_review.add_argument("--file", required=True, help="source-bound JSON with the saved prefix, image hashes and explicit figure choices")
     notes = subparsers.add_parser("notes", help="complete one explicit notes request through verified Word delivery and course update")
     notes.add_argument("course")
     notes.add_argument("--workspace")
@@ -1134,6 +1138,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate_batch(arguments)
         if arguments.command == "notes":
             return _notes(arguments)
+        if arguments.command == "visual-review":
+            from .visual_review import record_review
+            result=record_review(Workspace.from_value(arguments.workspace),arguments.batch_id,_load_json(arguments.file))
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0
         if arguments.command == 'import-generated-baseline':
             from .generated_baseline import import_generated_baseline
             result=import_generated_baseline(Workspace.from_value(arguments.workspace),arguments.course,

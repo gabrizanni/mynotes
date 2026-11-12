@@ -194,6 +194,29 @@ belong to the stated lesson. No wording, ownership or teaching-status changes ar
 accepted. Existence of an ID is not semantic proof: the coordinator must inspect
 the actual source match, preserve uncertainties and never invent links.
 
+## Explicit source figure restoration
+
+`mynotes visual-review BATCH --workspace PATH --file REVIEW.json` records a local
+restoration on a stopped, unfinished progressive job. It invokes no model and
+never changes accepted units, source prose or automatic correction allowances.
+Ordinary `notes --resume BATCH` then verifies the remaining sections and applies
+the restoration before validating and delivering Word. A completed historical
+receipt cannot be edited through this command.
+
+The version-1 JSON contains `source_proof_sha256` (the saved `request.json` hash),
+`accepted_units` (the exact saved unit prefix), a nonempty `reason`, and 1–12
+`changes`. Each change identifies `evidence_id`, `image_sha256`,
+`before_sha256` (the saved effective visual decision), `owner`, `content_kind`
+(`chart` or `diagram`), `placement` (`before_footer`), `label`, and `reason`.
+The owner must match the settled slide assignment; the exact source image must
+have observed inspection evidence. Frozen no-image preferences and image limits
+still apply. Only the requested figure and its source ledger change; a second
+submission is idempotent only when the JSON is identical.
+
+The derivative is hash-bound in the final progressive receipt and rechecked on
+reopening. Its explicit classification supersedes the mistaken cached one;
+the original review and its classification remain available for diagnosis.
+
 ## Measurements and verification boundaries
 
 Private extraction events record source hash, cache hit/miss and local duration.

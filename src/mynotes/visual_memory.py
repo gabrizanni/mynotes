@@ -50,6 +50,11 @@ def save(directory, request, response):
     for ref in receipt['units']:
         unit=json.loads((Path(record['envelope']['receipt']).parent/ref['file']).read_text())['effective']
         decisions.update({v['evidence_id']:v for v in unit['visual_delta']})
+    if receipt.get('visual_review'):
+        reviewed=json.loads(Path(receipt['visual_review']['path']).read_text())
+        for choice in reviewed['changes']:
+            decisions[choice['evidence_id']]={'content_kind':choice['content_kind'],
+                'reason':'Explicit visual review: '+choice['reason']}
     directory.mkdir(parents=True,exist_ok=True)
     for visual in request.source_pack.get('visuals',[]):
         decision=decisions.get(visual['evidence_id'])

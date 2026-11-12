@@ -323,9 +323,12 @@ def generate(request):
                     on_event=observe,abort_errors=True,log_file=root/'provider.log')
         if completed.returncode or not units or not units[-1]['complete']:raise ProviderError('Incomplete progressive job')
         notes=wire.assemble(request,units)
+        from .visual_review import project
+        notes,visual_review=project(notes,request,root,refs,access)
         receipt=root/'complete.json'
         atomic_json_write(receipt,{'protocol':2,'request':str(root/'request.json'),'request_sha256':file_sha256(root/'request.json'),
-            'units':refs,'notes_sha256':digest(notes),'access':access})
+            'units':refs,'notes_sha256':digest(notes),'access':access,
+            **({'visual_review':visual_review} if visual_review else {})})
         final_envelope={
             'transport':'agy_progressive_v2','status':'SUCCESS','receipt':str(receipt),'receipt_sha256':file_sha256(receipt),
             'usage':{'session_cumulative':last.get('usage',{}),'scope':'Writer cumulative only; risk packet attempts are distinct'}}
@@ -404,6 +407,9 @@ def verify_receipt(record, workspace_root):
         if effective!=row['effective']:raise ProviderError('Effective unit differs from its certified patches')
         image_check(request,effective,saved['access']);wire.validate_content(request,effective,units);units.append(effective)
     notes=wire.assemble(request,units)
+    if saved.get('visual_review'):
+        from .visual_review import project
+        notes,_=project(notes,request,path.parent,saved['units'],saved['access'],saved['visual_review'])
     from .providers import _jsonl_events
     terminal=[e['result'] for e in _jsonl_events(record['stdout']) if e.get('event')=='result']
     if not terminal or any(r.get('status')!='SUCCESS' for r in terminal):raise ProviderError('Progressive stream has no successful terminal result')
