@@ -89,6 +89,15 @@ images and explicit source-graphic-choice risks retain their images; unknown
 classifications stay conservative. Packet targets and original capacity checks
 are unchanged, so historical reviews keep their grouping and correction limits.
 This reduces input images, not a promised or automatically measured latency.
+An explicit graphic risk retains the actual graphic candidates, rather than all
+already inspected text screenshots cited by the same paragraph or overview.
+Unknown visual scope stays conservative. Sources, targets, historical grouping
+and correction limits stay unchanged.
+
+The Agy finish-tool adapter accepts compact `T123..T145` references in writing
+and review responses. They are expanded and checked locally before use. The
+portable expanded-note schemas remain unchanged for historical packet sizing;
+the native CLI must not reject the compact syntax the writer is told to use.
 
 Every unit is saved only after the level's checks. Each block has one automatic
 correction opportunity, retained across reopen. Unrelated blocks/anchors never

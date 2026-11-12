@@ -151,6 +151,14 @@ def review_task(request, targets, unit, previous_units=()):
     return task
 
 
+def graphic_ids(request, unit):
+    sources={v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
+    return {v['evidence_id'] for v in unit['visual_delta']
+        if v.get('content_kind') in {'chart','diagram','uncertain'}
+        or sources.get(v['evidence_id'],{}).get('signals',{}).get('drawings',0)>12
+        or sources.get(v['evidence_id'],{}).get('signals',{}).get('images',0)>0}
+
+
 def packet_request(request, targets, unit, directory, *, previous_units=()):
     ids = {i for t in targets for i in t['block']['evidence_ids']}
     anchors=context_anchors(request,targets,unit,previous_units)
@@ -176,6 +184,10 @@ def packet_request(request, targets, unit, directory, *, previous_units=()):
     known = request.batch_context.get('review_visual_classifications', {})
     graphic_targets = {i for target in targets if 'source_graphic_choice' in target['reasons']
                        for i in target['block']['evidence_ids']}
+    if unit['visual_delta']:
+        # A risk attached to one graphic is not a request to reopen every
+        # already inspected text slide cited by that paragraph or overview.
+        graphic_targets &= graphic_ids(request,unit)
     if request.requested.quality == 'standard' and known:
         visuals = [v for v in visuals if known.get(v['evidence_id']) != 'text'
                    or v['evidence_id'] in graphic_targets]
@@ -185,10 +197,8 @@ def packet_request(request, targets, unit, directory, *, previous_units=()):
 
 def packets(request, unit, directory, *, previous_units=()):
     evidence = {r['id']:r for r in request.source_pack['evidence']}
-    source_visuals = {v['evidence_id']:v for v in request.source_pack.get('visuals',[])}
-    def graphical(v):
-        signals=source_visuals.get(v['evidence_id'],{}).get('signals',{})
-        return v.get('content_kind') in {'chart','diagram','uncertain'} or signals.get('drawings',0)>12 or signals.get('images',0)>0
+    graphics=graphic_ids(request,unit)
+    def graphical(v):return v['evidence_id'] in graphics
     targets = []
     for index, block in enumerate(unit['blocks']):
         reasons = risks(block, evidence, request.style, request.requested.quality,

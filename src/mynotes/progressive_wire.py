@@ -19,6 +19,25 @@ def size(value):
     return len(json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode())
 
 
+def native_schema(contract):
+    """Accept compact wire references before the program expands/validates them.
+
+    Keep the portable expanded-note schema unchanged: historical review packet
+    sizing and correction allowances must not move when the CLI adapter changes.
+    """
+    result = deepcopy(contract)
+    def visit(node):
+        if isinstance(node,dict):
+            refs=node.get('properties',{}).get('evidence_ids',{})
+            if refs.get('items',{}).get('type')=='string':
+                refs['items']['pattern']=r'^(?:[TSHWK][0-9]{3,}|T[0-9]+\.\.T[0-9]+)$'
+            for value in node.values():visit(value)
+        elif isinstance(node,list):
+            for value in node:visit(value)
+    visit(result)
+    return result
+
+
 def validate_shape(value, contract, path='$'):
     """Validate the portable subset locally, independently of finish-tool claims."""
     kinds = contract.get('type', [])

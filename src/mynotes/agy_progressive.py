@@ -73,7 +73,7 @@ def command(request, schema, log):
     args = [executable,'--agent','mynotes-note-writer','--disable-slash-commands','--mode','plan',
         '--input-format','stream-json','--output-format','stream-json','--print-timeout','0',
         '--log-file',str(log),*provider_override_flags(request.requested),
-        '--json-schema',json.dumps(_agy_schema(schema),separators=(',',':')),'--add-dir',str(request.run_dir)]
+        '--json-schema',json.dumps(_agy_schema(wire.native_schema(schema)),separators=(',',':')),'--add-dir',str(request.run_dir)]
     validate_command_size(args, provider_environment())
     return args
 
