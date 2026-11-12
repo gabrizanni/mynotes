@@ -384,12 +384,12 @@ def test_new_jobs_freeze_risk_policy_while_historical_snapshots_keep_theirs(tmp_
     cfg=ws.configuration_store().load();cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'}
     ws.configuration_store().save(cfg)
     new=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2)
-    assert new['risk_policy_version']==4
+    assert new['risk_policy_version']==5
     historical={k:new[k] for k in ('course_code','lectures','course','style','requested_model')}
     old=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=historical)
     assert 'risk_policy_version' not in old
     frozen=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=new)
-    assert frozen['risk_policy_version']==4 and frozen['fingerprint']==new['fingerprint']
+    assert frozen['risk_policy_version']==5 and frozen['fingerprint']==new['fingerprint']
     saved_three={**new,'risk_policy_version':3}
     assert plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=saved_three)['risk_policy_version']==3
     saved_two={**new,'risk_policy_version':2}
@@ -428,9 +428,11 @@ def test_visual_cache_is_bound_to_bytes_effort_and_does_not_become_instructions(
     Image.new('RGB',(10,10),'blue').save(image);assert load(cache,[visual],requested)==[]
 
 
-def test_explicit_user_resume_can_continue_only_intact_interrupted_prefix(tmp_path,monkeypatch):
+@pytest.mark.parametrize("policy",[1,5])
+def test_explicit_user_resume_can_continue_only_intact_interrupted_prefix(tmp_path,monkeypatch,policy):
     from mynotes import agy_parts
-    req=request(tmp_path,'base');monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    req=request(tmp_path,'base');req=replace(req,batch_context={**req.batch_context,'risk_policy_version':policy})
+    monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
     calls=[]
     def interrupted(command,prompt,accept,**kwargs):
         kwargs['on_event']({'event':'init','conversation_id':'same-conversation'})
@@ -483,7 +485,8 @@ def test_local_scope_recovery_reuses_successful_review_without_a_second_attempt(
 @pytest.mark.parametrize('marker',['Course Complete','End of Course'])
 def test_terminal_local_revalidation_uses_success_without_a_new_writer_or_provider_error(tmp_path,monkeypatch,marker):
     from mynotes import agy_parts
-    req=request(tmp_path,'base');monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    req=request(tmp_path,'base')
+    monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
     old=w.validate_unit;calls=[]
     def reject_terminal(request,raw,previous):
         if raw['complete']:raise ProviderError('Progressive completion is inconsistent')
@@ -599,3 +602,85 @@ def test_extended_review_saves_context_and_reopens_without_any_model(tmp_path,mo
     with pytest.raises(ProviderError,match='review context changed'):
         a.verify_receipt(record,ws.runs_dir)
     assert len(writing)==1 and len(seen)==count
+
+
+@pytest.mark.parametrize("interrupt",[False,True])
+def test_writer_continues_during_previous_section_review_and_reopens_locally(tmp_path,monkeypatch,interrupt):
+    from threading import Event
+    from mynotes import agy_parts
+    from mynotes.providers import _save_attempt
+    from mynotes.execution import AttemptStart
+    req=request(tmp_path)
+    req=replace(req,batch_context={**req.batch_context,'risk_policy_version':5})
+    monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    monkeypatch.setattr(a,'_stage_agy_writer',lambda path:None)
+    checking=Event();release=Event();observed=[]
+    original=a.review_unit
+    def review(request,value,*args,**kwargs):
+        if value['part_index']==1:
+            checking.set()
+            from mynotes.review_dispatch import cancel_event
+            while not release.wait(.02):
+                if cancel_event.get().is_set():raise ProviderError('Stopped before review invocation')
+        return original(request,value,*args,**kwargs)
+    monkeypatch.setattr(a,'review_unit',review)
+    def single(packet):
+        targets=packet.batch_context['review_task']['targets']
+        reply={'decisions':[{'block_id':t['block_id'],'base_sha256':t['base_sha256'],'status':'approved','reason':'Supported','blocks':[]} for t in targets],'visual_updates':[]}
+        envelope={'status':'SUCCESS','response':json.dumps(reply)}
+        attempt=_save_attempt(packet,command=['synthetic'],completed=subprocess.CompletedProcess(['synthetic'],0,json.dumps({'event':'result','result':envelope}),''),started=AttemptStart(),envelope={'status':'SUCCESS','source_access':[]})
+        return reply,attempt
+    monkeypatch.setattr(a,'run_single',single)
+    first=unit();first['lesson_complete']=False;first['next_topic']='Next section'
+    first['blocks']=first['blocks'][:2]
+    middle=unit(1);middle['header']=None;middle['organization_delta']=[]
+    middle['blocks']=[{'kind':'paragraph','text':'A distinct maintenance explanation.','evidence_ids':['T002'],'coverage_role':'full'},*unit()['blocks'][2:]]
+    last=unit(2,True)
+    run_calls=[]
+    def run(command,prompt,accept,**kwargs):
+        run_calls.append(command)
+        kwargs['on_event']({'event':'init','conversation_id':'same-conversation'})
+        events=[]
+        rows=[first,middle,last] if len(run_calls)==1 else [last]
+        for raw in rows:
+            index=raw['part_index']
+            envelope={'status':'SUCCESS','conversation_id':'same-conversation','response':json.dumps(raw)}
+            events.append({'event':'result','result':envelope})
+            if index==2 and len(run_calls)==1:
+                assert checking.wait(3)
+                state=json.loads((tmp_path/'progressive-v2/state.json').read_text())
+                assert state['written_sections']==2 and state['verified_sections']==1
+                observed.append('writer active while reviewer waits')
+                if interrupt:raise KeyboardInterrupt()
+                release.set()
+            answer=accept(envelope)
+            if index==0:assert (tmp_path/'progressive-v2/unit-000.json').exists()
+            assert (answer is None)==(index==2)
+        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in events),'')
+    monkeypatch.setattr(agy_parts,'run_session',run)
+    if interrupt:
+        with pytest.raises(KeyboardInterrupt):a.generate(req)
+        retained=json.loads((tmp_path/'progressive-v2/state.json').read_text())
+        assert retained['written_sections']==2 and retained['verified_sections']==1
+        release.set()
+        req=replace(req,resume_authorized=True)
+    result=a.generate(req)
+    assert len(run_calls)==(2 if interrupt else 1)
+    assert observed and len(result.notes['lessons'])==2
+    monkeypatch.setattr(agy_parts,'run_session',lambda *args,**kw:pytest.fail('Writer must be reused'))
+    monkeypatch.setattr(a,'run_single',lambda *args:pytest.fail('Review must be reused'))
+    assert a.generate(req).notes==result.notes
+
+
+def test_review_transport_error_retains_original_error_and_receipt(tmp_path,monkeypatch):
+    from mynotes import agy_parts
+    req=request(tmp_path)
+    req=replace(req,response_schema=r.review_schema(req))
+    monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
+    monkeypatch.setattr(a,'_stage_agy_writer',lambda path:None)
+    def fail(*args,**kwargs):raise ProviderError('observed transport failure')
+    monkeypatch.setattr(agy_parts,'run_session',fail)
+    with pytest.raises(ProviderError,match='observed transport failure'):a.run_single(req)
+    attempts=list((tmp_path/'provider-attempts').glob('*.json'))
+    assert len(attempts)==1
+    assert json.loads(attempts[0].read_text())['error']=='observed transport failure'

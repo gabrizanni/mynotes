@@ -34,7 +34,7 @@ from .workflow import (GENERATION_CONTRACT_VERSION, QUALITY_PHASES, WorkflowErro
 from .workspace import Workspace
 
 BATCH_CONTRACT_VERSION = 4
-CURRENT_RISK_POLICY = 4
+CURRENT_RISK_POLICY = 5
 NARRATIVE_KINDS = {"paragraph", "bullets", "table", "formula", "visual"}
 
 

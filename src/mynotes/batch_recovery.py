@@ -641,6 +641,7 @@ def batch_status(workspace,batch_id):
             if progressive.is_file():
                 value=json.loads(progressive.read_text())
                 activity={**activity,'progressive_status':value.get('status'),'accepted_sections':len(value.get('units',[])),
+                    **{key:value[key] for key in ('written_sections','verified_sections','waiting_sections','deliverable') if key in value},
                     'current_unit':value.get('current_unit'),'last_step':value.get('last_step'),
                     'last_activity':value.get('last_activity'),'progressive_problem':value.get('problem')}
             states=list(directory.glob('writing-parts/*/state.json'))

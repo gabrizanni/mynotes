@@ -7,12 +7,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
-from threading import Lock
+from threading import Lock, RLock
 import time
 
 from . import progressive_wire as wire
 from .progressive_review import digest, review_unit, review_task, apply_review, review_schema, merge_visual_updates, packets, replacement_blocks
-from .providers import (ProviderError, ProviderResponse, ProviderRequest, RequestedModel,
+from .providers import (ProviderError, ProviderCancelledError, ProviderResponse, ProviderRequest, RequestedModel,
     _agy_schema, _context, _decode_agy, _normalize_transport_notes, _prompt,
     _save_attempt, _stage_agy_context, _stage_agy_writer, provider_environment,
     provider_executable, provider_override_flags)
@@ -231,8 +231,17 @@ def generate(request):
         staged,f'Required part_index: {len(units)}'])
     if units:prompt=protocol()+f'\nResume part_index {len(units)}. Continue at: '+units[-1]['next_topic']
     started=AttemptStart();completed=None;last={};writer_started=False
+    state_lock=RLock()
+    pipeline=None
+    written=list(units)
+    draft_refs=list(state.get('drafts',[]))
+    overlapping=request.batch_context.get('risk_policy_version',1)>=5
     def save(**updates):
-        state.update(updates);state['units']=refs;atomic_json_write(state_path,state)
+        with state_lock:
+            state.update(updates);state['units']=list(refs)
+            if overlapping:
+                state.update(drafts=list(draft_refs),written_sections=len(written),verified_sections=len(units),waiting_sections=max(0,len(written)-len(units)),deliverable=False)
+            atomic_json_write(state_path,state)
     access_lock = Lock()
     def record_access(row):
         with access_lock:
@@ -252,20 +261,12 @@ def generate(request):
         for row in json.loads(attempt.read_text())['envelope']['source_access']:
             record_access(row)
         return reply,attempt
-    def accept(envelope):
-        nonlocal last
-        last=envelope
-        if envelope.get('status')!='SUCCESS':
-            from .agy_parts import transport_error
-            raise transport_error('Progressive unit did not return SUCCESS: '+str(envelope.get('error','unknown provider error')))
-        if envelope.get('conversation_id')!=state.get('conversation_id'):
-            raise ProviderError('Progressive unit lacks same-conversation SUCCESS')
-        returned_at=time.time()
-        raw=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy');index=len(units)
-        returned=root/f'returned-{index:03d}.json'
-        atomic_json_write(returned,{'envelope':envelope,'raw':raw})
-        unit,normalization=wire.validate_unit(request,raw,units)
-        image_check(request,unit,access)
+    def check_section(item):
+        unit,normalization,returned,returned_at=item
+        index=unit['part_index']
+        # Previous corrections are authoritative before this section's review.
+        retained=json.loads(returned.read_text())
+        unit,_=wire.validate_unit(request,retained['raw'],units)
         save(status='RISK_CHECK',current_unit=index)
         review_started=time.time()
         inspected=[*request.batch_context.get('cached_visual_inspections', []),
@@ -280,16 +281,76 @@ def generate(request):
             'timing':{'returned_at_epoch':returned_at,'review_started_at_epoch':review_started,
                 'review_ended_at_epoch':review_ended,'accepted_at_epoch':time.time(),
                 'scope':'Controller observations; nested packet/provider durations are not additive.'}})
-        units.append(effective);refs.append({'file':path.name,'sha256':file_sha256(path)})
-        save(status='SECTION_ACCEPTED')
+        with state_lock:
+            units.append(effective);refs.append({'file':path.name,'sha256':file_sha256(path)})
+            save(status='SECTION_ACCEPTED')
         print(f'MyNotes v2: section {len(units)} checked and saved ({request.requested.quality}).',file=sys.stderr,flush=True)
+        return effective
+
+    def accept(envelope):
+        nonlocal last
+        last=envelope
+        if envelope.get('status')!='SUCCESS':
+            from .agy_parts import transport_error
+            raise transport_error('Progressive unit did not return SUCCESS: '+str(envelope.get('error','unknown provider error')))
+        if envelope.get('conversation_id')!=state.get('conversation_id'):
+            raise ProviderError('Progressive unit lacks same-conversation SUCCESS')
+        returned_at=time.time()
+        raw=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy');index=len(written) if overlapping else len(units)
+        returned=root/f'returned-{index:03d}.json'
+        retained_return={'envelope':envelope,'raw':raw}
+        if overlapping and returned.exists():
+            if json.loads(returned.read_text())!=retained_return:raise ProviderError('Returned draft changed; no overwrite')
+        else:atomic_json_write(returned,retained_return)
+        unit,normalization=wire.validate_unit(request,raw,written if overlapping else units)
+        image_check(request,unit,access)
+        if overlapping:
+            written.append(unit)
+            ref={'file':returned.name,'sha256':file_sha256(returned)}
+            if index<len(draft_refs):
+                if draft_refs[index]!=ref:raise ProviderError('Retained draft identity changed')
+            else:draft_refs.append(ref)
+            save(status='SECTION_WRITTEN')
+            pipeline.submit((unit,normalization,returned,returned_at),first=index==0,final=unit['complete'])
+            if unit['complete']:return None
+            if len(written)>=wire.MAX_UNITS:raise ProviderError('NEEDS_REVIEW: progressive block allowance exhausted')
+            feedback=[]
+            for p in units[-2:]:
+                original=json.loads((root/f"unit-{p['part_index']:03d}.json").read_text())['raw_unit']
+                changed_blocks=p['blocks']!=original['blocks']
+                changed_visuals=[v for v in p['visual_delta'] if v not in original['visual_delta']]
+                if changed_blocks or changed_visuals:
+                    feedback.append({'part_index':p['part_index'],'blocks':p['blocks'] if changed_blocks else [],'visual_delta':changed_visuals})
+            return protocol()+f'\nRequired part_index: {len(written)}. Continue at: '+unit['next_topic']+'\nLatest verified sections (corrections override your drafts; not independent evidence): '+json.dumps(feedback,ensure_ascii=False)
+        effective=check_section((unit,normalization,returned,returned_at))
         if effective['complete']:return None
         if len(units)>=wire.MAX_UNITS:
             raise ProviderError('NEEDS_REVIEW: progressive block allowance exhausted; sources retained without truncation')
         return protocol()+f'\nRequired part_index: {len(units)}. Do not reread unchanged sources or repeat accepted content. Continue at: '+effective['next_topic']+ '\nAccepted risk corrections to respect (not independent evidence): '+json.dumps({'blocks':effective['blocks'] if unit['blocks']!=effective['blocks'] else [], 'visual_decisions':[v for v in effective['visual_delta'] if v not in unit['visual_delta']]},ensure_ascii=False)
+    if overlapping:
+        from .section_pipeline import SectionPipeline
+        pipeline=SectionPipeline(check_section)
     try:
         local_terminal_source=None
-        if recover_local:
+        if overlapping and draft_refs:
+            for ref in draft_refs[len(units):]:
+                retained=root/ref['file']
+                if file_sha256(retained)!=ref['sha256']:raise ProviderError('Retained draft changed')
+                envelope=json.loads(retained.read_text())['envelope']
+                if envelope.get('status')!='SUCCESS' or envelope.get('conversation_id')!=state.get('conversation_id'):
+                    raise ProviderError('Retained draft lacks same-conversation SUCCESS')
+                # Reuse accept validation but preserve the immutable original return.
+                accept(envelope)
+            pipeline.drain()
+            if written and written[-1]['complete']:
+                transport=root/'writer-complete.json'
+                if not transport.exists():raise ProviderError('NEEDS_REVIEW: final writer transport was not certified')
+                saved_transport=json.loads(transport.read_text())
+                if saved_transport['returncode']!=0:raise ProviderError('Writer transport failed')
+                completed=subprocess.CompletedProcess(args,0,saved_transport['stdout'],saved_transport['stderr'])
+            elif written:
+                prompt=protocol()+f'\nResume part_index {len(written)}. Continue at: '+written[-1]['next_topic']
+        if recover_local and not overlapping:
             snapshot=root/('state-before-local-scope-recovery-'+digest(state)+'.json')
             if not snapshot.exists():atomic_json_write(snapshot,state)
             pending=root/f'returned-{len(units):03d}.json'
@@ -332,9 +393,17 @@ def generate(request):
             if getattr(request,'local_only',False):raise ProviderError('NEEDS_REVIEW: local validation cannot start or resume a writer')
             save(status='WRITING',invocation_started=True)
             writer_started=True
-            with prevent_idle_sleep():
-                completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
-                    on_event=observe,abort_errors=True,log_file=root/'provider.log')
+            from .review_dispatch import cancel_event
+            token=cancel_event.set(pipeline.stopped) if pipeline else None
+            try:
+                with prevent_idle_sleep():
+                    completed=run_session(args,prompt,accept,cwd=str(directory),env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},
+                        on_event=observe,abort_errors=True,log_file=root/'provider.log')
+            finally:
+                if token is not None:cancel_event.reset(token)
+            if overlapping and completed.returncode==0:
+                atomic_json_write(root/'writer-complete.json',{'returncode':0,'stdout':completed.stdout,'stderr':completed.stderr})
+        if pipeline:pipeline.drain()
         if completed.returncode or not units or not units[-1]['complete']:raise ProviderError('Incomplete progressive job')
         notes=wire.assemble(request,units)
         from .visual_review import project
@@ -355,15 +424,19 @@ def generate(request):
         else:
             attempt=_save_attempt(request,command=args,completed=completed,started=started,envelope=final_envelope)
         save(status='CONTENT_VERIFIED',finalized=True,attempt=str(attempt),problem=None)
+        if pipeline:pipeline.close()
         return ProviderResponse(notes,'agy','','',{},str(attempt))
     except BaseException as error:
+        if pipeline:
+            pipeline.close(cancel=True)
+            if pipeline.error is not None and not isinstance(error,(KeyboardInterrupt,SystemExit)):error=pipeline.error
         if hasattr(error,'output'):
             out=getattr(error,'output',b'');err=getattr(error,'stderr',b'')
             completed=subprocess.CompletedProcess(args,None,out.decode(errors='replace') if isinstance(out,bytes) else out,
                 err.decode(errors='replace') if isinstance(err,bytes) else err)
         attempt=_save_attempt(request,command=args,completed=completed,started=started,error=str(error),invocation_started=writer_started,
             envelope={'transport':'agy_progressive_v2','status':'ERROR'})
-        save(status='INTERRUPTED' if isinstance(error,KeyboardInterrupt) else 'NEEDS_REVIEW',problem=str(error),attempt=str(attempt))
+        save(status='INTERRUPTED' if isinstance(error,(KeyboardInterrupt,ProviderCancelledError)) else 'NEEDS_REVIEW',problem=str(error),attempt=str(attempt))
         if isinstance(error,(KeyboardInterrupt,SystemExit)):raise
         from .providers import ProviderQuotaError,ProviderAuthenticationError
         kind=type(error) if isinstance(error,(ProviderQuotaError,ProviderAuthenticationError)) else ProviderError

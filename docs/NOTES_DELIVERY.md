@@ -202,7 +202,7 @@ rectification, never an automatic substitute for writing missing content.
 
 ## Explicit source figure restoration
 
-New jobs use delivery policy 4. Selected inspected figures and exact source
+Delivery policy 4 introduced the following safeguards. Selected inspected figures and exact source
 resources share one placement pass. Reference-only mentions do not move the
 primary topic. An explicit selection may set `required_visual: true`; the
 source image must exist before generation and remains required even if a
@@ -256,7 +256,7 @@ outside this public repository. A real-provider test must separately report
 requested and actual model/effort, source coverage, Word rendering, usage and
 reuse. Passing offline tests does not complete that verification.
 
-## Bounded review dispatch (policy 5, opt-in during development)
+## Overlapped writing and bounded review (policy 5)
 
 Policy 5 excludes known parenthesized/bracketed source IDs from numeric risk
 selection without changing the stored text, math, code or unknown references.
@@ -269,5 +269,11 @@ Results merge in source order, with the same block hashes and durable receipts.
 A blocking reply cancels sibling transports and stops dispatching queued work;
 queued work has no attempt marker. Completed receipts remain reusable without
 another model call. Source-coverage closure still follows the content pass.
-This dispatcher does not yet overlap writing with review; new jobs continue to
-use policy 4 until the complete pipeline is qualified.
+New jobs use policy 5. The first section is verified before writing continues.
+After that gate one writer overlaps with the ordered section reviewer; that
+reviewer may run two disjoint packets, for at most three model requests in total.
+At most two written sections can await verification. Reaching that limit pauses
+the writer. Final delivery waits for all checks. Raw drafts, reviewed units and
+writer transport completion have separate durable checkpoints. Explicit resume
+replays saved drafts and receipts before continuing the same conversation.
+Historical jobs retain their original sequential policy and correction limits.
