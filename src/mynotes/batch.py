@@ -34,6 +34,7 @@ from .workflow import (GENERATION_CONTRACT_VERSION, QUALITY_PHASES, WorkflowErro
 from .workspace import Workspace
 
 BATCH_CONTRACT_VERSION = 4
+CURRENT_RISK_POLICY = 4
 NARRATIVE_KINDS = {"paragraph", "bullets", "table", "formula", "visual"}
 
 
@@ -548,6 +549,13 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
     for choice in ownership:
         choice["uses"] = {lesson: {**use, "evidence_ids": [maps[lesson][i] for i in use["evidence_ids"]]} for lesson, use in choice.get("uses", {}).items() if lesson in maps}
     context = {"revision_id": plan.get('fingerprint'), "lessons": lectures, "lesson_evidence": {lecture: list(maps[lecture].values()) for lecture in lectures}, "ownership": ownership, "continuity": [{key: value for key, value in entry.items() if key != "narrative_fingerprints"} for entry in continuity]}
+    required=[choice['evidence_id'] for choice in ownership if choice.get('required_visual')]
+    if required:
+        if plan['style'].get('image_policy')=='none' or plan['style'].get('image_limit')==0:
+            raise WorkflowError('Required source figures conflict with the frozen no-image preference')
+        if any(not visuals.get(identifier,{}).get('image_path') for identifier in required):
+            raise WorkflowError('A required source figure has no available image; prepare its source before generation')
+        context['required_visual_ids']=required
     if plan.get('autonomous_organization'):
         context.update(autonomous_organization=True, final_selected_lesson=lectures[-1] == plan['lectures'][-1],
             organization_instructions=("Read all selected complete transcripts and the unique shared deck. While writing, assign each unresolved page an explicit owner lecture_id from the selected lessons. "
@@ -713,7 +721,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
     if progressive_protocol is not None:
         payload['progressive_protocol'] = progressive_protocol
     if progressive_protocol == 2:
-        policy = (writing_snapshot or {}).get('risk_policy_version', 1) if writing_snapshot is not None else 3
+        policy = (writing_snapshot or {}).get('risk_policy_version', 1) if writing_snapshot is not None else CURRENT_RISK_POLICY
         if policy >= 2:
             payload['risk_policy_version'] = policy
     if generation_id is not None:
@@ -923,7 +931,11 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 continue
             local_id = plan["inventory"][canonical]["occurrences"][lecture]
             positions = placements.get(local_id, [])
+            if plan.get('risk_policy_version',1)>=4:
+                from .note_assembly import validate_supplement
+                validate_supplement(notes,local_id,choice.get('anchor',{}))
             for direction, anchor in choice.get("anchor", {}).items():
+                if plan.get('risk_policy_version',1)>=4:continue
                 anchor_positions = placements.get(anchor, [])
                 if not anchor_positions or (direction == "before" and max(positions) >= min(anchor_positions)) or (direction == "after" and min(positions) <= max(anchor_positions)):
                     raise WorkflowError("Supplementary slide must appear inline at its selected topic anchors")
@@ -1351,6 +1363,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         state.record_candidate(lecture, _hash({"batch": plan["fingerprint"], "lecture": lecture}), response, runtime["requested"].quality, path)
                     group_candidates.append({"lecture_id": lecture, "sha256": _candidate_digest(path)})
                     continuity.append(_continuity(lecture, notes))
+                    for issue in notes.get('review_issues',[]):
+                        warning={'lecture_id':lecture,'code':issue['issue_code'],'reason':issue['reason']}
+                        if warning not in warnings:warnings.append(warning)
                     results.append({"lecture_id": lecture, "candidate": str(path), "reused": group_reused or preserve_candidate})
                 completed_payload = {"candidates": group_candidates, "phases": phases,"repair_lineage":repair_lineage}
                 if review_defects is not None and completed_path.exists():

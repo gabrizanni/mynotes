@@ -382,12 +382,14 @@ def test_new_jobs_freeze_risk_policy_while_historical_snapshots_keep_theirs(tmp_
     cfg=ws.configuration_store().load();cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'high'}
     ws.configuration_store().save(cfg)
     new=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2)
-    assert new['risk_policy_version']==3
+    assert new['risk_policy_version']==4
     historical={k:new[k] for k in ('course_code','lectures','course','style','requested_model')}
     old=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=historical)
     assert 'risk_policy_version' not in old
     frozen=plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=new)
-    assert frozen['risk_policy_version']==3 and frozen['fingerprint']==new['fingerprint']
+    assert frozen['risk_policy_version']==4 and frozen['fingerprint']==new['fingerprint']
+    saved_three={**new,'risk_policy_version':3}
+    assert plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=saved_three)['risk_policy_version']==3
     saved_two={**new,'risk_policy_version':2}
     assert plan_batch(ws,'OPS',[1,2],provider='agy',autonomous_organization=True,progressive_protocol=2,writing_snapshot=saved_two)['risk_policy_version']==2
 

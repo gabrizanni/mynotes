@@ -202,6 +202,24 @@ rectification, never an automatic substitute for writing missing content.
 
 ## Explicit source figure restoration
 
+New jobs use delivery policy 4. Selected inspected figures and exact source
+resources share one placement pass. Reference-only mentions do not move the
+primary topic. An explicit selection may set `required_visual: true`; the
+source image must exist before generation and remains required even if a
+classifier calls it text. Historical jobs retain their saved policy.
+
+The bounded review may report a source uncertainty, minor editorial issue or
+optional visual disagreement as a warning. These become native Word comments
+and `COMPLETED_WITH_WARNINGS`; missing content, invalid references and core
+factual errors remain blocking. An approval never rewrites prose.
+
+At a lesson boundary the same review service distinguishes missing source links
+from missing content. It may attach a page only to an exact, supplied explanation
+identified by its unit, block and hash, or add one bounded source-backed passage.
+The original blocks and receipts remain immutable. Closure packets have their
+own durable attempt markers and are replayed locally on resume; they never
+grant another correction of an existing block.
+
 `mynotes visual-review BATCH --workspace PATH --file REVIEW.json` records a local
 restoration on a stopped, unfinished progressive job. It invokes no model and
 never changes accepted units, source prose or automatic correction allowances.

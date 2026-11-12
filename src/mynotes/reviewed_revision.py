@@ -18,7 +18,7 @@ def _read(path):
 
 
 def _signature(block):
-    return risk.digest({k:v for k,v in block.items() if k!='evidence_ids'})
+    return risk.digest({k:v for k,v in block.items() if k not in {'evidence_ids','review_comments'}})
 
 
 def _slots(request, receipt):
@@ -93,7 +93,7 @@ def _apply_packets(request,response,records,directory,*,invoke=None):
     for lecture,targets in records['targets'].items():
         note=next(row['notes'] for row in corrected['lessons'] if row['lecture_id']==lecture)
         unit={'lecture_id':lecture,'blocks':deepcopy(note['blocks']),'visual_delta':[]}
-        edits={};visual_updates={}
+        edits={};visual_updates={};notices=[]
         groups=[];current=[]
         for target in targets:
             try:
@@ -123,19 +123,24 @@ def _apply_packets(request,response,records,directory,*,invoke=None):
                     or file_sha256(attempt)!=saved['attempt_sha256']
                     or _read(attempt)['requested']!=records['requested']):
                 raise WorkflowError('Observed-defect review transport changed')
-            reply=transport.verify_single(attempt,path,risk.review_schema())
+            reply=transport.verify_single(attempt,path,risk.review_schema(request))
             if reply!=saved['response']:raise WorkflowError('Reviewed patch differs from its successful response')
-            risk.apply_review(request,unit,group,reply)
+            changed=risk.apply_review(request,unit,group,reply)
             transport.image_check(request,{'visual_delta':reply['visual_updates']},_read(attempt)['envelope']['source_access'])
             for decision in reply['decisions']:
                 if decision['status']=='patch':edits[int(decision['block_id'][1:])]=risk.replacement_blocks(request,unit,decision)
-            risk.merge_visual_updates(visual_updates,reply['visual_updates'])
+            updated={v['evidence_id'] for v in reply['visual_updates']}
+            risk.merge_visual_updates(visual_updates,[v for v in changed['visual_delta'] if v['evidence_id'] in updated])
+            notices.extend(changed.get('review_notices',[]))
             refs.append({'path':str(result),'sha256':file_sha256(result)})
         note['blocks']=[b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]
         decisions={v['evidence_id']:v for v in note['visual_decisions']}
         for key,update in visual_updates.items():
             decisions[key]={k:v for k,v in update.items() if k!='content_kind'}
         note['visual_decisions']=list(decisions.values())
+        if notices:
+            from .note_assembly import attach_comments
+            attach_comments(note,notices)
     return replace(response,notes=corrected),refs
 
 

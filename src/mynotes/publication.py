@@ -691,6 +691,7 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
         key_terms = _key_terms(blocks)
         qa_heading_added = False
         for original_block in blocks:
+            first_rendered_paragraph=len(document.paragraphs)
             block = deepcopy(original_block)
             for field in ('text', 'question', 'answer'):
                 if isinstance(block.get(field), str) and block['kind'] != 'formula':
@@ -750,6 +751,14 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
                 # reason is an internal inclusion/inspection audit trail.
                 _append_visual(document, visuals[identifier], {**decisions[identifier],
                     'reason': block.get('text') or decisions[identifier].get('reason', 'Relevant course visual')})
+            if original_block.get('review_comments'):
+                paragraphs=document.paragraphs[first_rendered_paragraph:]
+                if not paragraphs and kind=='table':paragraphs=document.tables[-1].cell(0,0).paragraphs
+                if not paragraphs:raise PublicationError('A review comment has no rendered content anchor')
+                paragraph=paragraphs[0]
+                anchor=paragraph.runs[0] if paragraph.runs else paragraph.add_run('')
+                for reason in original_block['review_comments']:
+                    document.add_comment(runs=[anchor],text=str(reason),author='MyNotes',initials='MN')
 
 
 def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, page_break_before: bool = False, language: str = "en", recap_language: str = "it") -> None:
@@ -1272,10 +1281,22 @@ def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float
     return {"pdf": str(pdf), "pages": pages, "renderer": soffice}
 
 
+def _validate_comment_links(archive, document_xml):
+    from xml.etree import ElementTree as ET
+    referenced={n.get(qn('w:id')) for n in ET.fromstring(document_xml).iter(qn('w:commentReference'))}
+    if not referenced:return 0
+    if 'word/comments.xml' not in archive.namelist():
+        raise PublicationError('Word review comments have no content part')
+    known={n.get(qn('w:id')) for n in ET.fromstring(archive.read('word/comments.xml')).iter(qn('w:comment'))}
+    if referenced-known:raise PublicationError('Word review comment references are dangling')
+    return len(referenced)
+
+
 def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected_formula: bool,
                     expected_tables: list[list[list[str]]] | None = None) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         document_xml = archive.read("word/document.xml")
+        _validate_comment_links(archive,document_xml)
         media = [name for name in archive.namelist() if name.startswith("word/media/")]
     start = document_xml.count(f"MYNOTES START {lecture_id}".encode())
     end = document_xml.count(f"MYNOTES END {lecture_id}".encode())

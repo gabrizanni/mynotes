@@ -233,6 +233,9 @@ def validate_unit(request, raw, previous):
 
 def assemble(request, units):
     """Project accepted content and explicit decisions to the existing validator."""
+    if request.batch_context.get('risk_policy_version',1)>=4:
+        from .note_assembly import project_units
+        units=project_units(units)
     lessons = {}; organization = []; visuals = {}
     for unit in units:
         lecture = unit['lecture_id']
@@ -278,7 +281,12 @@ def assemble(request, units):
                 'decision': 'include' if identifier in placed else 'exclude',
                 'inspected': decision['inspected'],
                 'reason': decision['reason'] if decision['decision'] == 'exclude' or identifier in placed else 'No image placement in this lesson; shared source decision retained.'})
-    return {'organization': organization, 'lessons': [{'lecture_id': l, 'notes': n} for l, n in lessons.items()]}
+    result={'organization': organization, 'lessons': [{'lecture_id': l, 'notes': n} for l, n in lessons.items()]}
+    if request.batch_context.get('risk_policy_version',1)>=4:
+        from .note_assembly import compile_notes,apply_notices
+        result=compile_notes(request,result,visuals)
+        result=apply_notices(result,units)
+    return result
 
 
 def source_resource(source):

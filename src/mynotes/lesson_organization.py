@@ -29,7 +29,7 @@ def provisional_choice(item, packs):
 
 
 def validate_links(choice, candidates, packs):
-    allowed = {"owner", "status", "anchor", "structural_review", "reason", "provisional", "uses", "review_before"}
+    allowed = {"owner", "status", "anchor", "structural_review", "reason", "provisional", "uses", "review_before", "required_visual"}
     if not isinstance(choice, dict) or set(choice) - allowed or choice.get("owner") not in candidates or choice.get("status") not in {"taught", "supplement", "material", "deferred"}:
         raise WorkflowError("A slide choice needs an available owner and status taught, supplement, material or deferred")
     if choice.get("status") == "deferred":
@@ -44,6 +44,10 @@ def validate_links(choice, candidates, packs):
         raise WorkflowError("Slide organization needs a nonempty reason")
     if "provisional" in choice and type(choice["provisional"]) is not bool:
         raise WorkflowError("Provisional organization must be a boolean")
+    if 'required_visual' in choice and type(choice['required_visual']) is not bool:
+        raise WorkflowError('Required visual selection must be a boolean')
+    if choice.get('required_visual') and (choice.get('structural_review') or choice['status']=='deferred'):
+        raise WorkflowError('A required source figure cannot be structurally exempted or deferred')
     uses = choice.get("uses", {})
     if not isinstance(uses, dict):
         raise WorkflowError("Slide uses must map lessons to source-bound contributions")
@@ -190,6 +194,7 @@ def integrate_decisions(response, plan, lecture, mapping, *, scope=None):
             ownership[canonical] = {'owner': lecture, 'status': status, 'reason': row['reason'],
                 'uses': {lecture: {'role': 'development' if status == 'taught' else 'supplement',
                                   'reason': row['reason'], 'evidence_ids': [reverse[value] for value in ids]}}}
+        if prior.get('required_visual'):ownership[canonical]['required_visual']=True
     if unresolved - seen:
         raise WorkflowError('Integrated organization omits unresolved visible slide decisions')
     # Inline supplementation anchors come from settled neighbouring concepts.

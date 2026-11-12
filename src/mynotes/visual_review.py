@@ -71,6 +71,14 @@ def apply(notes, request, root, refs, access, review):
         coverage={v['evidence_id']:v for v in owner['evidence_coverage']}
         coverage[identifier]={'evidence_id':identifier,'disposition':'used','reason':decision['reason']}
         owner['evidence_coverage']=list(coverage.values())
+        # The restoration and ordinary source resources share one placement
+        # pass; a newly inserted figure cannot strand its dependent links.
+        if request.batch_context.get('risk_policy_version',1)>=4:
+            from .note_assembly import place_owned_blocks
+            for block in owner['blocks']:
+                if block.get('kind')=='visual' and block.get('visual_id')==identifier:
+                    block.setdefault('source_derivation',{'kind':'source_figure','source_evidence_id':identifier})
+            place_owned_blocks(owner,request.source_pack['evidence'])
     if request.style.get('image_policy')=='none' or request.style.get('image_limit')==0:
         raise ProviderError('Visual review conflicts with the frozen no-image preference')
     limit=request.style.get('image_limit')

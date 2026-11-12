@@ -102,6 +102,17 @@ def run_single(request, instruction=None):
         'For V: targets approve the observation and use visual_updates if the classification/choice needs correction; the narrative will follow later. '
         'Inspect every supplied source image before deciding; distinguish a diagram from its list of labels. '
         'Only emit visual_updates for images actually supplied and inspected in this request. '
+        +('For an unresolved bounded uncertainty or minor editorial issue, return severity=warning and '
+          'issue_code=source_uncertainty, minor_editorial or optional_visual_disagreement. '
+          'Missing substantive content, invalid references and core factual errors remain blocking. '
+          'Do not exclude a selected source diagram merely because its nodes contain text labels. '
+          'For C: targets, distinguish a missing source link from missing content. Compare the supplied source '
+          'against source_link_candidates (prior generated prose is not independent evidence). If already explained, '
+          'approve with blocks=[] and one source_links entry copying the candidate part_index, block_index and '
+          'base_sha256, plus the C: evidence_id and reason. Never alter the existing explanation. Otherwise patch '
+          'with one short source-backed paragraph or bullet block, coverage_role=supplement, keeping open questions '
+          'open and adding no outside answer. Do not duplicate concepts already explained in the candidates. '
+          if request.batch_context.get('risk_policy_version',1)>=4 else '')+
         'Return only the decisions and visual_updates schema via finish; maximum 24 KiB JSON.\n'+contextual+inputs)
     if instruction is not None: prompt=instruction+'\n'+inputs
     answer = {}; access = []; started = AttemptStart(); completed = None
@@ -384,6 +395,20 @@ def verify_receipt(record, workspace_root):
         decoded=_normalize_transport_notes(_decode_agy(env),wire.schema(request),provider='agy')
         if decoded!=raw['raw']:raise ProviderError('Raw unit differs from transport')
         unit,_=wire.validate_unit(request,decoded,units)
+        if request.batch_context.get('risk_policy_version',1)>=4:
+            for item in row['reviews']:
+                review=Path(item['path'])
+                if review.is_symlink() or not review.resolve().is_relative_to(path.parent) or file_sha256(review)!=item['sha256']:
+                    raise ProviderError('Risk review changed')
+            local=local_validation_request(replace(request,run_dir=path.parent.parent))
+            inspected=[*request.batch_context.get('cached_visual_inspections',[]),
+                       *[v for previous in [*units,unit] for v in previous['visual_delta']]]
+            def forbidden(_):raise ProviderError('Receipt verification cannot invoke a provider')
+            effective,refs=review_unit(local,unit,path.parent,forbidden,inspected_visuals=inspected,previous_units=units)
+            if refs!=row['reviews'] or effective!=row['effective']:
+                raise ProviderError('Effective unit differs from its certified patches')
+            image_check(request,effective,saved['access']);wire.validate_content(request,effective,units);units.append(effective)
+            continue
         effective=deepcopy(unit);edits={};visuals={}
         expected=packets(request,unit,unit_path.parent/'verification',previous_units=units)
         if len(expected)!=len(row['reviews']):raise ProviderError('Required risk review packets are missing')
@@ -395,12 +420,16 @@ def verify_receipt(record, workspace_root):
                 raise ProviderError('Required risk review context changed')
             if review_data['task']['targets']!=expected[review_index]:raise ProviderError('Required risk review scope changed')
             if file_sha256(Path(review_data['attempt']))!=review_data['attempt_sha256']:raise ProviderError('Risk attempt changed')
-            reply=verify_single(review_data['attempt'],review.parent,review_schema())
+            reply=verify_single(review_data['attempt'],review.parent,review_schema(request))
             if reply!=review_data['response'] or review_data['task']['unit_sha256']!=digest(unit):raise ProviderError('Risk correction source changed')
             changed=apply_review(request,unit,review_data['task']['targets'],reply)
             for d in reply['decisions']:
-                if d['status']=='patch':edits[int(d['block_id'][1:])]=replacement_blocks(request,unit,d)
-            merge_visual_updates(visuals,reply['visual_updates'])
+                if d['status']=='patch' and d['block_id'].startswith('B'):edits[int(d['block_id'][1:])]=replacement_blocks(request,unit,d)
+            updated={v['evidence_id'] for v in reply['visual_updates']}
+            merge_visual_updates(visuals,[v for v in changed['visual_delta'] if v['evidence_id'] in updated])
+            if changed.get('review_notices'):effective.setdefault('review_notices',[]).extend(changed['review_notices'])
+            for field in ('source_links','coverage_repairs'):
+                if changed.get(field):effective.setdefault(field,[]).extend(changed[field])
         effective['blocks']=[b for i,block in enumerate(unit['blocks']) for b in edits.get(i,[deepcopy(block)])]
         effective['visual_delta']=[visuals.pop(v['evidence_id'],v) for v in unit['visual_delta']]
         effective['visual_delta'].extend(visuals.values())

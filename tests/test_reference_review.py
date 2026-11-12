@@ -93,7 +93,8 @@ def test_stopped_real_controller_can_rectify_refs_deliver_and_reuse_without_mode
 
 
 def test_page_attachment_derives_organization_receipts_without_overwriting_previous_ones(tmp_path,monkeypatch):
-    from mynotes import notes_run,publication,batch_documents
+    from mynotes import notes_run,publication,batch_documents,batch
+    monkeypatch.setattr(batch,'CURRENT_RISK_POLICY',3)  # Historical explicit-recovery contract.
     from test_autonomous_organization import prepared
     from test_progressive_v2 import install_fake_transport
     from test_publication import fake_render
