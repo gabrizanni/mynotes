@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from .providers import ProviderError, _context, notes_schema
@@ -57,16 +58,31 @@ def risks(block, evidence, style, quality, *, policy=1):
     if quality in {'approfondito', 'revisione'}:
         return ['extended_source_review']
     kind = block.get('kind')
-    text = json.dumps({k: block[k] for k in ('text','question','answer','items','rows','expression') if k in block}, ensure_ascii=False)
+    content={k:block[k] for k in ('text','question','answer','items','rows','expression') if k in block}
+    if policy>=5:
+        from .evidence_refs import without_source_citations
+        def clean(value):
+            if isinstance(value,str):return without_source_citations(value,evidence)
+            if isinstance(value,list):return [clean(v) for v in value]
+            return value
+        content={k:clean(v) for k,v in content.items()}
+    text = json.dumps(content, ensure_ascii=False)
     source = ' '.join(str(evidence.get(i, {}).get('content', evidence.get(i, {}).get('text',''))) for i in block.get('evidence_ids', []))
     result = []
     if kind in {'formula','table','visual'}: result.append(kind)
-    if re.search(r'\d|[%€$£]', text): result.append('numbers_or_dates')
+    if re.search(r'\d|[%€$£]', text) or (policy>=5 and re.search(r'\b(?:hundreds?|thousands?|millions?|billions?|cento|mille|milioni)\b',text,re.I)): result.append('numbers_or_dates')
     if kind == 'recap': result.append('recap_language_and_summary')
     if re.search(r'\b(always|never|inevitab\w*|proves?|theorem\w*|legally|liab\w*|causes|caused|sempre|mai|dimostr\w*|teorem\w*|legalmente|provoca\w*)\b|\b(leads? to|results? in|strict liability)\b|\b(show\w*|establish\w*).{0,50}\bcausal', text, re.I):
         result.append('strong_causal_or_normative_claim')
     names = re.findall(r'\b(?:[A-Z][A-Za-zÀ-ÿ’-]+(?:\s+[A-Z][A-Za-zÀ-ÿ’-]+)+|[A-Z]{2,})\b', text)
-    if kind not in {'heading','overview'} and any(name.casefold() not in source.casefold() for name in names): result.append('unmatched_name_or_acronym')
+    if policy>=5:
+        def canonical(value):
+            value=re.sub(r'\[\[term:([^\]]+)\]\]',r'\1',value)
+            return re.sub(r'\s+',' ',re.sub(r'[-–—]', ' ',unicodedata.normalize('NFKC',value).casefold().replace('’',"'")))
+        named_source=canonical(source)
+        unmatched=any(not re.search(r'(?<!\w)'+re.escape(canonical(name))+r'(?!\w)',named_source) for name in names)
+    else:unmatched=any(name.casefold() not in source.casefold() for name in names)
+    if kind not in {'heading','overview'} and unmatched:result.append('unmatched_name_or_acronym')
     if any(evidence.get(i, {}).get('uncertainty_codes') for i in block.get('evidence_ids', [])):
         result.append('source_uncertainty')
     if policy >= 2 and kind not in {'heading','overview'}:
@@ -371,7 +387,8 @@ def _review_pass(request,unit,root,invoke,tasks,*,previous_units=(),offset=0):
     effective = deepcopy(unit); refs = []
     # Apply each packet in original coordinates, then combine by raw index.
     edits = {}; visual_updates = {}
-    for number, targets in enumerate(tasks,start=offset):
+    def resolve(item):
+        number, targets = item
         packet_dir = directory / f'{number:03d}'
         if not getattr(request,'local_only',False):packet_dir.mkdir(parents=True, exist_ok=True)
         path = packet_dir / 'review.json'; task = review_task(request,targets,unit,previous_units)
@@ -389,11 +406,28 @@ def _review_pass(request,unit,root,invoke,tasks,*,previous_units=(),offset=0):
                 raise ProviderError('NEEDS_REVIEW: this packet lacks a saved result; no new model call permitted')
             if (packet_dir/'started.json').exists():
                 raise ProviderError('NEEDS_REVIEW: this risk packet already consumed its automatic attempt')
+            from .review_dispatch import cancel_event
+            cancellation=cancel_event.get()
+            if cancellation is not None and cancellation.is_set():
+                raise ProviderError('Review cancelled before consuming an attempt')
             atomic_json_write(packet_dir/'started.json', task)
             response, attempt = invoke(packet_request(request, targets, unit, packet_dir,previous_units=previous_units))
             saved = {'task':task,'response':response,'attempt':str(attempt),'attempt_sha256':file_sha256(attempt)}
             atomic_json_write(path, saved)
+        # Validate before releasing the slot; blocking replies stop dispatch.
         changed = apply_review(request, unit, targets, saved['response'])
+        return path, saved, changed
+
+    indexed = list(enumerate(tasks,start=offset))
+    if request.batch_context.get('risk_policy_version',1)>=5 and not getattr(request,'local_only',False):
+        from .review_dispatch import dispatch
+        def resources(item):
+            return {key for target in item[1] for key in [
+                target['block_id'], *['visual:'+i for i in target['block'].get('evidence_ids',[]) if i.startswith('S')]]}
+        resolved = dispatch(indexed, resolve, resources)
+    else:
+        resolved = map(resolve,indexed)
+    for path, saved, changed in resolved:
         for decision in saved['response']['decisions']:
             if decision['status'] == 'patch' and decision['block_id'].startswith('B'):
                 index = int(decision['block_id'][1:])

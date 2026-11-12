@@ -68,7 +68,7 @@ evidence or editable targets. They count toward the same input limit and their
 hash is bound to the saved review. Standard/Base and historical jobs receive no
 extra narrative context or calls.
 
-New progressive jobs freeze risk policy version 3. It also recognizes the
+Progressive jobs with risk policy version 3 recognize the
 imported transcript's actual `needs_review` flag, spelled-out quantities and
 parenthetical specific examples absent from the cited text. UNKNOWN speakers
 and technical terms alone still do not trigger review. A flagged ASR aside does
@@ -255,3 +255,19 @@ real transcript/PDF copies, rendered documents and detailed reports belong
 outside this public repository. A real-provider test must separately report
 requested and actual model/effort, source coverage, Word rendering, usage and
 reuse. Passing offline tests does not complete that verification.
+
+## Bounded review dispatch (policy 5, opt-in during development)
+
+Policy 5 excludes known parenthesized/bracketed source IDs from numeric risk
+selection without changing the stored text, math, code or unknown references.
+Names use normalized typography and word boundaries; actual quantities remain
+review targets. Earlier job policies retain their original selection.
+
+Within one section, up to two independent review packets may run concurrently.
+Packets sharing a block or a potentially editable source graphic stay ordered.
+Results merge in source order, with the same block hashes and durable receipts.
+A blocking reply cancels sibling transports and stops dispatching queued work;
+queued work has no attempt marker. Completed receipts remain reusable without
+another model call. Source-coverage closure still follows the content pass.
+This dispatcher does not yet overlap writing with review; new jobs continue to
+use policy 4 until the complete pipeline is qualified.

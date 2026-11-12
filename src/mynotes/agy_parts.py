@@ -222,6 +222,7 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                 next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None,
                 abort_errors: bool = False, log_file: Path | None = None) -> subprocess.CompletedProcess:
     """One process/conversation; separate stderr, bounded turns, group cleanup."""
+    from .review_dispatch import cancel_event
     outputs = [bytearray(), bytearray()]
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                cwd=cwd, env=env, start_new_session=True)
@@ -241,6 +242,9 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
             selector.register(process.stdout, selectors.EVENT_READ, 0)
             selector.register(process.stderr, selectors.EVENT_READ, 1)
             while selector.get_map():
+                cancellation = cancel_event.get()
+                if cancellation is not None and cancellation.is_set():
+                    raise ProviderCancelledError('Review stopped after another blocking packet')
                 now = time.monotonic()
                 if abort_errors and log_file is not None and log_file.is_file():
                     with log_file.open() as native_log:

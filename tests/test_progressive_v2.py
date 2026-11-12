@@ -224,9 +224,11 @@ def test_complete_error_cannot_publish_or_restart_a_risk_packet(tmp_path,monkeyp
     assert calls==[1]
 
 
-def test_stream_reconstruction_and_reopen_without_any_model(tmp_path,monkeypatch):
+@pytest.mark.parametrize("policy",[1,5])
+def test_stream_reconstruction_and_reopen_without_any_model(tmp_path,monkeypatch,policy):
     from mynotes import agy_parts
     req=request(tmp_path)
+    req=replace(req,batch_context={**req.batch_context,'risk_policy_version':policy})
     monkeypatch.setattr(a,'command',lambda *args:['synthetic'])
     monkeypatch.setattr(a,'_stage_agy_writer',lambda path:None)
     calls=[]

@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from threading import Lock
 import time
 
 from . import progressive_wire as wire
@@ -232,6 +233,11 @@ def generate(request):
     started=AttemptStart();completed=None;last={};writer_started=False
     def save(**updates):
         state.update(updates);state['units']=refs;atomic_json_write(state_path,state)
+    access_lock = Lock()
+    def record_access(row):
+        with access_lock:
+            access.append(row)
+            with (root/'access.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
     def observe(event):
         if event.get('event')=='init':
             cid=event.get('conversation_id')
@@ -240,14 +246,11 @@ def generate(request):
         step=event.get('step_update',{})
         if step.get('state')=='DONE':save(last_step=step.get('step_index'),last_activity=step.get('step_type'))
         row=observed_access(event,directory)
-        if row:
-            access.append(row)
-            with (root/'access.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
+        if row:record_access(row)
     def invoke_review(review_request):
         reply,attempt=run_single(review_request)
         for row in json.loads(attempt.read_text())['envelope']['source_access']:
-            access.append(row)
-            with (root/'access.jsonl').open('a') as f:f.write(json.dumps(row)+'\n')
+            record_access(row)
         return reply,attempt
     def accept(envelope):
         nonlocal last
