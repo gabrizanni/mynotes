@@ -279,6 +279,9 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
 
 def install_fake_transport(monkeypatch, calls, invalid=False, transform=None):
     from mynotes import agy_parts
+    from mynotes import providers
+    lookup=providers.provider_executable
+    monkeypatch.setattr(providers,'provider_executable',lambda name:'/synthetic/agy' if name=='agy' else lookup(name))
     from mynotes.providers import _save_attempt
     from mynotes.execution import AttemptStart
     from test_autonomous_organization import IntegratedWriter

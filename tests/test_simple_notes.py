@@ -12,6 +12,8 @@ from test_publication import fake_render
 
 
 def install(monkeypatch, calls, *, fail=False, transform=None):
+    lookup=providers.provider_executable
+    monkeypatch.setattr(providers,'provider_executable',lambda name:'/synthetic/agy' if name=='agy' else lookup(name))
     def run(command,prompt,accept,**kwargs):
         calls.append(1)
         request=active[0]
