@@ -1,6 +1,8 @@
-The joint writer permits one observed native stream-idle recovery in the same
-Agy invocation. A second native retry remains blocking; a final ERROR is never
-publishable. Do not launch another whole generation to replace it.
+New joint topic jobs save each successful response before continuing in the
+same conversation. An explicit interruption preserves the accepted prefix for
+notes --resume. An actual provider ERROR or truncation stays blocked; never
+restart the whole writing task or reuse the ERROR payload as successful notes.
+Historical single-response jobs retain their original recovery behavior.
 A stream-idle log does not establish a universal Google API deadline. Model-step
 wall time is not measured thinking time. Do not promise fixed Medium latency or
 identical quality across effort settings; retain the user's selected model.

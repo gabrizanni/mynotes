@@ -1,5 +1,5 @@
-New complete notes requests use one joint writing response for all selected
-lessons. Shared slide pages appear once beside all complete transcripts. The
+New complete notes requests use one joint writing task for all selected
+lessons, returned in a few broad topic groups in the same conversation. Shared slide pages appear once beside all complete transcripts. The
 writer integrates lecture clarification into each topic's main explanation;
 later lessons add only distinct developments and short references.
 Standard uses local checks and warning comments only: do not start a model
@@ -7,8 +7,9 @@ review, model repair or another writing request to perfect its output. Base
 retains mandatory local checks; extended quality levels are explicit choices.
 Use the ordinary notes command through delivery. Historical progressive-v2 jobs
 keep their recorded protocol and correction limits when resumed. New requests
-have no section queue or six/twelve-block writing turns. A successful provider
-response is saved before local processing; ERROR is never publishable.
+have no reviewer queue or six/twelve-block cap. Each successful topic response
+is saved before continuing; ERROR is never publishable. Resume an explicitly
+interrupted job from its saved topics with notes --resume, without repeating them.
 Standard reports missing ordinary bold and possible repeated recall as warnings,
 not reasons for another model turn. Source-only video pages retain their exact
 titles/links; they do not require invented video contents or teaching citations.
@@ -113,7 +114,7 @@ status material) only for visually inspected non-teaching covers/dividers; never
 infer this from short text or exempt diagrams. Pages with code/data are not covers.
 This uses the same source review,
 not another writing/review phase. Then resume the same batch.
-Ordinary notes requests organize all selected lessons in one writing response,
+Ordinary notes requests organize all selected lessons in one shared writing task,
 using complete transcripts and a deduplicated shared deck. The writer assigns
 one owner per page; the program verifies source links and saves organization
 and image decisions. Do not independently read every transcript and slide in

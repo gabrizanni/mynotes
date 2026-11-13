@@ -11,7 +11,7 @@ from test_autonomous_organization import prepared,IntegratedWriter
 from test_publication import fake_render
 
 
-def install(monkeypatch, calls, *, fail=False, transform=None):
+def install(monkeypatch, calls, *, fail=False, transform=None, split=False, interrupt=False):
     lookup=providers.provider_executable
     monkeypatch.setattr(providers,'provider_executable',lambda name:'/synthetic/agy' if name=='agy' else lookup(name))
     def run(command,prompt,accept,**kwargs):
@@ -20,15 +20,44 @@ def install(monkeypatch, calls, *, fail=False, transform=None):
         assert request.batch_context['progressive_protocol']==3
         result=IntegratedWriter().generate(request).notes
         if transform:transform(result,request)
-        envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(result)}
-        assert accept(envelope) is None
-        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in [{'event':'init','conversation_id':'one'},{'event':'result','result':envelope}]),'')
+        events=[{'event':'init','conversation_id':'one'}]
+        kwargs['on_event'](events[0])
+        if split:
+            block=result['lessons'][0]['notes']['blocks'][1]
+            for index in range(13):
+                result['lessons'][0]['notes']['blocks'].insert(1,{'kind':'paragraph','coverage_role':'full',
+                    'text':f'Distinct source-supported development {index}.','evidence_ids':block['evidence_ids']})
+            portions=[{'lessons':[row],'organization':[c for c in result['organization'] if c['owner']==row['lecture_id']]}
+                      for row in result['lessons']]
+            if split=='same_lesson':
+                first=deepcopy(portions[0]);second=deepcopy(portions[0])
+                first['lessons'][0]['notes']['blocks']=first['lessons'][0]['notes']['blocks'][:14]
+                first['lessons'][0]['notes']['review_questions']=[]
+                note=second['lessons'][0]['notes'];note['blocks']=note['blocks'][14:]
+                note.update(title='',summary='',evidence_coverage=[],visual_decisions=[])
+                second['organization']=[]
+                portions=[first,second,portions[1]]
+        else:portions=[result]
+        first=1 if '--conversation' in command else 0
+        for index in range(first,len(portions)):
+            part={'part_index':index,'complete':index==len(portions)-1,'next_topic':'' if index==len(portions)-1 else 'Next lesson', 'result':portions[index]}
+            envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(part)}
+            events.append({'event':'result','result':envelope})
+            following=accept(envelope)
+            assert (following is None)==part['complete']
+            if following is not None:assert 'APPLICATION-STAGED REQUEST INPUTS' not in following
+            if interrupt and index==0:
+                from mynotes.providers import ProviderCancelledError
+                error=ProviderCancelledError('Explicit test interruption');error.output='\n'.join(json.dumps(e) for e in events);error.stderr=''
+                raise error
+        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in events),'')
     active=[];original=simple.generate
     def generate(req):active[:]=[req];return original(req)
     monkeypatch.setattr(simple,'generate',generate)
     monkeypatch.setattr('mynotes.agy_progressive.command',lambda *a:['synthetic'])
     monkeypatch.setattr(simple,'_stage_agy_writer',lambda *a:None)
     monkeypatch.setattr(agy_parts,'run_session',run)
+    monkeypatch.setattr(agy_parts,'provider_executable',lambda _:'/synthetic/agy')
     monkeypatch.setattr('mynotes.agy_progressive.run_single',lambda *a:pytest.fail('No Standard reviewer'))
     monkeypatch.setattr('mynotes.batch_recovery.repair_coverage',lambda *a,**kw:pytest.fail('No Standard model repair'))
 
@@ -72,6 +101,32 @@ def test_error_retains_attempt_and_cannot_restart(tmp_path,monkeypatch):
     assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))
     notes_run.run_notes(ws,'OPS',resume=result['batch_id'])
     assert calls==[1]
+
+
+@pytest.mark.parametrize('interrupt',[False,True])
+@pytest.mark.parametrize('split',[True,'same_lesson'])
+def test_broad_topics_deliver_without_block_cap_and_resume_saved_prefix(tmp_path,monkeypatch,interrupt,split):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    calls=[];install(monkeypatch,calls,split=split,interrupt=interrupt)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    if interrupt:
+        assert result['status'] not in {'COMPLETED','COMPLETED_WITH_WARNINGS'}
+        saved=next(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/writing-parts/*/part-000.json'))
+        original=saved.read_bytes()
+        result=notes_run.run_notes(ws,'OPS',resume=result['batch_id'])
+        assert saved.read_bytes()==original
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
+    assert len(result['delivery']['files'])==3 and len(calls)==1+int(interrupt)
+    assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused']
+    assert len(calls)==1+int(interrupt)
+    receipts=list(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/writing-parts/*/complete.json'))
+    assert len(receipts)==1
+    receipt=json.loads(receipts[0].read_text())
+    assert receipt['block_limit'] is None and len(receipt['parts'])==(3 if split=='same_lesson' else 2)
 
 
 def test_preview_sheets_are_grouped_hash_bound_but_do_not_claim_full_inspection(tmp_path):

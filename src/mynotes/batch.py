@@ -1228,6 +1228,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         guard = _invocation_guard(root, phase, runtime, lectures, continuity)
                         resumable_parts = (_agy_uses_parts(active)
                             and (any(group_dir.glob('writing-parts/*/state.json')) or (group_dir/'progressive-v2/state.json').is_file()))
+                        if progressive_protocol==3 and active.requested.provider=='agy':
+                            resumable_parts = any(json.loads(path.read_text()).get('writing_contract')=='joint_topics_v1'
+                                                  for path in group_dir.glob('writing-parts/*/state.json'))
                         explicit_external_resume = (batch_id is not None and guard.exists()
                             and any(_read(guard).get(key) is True for key in ('paused_quota', 'paused_auth')))
                         if (guard.exists() or started_path.exists()) and not resumable_parts and not explicit_external_resume:

@@ -1,8 +1,9 @@
 # Current notes flow and limits
 
-MyNotes prepares sources locally, requests one joint writing response, then
-checks and builds Word documents. New Standard jobs have no progressive section
-queue, model reviewer, automatic model correction or whole-writing retry.
+MyNotes prepares sources locally, writes joint notes in a few broad topic groups
+in the same conversation, then checks and builds Word documents. Each successful
+group is saved before requesting the next. Standard has no model reviewer,
+automatic model correction or whole-writing retry.
 
 ## Roles and instructions
 
@@ -11,7 +12,8 @@ queue, model reviewer, automatic model correction or whole-writing retry.
   It does not independently reread the full sources or perfect usable notes.
 - The writer reads complete selected transcripts and one copy of each shared
   slide page. It writes structured content, chooses figures and assigns the
-  main explanation of each topic to one lesson in the same request.
+  main explanation of each topic to one lesson in the shared task. Text sources
+  are read once; future figure decisions are left to their topic.
 - The program preserves responses, checks source links, resolves demonstrable
   metadata, assembles Word, validates its rendering and handles publication.
 
@@ -88,14 +90,13 @@ to conceal missing content or fabricate evidence.
   receipts remain retained.
 - Provider `ERROR` results are preserved for diagnosis and never published.
   There is no automatic full-generation restart to make a failed run look good.
-- A new joint writer permits the first observed native Agy stream-idle retry
-  inside the same invocation/conversation. This may repeat the last provider
-  model request; it does not start another MyNotes generation. A second observed
-  retry stops the process. Only a final successful result can be delivered.
+- New joint topic writing saves hash-bound successful responses and resumes an
+  explicitly interrupted conversation from the next topic. Provider ERROR or
+  truncation blocks continuation; earlier groups remain preserved.
 - Native `error_message` events may omit diagnostic text. The adapter classifies
   the exact error step from Agy's local conversation database, read-only. Output
   truncation and unknown errors stop immediately; duplicate events and log lines
-  do not grant extra transport retries.
+  do not trigger hidden writing restarts.
 - New joint requests return short source aliases and keep duplicate coverage and
   organization-reference registers empty. The program derives those registers
   from existing block citations without adding citations, teaching claims or
@@ -107,7 +108,11 @@ to conceal missing content or fabricate evidence.
 - `--regenerate` is an explicit new revision, incompatible with `--resume`.
   Historical jobs retain their original schema, checkpoints and correction
   allowances; reopening does not reset attempts.
-- New joint writing has no six/twelve-block units or separate planning call.
+- New joint writing has no six/twelve-block cap or separate planning call.
+  Topic groups aim for 1000-2000 words and about 24 KiB of JSON; these are
+  writing targets, not a model capacity claim or permission to cut content.
+  The existing sixteen-return safety guard remains; exhaustion retains the
+  unfinished work instead of declaring completeness.
   Standard has no corrective model allowance because it starts no such call.
 - Verified context/output limits are enforced before invocation. If Agy does
   not expose them, the request reports `UNVERIFIED_MODEL_LIMITS`; it does not
