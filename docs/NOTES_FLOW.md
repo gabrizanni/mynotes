@@ -92,6 +92,15 @@ to conceal missing content or fabricate evidence.
   inside the same invocation/conversation. This may repeat the last provider
   model request; it does not start another MyNotes generation. A second observed
   retry stops the process. Only a final successful result can be delivered.
+- Native `error_message` events may omit diagnostic text. The adapter classifies
+  the exact error step from Agy's local conversation database, read-only. Output
+  truncation and unknown errors stop immediately; duplicate events and log lines
+  do not grant extra transport retries.
+- New joint requests return short source aliases and keep duplicate coverage and
+  organization-reference registers empty. The program derives those registers
+  from existing block citations without adding citations, teaching claims or
+  semantic certification. Narrative, source text and visual decisions stay intact;
+  retained historical registers remain unchanged.
 - Full-source reads are required for charts, diagrams, tables, formulas and
   uncertain images even when excluded from Word, and for substantively cited
   image-only pages. The writer receives these requirements before writing.

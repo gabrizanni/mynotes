@@ -11,6 +11,34 @@ from .execution import AttemptStart, prevent_idle_sleep
 from .utils import file_sha256
 
 
+def writing_schema(request):
+    """Compact transport bookkeeping; the canonical saved contract is unchanged."""
+    schema=deepcopy(request.response_schema)
+    note=schema['properties']['lessons']['items']['properties']['notes']
+    note['properties']['evidence_coverage']['maxItems']=0
+    choice=schema['properties']['organization']['items']['properties']
+    identifiers=[r['evidence_id'] for r in request.batch_context['ownership']]
+    choice['canonical_slide_id']={'type':'string',**({'enum':identifiers} if identifiers else {})}
+    if not identifiers:
+        schema['properties']['organization']['maxItems']=0
+    choice['evidence_ids']['maxItems']=0
+    return schema
+
+
+def derive_coverage(request, result):
+    """Record actual citations, not a claim of semantic completeness or teaching."""
+    for row in result['lessons']:
+        note=row['notes']
+        if note['evidence_coverage']:
+            continue  # Retained historical responses keep their original ledger.
+        used={i for block in note['blocks'] for i in block.get('evidence_ids',[])}
+        note['evidence_coverage']=[{'evidence_id':source['id'],
+            'disposition':'used' if source['id'] in used else 'uncertain',
+            'reason':'Derived from explicit block citations; not semantic certification.' if source['id'] in used else
+                     'Not explicitly cited in this lesson; substantive coverage is checked separately.'}
+            for source in request.source_pack['evidence'] if source['id'].startswith(('S','H','W'))]
+
+
 def certified(record, request):
     if record.get('error') or record.get('returncode')!=0 or record.get('requested')!=asdict(request.requested):
         raise ProviderError('Joint writing transport failed or requested settings changed')
@@ -25,6 +53,7 @@ def project(request, notes, *, access=None, preview_sheets=None):
     from .source_organization import reconcile
     from .note_assembly import compile_notes
     result=deepcopy(notes)
+    derive_coverage(request,result)
     notices=[]
     if access is not None:
         from .source_inspection import validate
@@ -101,7 +130,8 @@ def generate(request):
     context+='\nThe declared preview_sheets are for selection only. Inspect grouped previews once. Open full image_path for every chart, diagram, table, formula or uncertain image, EVEN IF you exclude it from the Word; explaining it in prose does not waive reading the source. Also open every included figure and every cited textless source. Covers/separators may be classified from an opened grouped preview. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection. Complete these source reads before finish, grouping independent image reads and avoiding repeated reads.'
     if unreadable:
         context+='\nImage-only source IDs requiring full reading when substantively cited: '+', '.join(unreadable)+'.'
-    args=command(request,request.response_schema,root/'joint-provider.log')
+    context+='\nOUTPUT BOOKKEEPING: use compact S source IDs in organization.canonical_slide_id, not long content hashes. Return evidence_coverage=[] and organization evidence_ids=[]; the application derives these duplicate registers from your actual block citations. A taught page MUST have its S ID and supporting current-lesson T references together in its substantive narrative blocks; otherwise use supplement without claiming it was spoken. Keep all substantive block citations, complete explanations, visual decisions and uncertainty statements. Do not repeat the same content in legacy parallel fields. This transport rule supersedes instructions to enumerate evidence_coverage.'
+    args=command(request,writing_schema(request),root/'joint-provider.log')
     from .visual_memory import certificate_access
     access=certificate_access(request.batch_context.get('cached_visual_inspections',[]),asdict(request.requested))
     answer={};envelopes=[];completed=None;started=AttemptStart();recovery_events=[]

@@ -15,10 +15,12 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+from uuid import UUID
 from typing import Callable
 
 from .providers import (ProviderError, ProviderCancelledError, ProviderQuotaError,
@@ -217,6 +219,31 @@ def _wire(prompt: str) -> bytes:
     return (json.dumps({'event':'user','message':{'content':prompt}}, ensure_ascii=True)+'\n').encode()
 
 
+def native_error_message(step: dict) -> str:
+    """Classify one native error record when the stream omits its message.
+
+    Read only the exact error step, never conversation reasoning or other chats.
+    Unknown/missing diagnostics fail closed instead of permitting hidden retries.
+    """
+    try:
+        identifier = str(UUID(step['conversation_id']))
+        index = step['step_index']
+        if identifier != step['conversation_id'] or type(index) is not int or index < 0:
+            return 'Unclassified native provider error'
+        path = Path.home()/'.gemini/antigravity-cli/conversations'/f'{identifier}.db'
+        with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=.2) as db:
+            row = db.execute('SELECT step_type, step_payload FROM steps WHERE idx=?', (index,)).fetchone()
+        if row and row[0] == 17:
+            payload = bytes(row[1])
+            for phrase in (b'Your previous response was cut off because it exceeded the output token limit',
+                           b'The stream was interrupted. Please continue the task you were working on.'):
+                if phrase in payload:
+                    return phrase.decode()
+    except (KeyError, ValueError, TypeError, sqlite3.Error, OSError):
+        pass
+    return 'Unclassified native provider error'
+
+
 def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | None], *, cwd: str, env: dict,
                 total_seconds: float = TOTAL_SECONDS, first_seconds: float = FIRST_TURN_SECONDS,
                 next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None,
@@ -233,17 +260,17 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         previous = signal.signal(signal.SIGTERM, interrupted)
     started = turn_started = time.monotonic(); turn_limit = first_seconds
     pending = b''; finished = False; nudged = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
-    log_position = 0; failure_tail = ''
+    log_position = 0; failure_tail = ''; transport_steps = set(); error_steps = set()
     def provider_failure(message):
         nonlocal failure_tail
         failure_tail=(failure_tail+message)[-4096:]
-        if stream_recovery and re.search(r'stream idle timeout',message,re.I) and not re.search(r'output token limit|response was cut off',message,re.I):
+        if stream_recovery and re.search(r'stream idle timeout|The stream was interrupted',message,re.I) and not re.search(r'output token limit|response was cut off',message,re.I):
             attempts=[int(n) for n in re.findall(r'attempt (\d+) failed',failure_tail,re.I)]
-            if max(attempts,default=1)<=1:
+            if max([len(transport_steps), *attempts],default=1)<=1:
                 if on_event is not None:
-                    on_event({'event':'transport_recovery','kind':'stream_idle_timeout','maximum_internal_retries':1})
+                    on_event({'event':'transport_recovery','kind':'stream_interruption','maximum_internal_retries':1})
                 return
-        if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|attempt \d+ failed.*retrying', message, re.I):
+        if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|The stream was interrupted|Unclassified native provider error|attempt \d+ failed.*retrying', message, re.I):
             raise ProviderError('Provider interrupted or truncated this unit; no internal restart permitted: ' + message[:500])
     try:
         process.stdin.write(_wire(prompt)); process.stdin.flush()
@@ -297,6 +324,14 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                         except (ValueError, UnicodeError) as error: raise ProviderError('Invalid Agy streaming event') from error
                         if on_event is not None: on_event(event)
                         step = event.get('step_update', {})
+                        if abort_errors and step.get('step_type') == 'error_message' and step.get('state') == 'DONE':
+                            identity = (step.get('conversation_id'), step.get('step_index'))
+                            if identity not in error_steps:
+                                error_steps.add(identity)
+                                diagnostic = native_error_message(step)
+                                if 'The stream was interrupted' in diagnostic:
+                                    transport_steps.add(identity)
+                                provider_failure(diagnostic)
                         if event.get('event') == 'error' or step.get('step_type') == 'error':
                             provider_failure(json.dumps(event))
                         progress = (step.get('step_index'), step.get('step_type'))

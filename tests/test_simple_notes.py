@@ -96,6 +96,53 @@ def test_new_joint_contract_never_activates_legacy_parts_even_when_forced(tmp_pa
     assert providers._agy_uses_parts(req) is False
 
 
+def test_compact_bookkeeping_preserves_content_and_canonical_contract(tmp_path):
+    from test_progressive_v2 import request,unit
+    from mynotes import progressive_wire as wire
+    from mynotes.batch import batch_notes_schema
+    req=replace(request(tmp_path),response_schema=batch_notes_schema(autonomous_organization=True))
+    req.batch_context['ownership']=[{'evidence_id':i,'canonical_slide_id':'deck:'+i} for i in ('S001','S002')]
+    original=deepcopy(req.response_schema)
+    schema=simple.writing_schema(req)
+    assert schema['properties']['organization']['items']['properties']['canonical_slide_id']['enum']==['S001','S002']
+    assert schema['properties']['lessons']['items']['properties']['notes']['properties']['evidence_coverage']['maxItems']==0
+    assert req.response_schema==original
+    without_slides=replace(req,batch_context={**req.batch_context,'ownership':[]})
+    empty=simple.writing_schema(without_slides)['properties']['organization']
+    assert empty['maxItems']==0 and 'enum' not in empty['items']['properties']['canonical_slide_id']
+    one,_=wire.validate_unit(req,unit(),[]);two,_=wire.validate_unit(req,unit(1,True),[one])
+    notes=wire.assemble(req,[one,two]);blocks=deepcopy([r['notes']['blocks'] for r in notes['lessons']])
+    for row in notes['lessons']:row['notes']['evidence_coverage']=[]
+    simple.derive_coverage(req,notes)
+    assert [r['notes']['blocks'] for r in notes['lessons']]==blocks
+    for row in notes['lessons']:
+        cited={i for b in row['notes']['blocks'] for i in b['evidence_ids']}
+        assert all((c['disposition']=='used')==(c['evidence_id'] in cited) for c in row['notes']['evidence_coverage'])
+    prior=deepcopy(notes);simple.derive_coverage(req,notes);assert notes==prior
+
+
+def test_compact_response_delivers_using_only_existing_citations(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    def compact(result,request):
+        aliases={r['canonical_slide_id']:r['evidence_id'] for r in request.batch_context['ownership']}
+        for choice in result['organization']:
+            choice['canonical_slide_id']=aliases[choice['canonical_slide_id']]
+            note=next(r['notes'] for r in result['lessons'] if r['lecture_id']==choice['owner'])
+            block=next(b for b in note['blocks'] if b['kind']=='paragraph' and choice['canonical_slide_id'] in b['evidence_ids'])
+            block['evidence_ids'].extend(choice['evidence_ids'])
+            choice['evidence_ids']=[]
+        for row in result['lessons']:row['notes']['evidence_coverage']=[]
+    calls=[];install(monkeypatch,calls,transform=compact)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
+    assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused']
+    assert calls==[1]
+
+
 def test_joint_figure_assembly_uses_source_alias_then_preserves_canonical_ownership(tmp_path):
     from test_progressive_v2 import request,unit
     from mynotes import progressive_wire as wire

@@ -291,6 +291,33 @@ def test_joint_stream_permits_only_first_native_idle_recovery(tmp_path,attempt):
         assert any(e.get('event')=='transport_recovery' for e in events)
 
 
+@pytest.mark.parametrize('diagnostic,count,allowed',[
+    ('The stream was interrupted. Please continue the task you were working on.',1,True),
+    ('The stream was interrupted. Please continue the task you were working on.',2,False),
+    ('Your previous response was cut off because it exceeded the output token limit',1,False),
+    ('Unknown provider failure',1,False),
+])
+def test_native_error_message_without_stream_text(tmp_path,monkeypatch,diagnostic,count,allowed):
+    import sys,os,sqlite3
+    from uuid import uuid4
+    from mynotes.agy_parts import run_session
+    monkeypatch.setattr(Path,'home',lambda:tmp_path)
+    identifier=str(uuid4());directory=tmp_path/'.gemini/antigravity-cli/conversations';directory.mkdir(parents=True)
+    with sqlite3.connect(directory/f'{identifier}.db') as db:
+        db.execute('CREATE TABLE steps (idx INTEGER, step_type INTEGER, step_payload BLOB)')
+        db.executemany('INSERT INTO steps VALUES (?,17,?)',[(index,diagnostic.encode()) for index in range(count)])
+    events=[{'event':'step_update','step_update':{'conversation_id':identifier,'step_index':index,'step_type':'error_message','state':'DONE'}} for index in range(count)]
+    # The same error may be reported repeatedly. It consumes only one recovery.
+    events.insert(1,events[0])
+    code='import sys,json\nsys.stdin.readline()\n'
+    code+='\n'.join('print('+repr(json.dumps(event))+',flush=True)' for event in events)
+    code+='\nprint(json.dumps({"event":"result","result":{"status":"SUCCESS"}}),flush=True)\n'
+    def run():return run_session([sys.executable,'-u','-c',code],'test',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),abort_errors=True,stream_recovery=True,total_seconds=3)
+    if allowed:assert run().returncode==0
+    else:
+        with pytest.raises(ProviderError,match='interrupted or truncated'):run()
+
+
 def install_fake_transport(monkeypatch, calls, invalid=False, transform=None):
     from mynotes import agy_parts
     from mynotes import providers
