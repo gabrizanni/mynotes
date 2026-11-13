@@ -1,14 +1,10 @@
 import Foundation
 
 enum CaptureDates {
-    static func read(_ value: String?) -> Date? {
-        guard let value else { return nil }
-        let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: value) { return date }
-        formatter.formatOptions.insert(.withFractionalSeconds)
-        return formatter.date(from: value)
-    }
-    static func write(_ value: Date) -> String { ISO8601DateFormatter().string(from: value) }
+    private static let cache = CaptureDateCache()
+    static func read(_ value: String?) -> Date? { value.flatMap { cache.read($0) } }
+    static func write(_ value: Date) -> String { cache.write(value) }
+    static func format(_ date: Date, zone: TimeZone, pattern: String) -> String { cache.format(date, zone: zone, pattern: pattern) }
     static func calendarPeriod(_ from: Date, _ through: Date, zone: String) -> (Date, Date)? {
         guard let timeZone = TimeZone(identifier: zone) else { return nil }
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = timeZone
@@ -18,9 +14,47 @@ enum CaptureDates {
     }
     static func label(_ value: String?, zone: String? = nil) -> String {
         guard let date = read(value) else { return "Non disponibile" }
-        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "it_IT")
-        formatter.timeZone = zone.flatMap(TimeZone.init(identifier:)) ?? .current
-        formatter.dateFormat = "dd MMM, HH:mm z"
+        return format(date, zone: zone.flatMap(TimeZone.init(identifier:)) ?? .current, pattern: "dd MMM, HH:mm z")
+    }
+}
+
+// Foundation formatters are expensive to construct. Serialize their use and bound
+// both caches; background decoding and main-thread rendering share the same dates.
+private final class CaptureDateCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let plain = ISO8601DateFormatter()
+    private let fractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions.insert(.withFractionalSeconds)
+        return formatter
+    }()
+    private var dates: [String: Date] = [:]
+    private var formatters: [String: DateFormatter] = [:]
+    func read(_ value: String) -> Date? {
+        lock.lock(); defer { lock.unlock() }
+        if let date = dates[value] { return date }
+        let date = value.contains(".") ? fractional.date(from: value) ?? plain.date(from: value) : plain.date(from: value) ?? fractional.date(from: value)
+        if let date {
+            if dates.count >= 4096 { dates.removeAll(keepingCapacity: true) }
+            dates[value] = date
+        }
+        return date
+    }
+    func write(_ value: Date) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return plain.string(from: value)
+    }
+    func format(_ date: Date, zone: TimeZone, pattern: String) -> String {
+        lock.lock(); defer { lock.unlock() }
+        let key = zone.identifier + "|" + pattern
+        let formatter: DateFormatter
+        if let existing = formatters[key] { formatter = existing }
+        else {
+            formatter = DateFormatter(); formatter.locale = Locale(identifier: "it_IT")
+            formatter.timeZone = zone; formatter.dateFormat = pattern
+            if formatters.count >= 64 { formatters.removeAll(keepingCapacity: true) }
+            formatters[key] = formatter
+        }
         return formatter.string(from: date)
     }
 }
@@ -47,6 +81,7 @@ struct CaptureEvent: Codable, Identifiable {
     var eligibility: String; var reason: String; var localChanges: Bool; var recordingEnabled: Bool
     var sourceEligibility: String; var special: Bool
     var reasonCode: String? = nil
+    var recordingID: String? = nil
     var courseLabel: String { if let code = courseCode { if let number = lessonNumber { return "\(code) · Lezione \(number)" }; return code }; return "Corso da associare" }
     var start: Date { CaptureDates.read(startsAt) ?? .distantFuture }
     var end: Date { CaptureDates.read(endsAt) ?? .distantFuture }
@@ -73,6 +108,7 @@ struct CaptureEvent: Codable, Identifiable {
         case "NEEDS_REVIEW":
             switch diagnosticCode {
             case "INVALID_START", "MISSING_END", "INVALID_END", "INVALID_DURATION": return "Orario da correggere"
+            case "INVALID_TIMEZONE": return "Fuso orario da verificare"
             case "UNKNOWN_COURSE": return "Corso da associare"
             case "EVENT_DISAPPEARED": return "Evento da verificare"
             default: return "Programmazione da completare"
@@ -87,6 +123,7 @@ struct CaptureEvent: Codable, Identifiable {
     var statusExplanation: String {
         if eligibility == "SCHEDULED" { return "La lezione è nel programma automatico. La registrazione è confermata soltanto quando Capture acquisisce il microfono." }
         switch diagnosticCode {
+        case "INVALID_TIMEZONE": return "Il fuso non è riconosciuto oppure l’ora locale è ambigua o inesistente durante il cambio dell’ora legale. Correggi il calendario usando un fuso valido e un orario univoco, poi sincronizza."
         case "INVALID_START": return "Il calendario non fornisce un inizio valido. Correggi l’evento nel calendario e sincronizza."
         case "MISSING_END": return "Manca l’orario di fine. Aggiungilo nel calendario e sincronizza."
         case "INVALID_END": return "L’orario di fine non è valido. Correggilo nel calendario e sincronizza."
@@ -132,6 +169,7 @@ struct CaptureSnapshot: Codable {
     var calendarRecordingsSupported: Bool?
     var recordings: [CaptureRecording]?
     var queue: CaptureQueue?
+    var transcripts: [CaptureTranscript]?
     var isRecording: Bool { running == true && runtime.recording == true }
     var isExporting: Bool { running == true && runtime.exporting == true }
     static func decode(_ data: Data) throws -> Self {
@@ -194,6 +232,9 @@ struct CaptureSnapshot: Codable {
         return events.filter { $0.eligibility != "CANCELLED" && $0.end > now && !saved.contains($0.id) }
             .sorted { $0.start == $1.start ? $0.id < $1.id : $0.start < $1.start }.first
     }
+    var canStartManualRecording: Bool {
+        enabled && running != nil && !isRecording && !isExporting
+    }
     var runtimeFailed: Bool {
         runtime.title == "Configuration error" || runtime.title == "Recording failed" || runtime.title?.hasPrefix("Could not start ") == true
     }
@@ -216,6 +257,9 @@ struct CaptureSnapshot: Codable {
     }
     var stateLabel: String { stateLabel(at: Date()) }
     func stateDetail(at now: Date) -> String? {
+        if enabled && running == false {
+            return "Il registratore è fermo. Riapri MyNotes per riattivarlo oppure scegli Riavvia Capture nelle opzioni. Le registrazioni precedenti restano conservate."
+        }
         if runtimeFailed && !isRecording && !isExporting && running == true {
             return runtime.title == "Configuration error" ? "Il registratore non può leggere la configurazione. Correggi la configurazione prima della prossima lezione." : "Il registratore ha segnalato un errore. Controlla il microfono e la registrazione interessata prima di riprovare."
         }
@@ -277,13 +321,25 @@ struct CaptureRecording: Codable, Identifiable {
     var transcriptionStatus: String?
     var canTranscribe: Bool?
     var audioAvailable: Bool?
+    var eventID: String?
+    var lessonKey: String?
+    var origin: String?
+    var originalName: String?
+    var sourceSelected: Bool?
+    var sourceExcluded: Bool?
+    var sourceSelectionRequired: Bool?
+    var sourceCount: Int?
+    var partial: Bool?
     var warnings: [CaptureRecordingMessage]?
     var blockingReasons: [CaptureRecordingMessage]?
     var transcriptionState: String { transcriptionStatus ?? status }
     var isTranscribed: Bool { transcriptionState == "COMPLETED" }
     var transcriptionAllowed: Bool { canTranscribe ?? (transcriptionState == "NOT_STARTED") }
     enum CodingKeys: String, CodingKey {
-        case id, path, title, status, duration
+        case id, path, title, status, duration, origin, partial
+        case eventID = "event_id", lessonKey = "lesson_key", originalName = "original_name"
+        case sourceSelected = "source_selected", sourceExcluded = "source_excluded"
+        case sourceSelectionRequired = "source_selection_required", sourceCount = "source_count"
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
         case associationState = "association_state", associationReason = "association_reason", associationConflict = "association_conflict"
         case transcriptionStatus = "transcription_status", canTranscribe = "can_transcribe", audioAvailable = "audio_available"
@@ -382,7 +438,7 @@ enum CaptureProblem {
         switch status {
         case "NEEDS_REVIEW": return "Il tentativo non ha salvato una trascrizione. Usa Riprova; l’audio è conservato."
         case "INTERRUPTED", "CANCELLED": return "La trascrizione è stata interrotta. Audio e tentativi precedenti sono conservati."
-        case "OUTDATED": return "L’audio è cambiato rispetto alla trascrizione salvata. Verifica la sorgente prima di riprovare."
+        case "OUTDATED": return "Verifica che l’audio corrisponda alla trascrizione salvata. I risultati precedenti sono conservati."
         case "WAITING": return "L’audio non è ancora pronto: potrebbe essere in salvataggio, assente o disponibile soltanto nel cloud."
         default: return "La trascrizione non è riuscita. L’audio è conservato; controlla i dettagli e riprova."
         }

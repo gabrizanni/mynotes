@@ -61,6 +61,12 @@ def build(*, native_only: bool = False) -> Path:
         shutil.move(str(temporary), destination)
     finally:
         shutil.rmtree(temporary.parent, ignore_errors=True)
+    # Signed development bundles must not appear as installed app duplicates.
+    from cleanup_launch_services import refresh
+    try:
+        refresh()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        print("MyNotes launch-entry cleanup needs a retry:", error)
     return destination
 
 

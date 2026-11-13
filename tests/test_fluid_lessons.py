@@ -24,6 +24,9 @@ def add_turn(workspace, lecture, text='The source-supported logistics mechanism 
 
 def test_future_slide_can_support_table_formula_and_long_recap(tmp_path):
     ws,_,selection=workspace_and_deck(tmp_path);add_turn(ws,'OPS-L01')
+    config = ws.configuration_store().load()
+    config['style']['profile']['recap_language'] = 'en'
+    ws.configuration_store().save(config)
     def transform(response,request):
         row=response['lessons'][0]['notes']
         row['blocks'].insert(2,{'kind':'table','rows':[['Factor','Effect'],['Lead time','More inventory']],

@@ -6,7 +6,7 @@ The native app prepares the computer. Choose the conversation language and an ag
 
 Codex model choices come from its local cached catalog, with hidden entries excluded. Without that catalog, keep the default or enter a model identifier. Claude Code uses its documented aliases; access still depends on the user's account. Agy keeps a saved choice or accepts a custom identifier. The menu does not make paid requests or certify model availability. [Claude model aliases](https://code.claude.com/docs/en/model-config).
 
-At the first empty conversation, MyNotes introduces itself in three short lines and asks one question about your background. It waits for the answer before asking for courses or lessons. You may skip this question. Your answer is saved in your private workspace and is not asked again. Existing courses and profiles are retained.
+At the first empty conversation, MyNotes introduces itself in three short lines and asks one question about your background. It waits for the answer before asking for courses or lessons. You may skip this question. Your answer is saved in your private workspace and is not asked again. Existing courses and profiles are retained. This is the default pacing: saved dialogue preferences can customize it.
 
 The Italian first welcome is:
 
@@ -33,6 +33,16 @@ Answer naturally; optional details can be omitted. The agent reuses facts alread
 
 Then connect recordings and materials, or use the proposed `~/Documents/MyNotes` folders. MyNotes creates or connects one stable personal notebook per course and remembers the exact notebook and final handout paths. Dragging a file into Terminal inserts its path; submit the message after checking it. Choose whether to configure Capture now or later.
 
+Course creation/linking saves the supplied source folders. Each new chat receives
+a small source-path index, and activity context rereads it from current settings.
+The current request's explicit path takes precedence; saved paths are search hints,
+not a claim that files exist or match a lesson. Transcript exports and explicit
+sync/assignment refresh the course transcript folder, including observed moves.
+Changing a recording-library folder updates the conventional transcript paths in
+the index automatically. No source directory is scanned just to build this index.
+An external move is learned when a normal sync observes it or the user reconnects
+the folder; there is no background search of the computer for missing files.
+
 Private settings, SQLite state, candidates and temporary files live under MyNotes' Application Support workspace. User-facing recordings, materials and handouts use Documents or locations you choose. Connecting an existing folder does not move its contents. Defaults use `standard` quality and the packaged study-handout style. Style edits affect future candidates, not published handouts.
 
 After linking, the agent explains the two file paths once. Defaults are `Appunti personali.docx` and `CODE_COURSE_NOTES.docx`; both can be customized. Separate your notebook with headings `Lesson 1`, `Lesson 2` (or `Lezione 1`, `Lezione 2`). Write `NOTA AI: clarify this step` to highlight an academic question for the model; the legacy `NOTE AI:` spelling also works. These annotations do not change app settings or authorize actions. A missing remembered file requires selecting its new location, never silent replacement.
@@ -54,6 +64,71 @@ Say: **“Prepare notes for lecture one from this audio and these slides.”** T
 Say in Italian: **“Prepara gli appunti della prima lezione usando questo audio e queste slide.”** Il Word definitivo viene aggiornato dopo i controlli, con backup di sicurezza. Puoi chiedere «annulla l’ultimo aggiornamento».
 
 ## Come back
+
+### Memory updated through the conversation
+
+Say **“From now on, show every calculation step for this course”** or
+**“Ask me one question at a time.”** The agent saves a preference only when its
+persistence and scope are clear, then briefly reports the change. If either is
+ambiguous it asks. **“Only for this lesson”** stays temporary and does not change
+future defaults. General preferences are inherited; an explicit course override
+wins for that course. Changing your mind replaces the corresponding named rule,
+rather than accumulating contradictory instructions.
+
+All memory remains in private `config/settings.json`, with atomic updates and
+configuration history. Markdown is a readable view, not another editable store.
+Original background/course answers remain available as provenance, but current
+preferences take precedence. Agent and skill integration files are technical,
+managed files; the conversation never needs to rewrite them to remember you.
+App settings do not yet expose a memory editor or reader.
+
+The local command interface is available to the agent and advanced users:
+
+```sh
+mynotes memory show --scope global --area dialogue --json
+# Use the revision returned by show, not a remembered older value:
+mynotes memory update --scope global --area dialogue --expected-revision REV --set questions "Ask one question at a time."
+mynotes memory show --scope course --course COURSE --area notes --json
+mynotes memory update --scope course --course COURSE --area notes --expected-revision REV --style-json '{"writing_style":"detailed","image_limit":3}'
+```
+
+Use `--area notes|dialogue` and an explicit `--scope global|course`. `--set KEY
+TEXT` adds or replaces a named instruction; `--remove KEY` forgets an own rule.
+A course can reuse a general rule's key to override it; empty text suppresses
+that inherited rule for the course. Removing the course override restores
+inheritance. `--inherit FIELD` removes a structured course style override.
+`memory reset` clears the selected area's own rules and, for notes, resets its
+style choices. It requires the same revision check as update. A stale revision
+returns `MEMORY_CONFLICT` without writing: reread and reconcile the edit. Legacy
+free-form preferences are shown with `legacy-…` keys and remain replaceable and
+removable. A partial legacy course update adds instructions without discarding
+unmentioned ones; use memory operations to replace or remove them explicitly.
+
+For each new operational task the coordinator loads one local context:
+
+```sh
+mynotes context --activity notes --course COURSE
+mynotes context --activity preferences --course COURSE --json
+```
+
+To list sources in a folder you supplied, say “find the recordings,
+transcripts and slides in this folder.” The agent can use `mynotes inventory
+PATH` immediately, without creating a course. This is a metadata-only inventory
+of the supplied folder and its immediate children; it reports file counts and
+truncation, and lists TXT files among notes because a filename alone cannot prove
+whether one is a transcript. It does not validate audio, associate lessons or
+read file contents. A deeper folder must be inspected separately. A later request
+to prepare notes still performs the appropriate source and freshness checks.
+
+Activities are `profile`, `course`, `notes`, `study`, `capture`, `transcription`,
+`publication`, `recovery`, and `preferences`. Each returns the relevant guidance
+and fresh inherited/own/effective memory. It invokes no model and does not scan
+audio/transcript libraries. Greetings require no context command. Actual tasks
+retain their source, integrity and publication checks. Existing courses load no
+questionnaire at startup, and empty launches no longer enumerate Capture items.
+When using the exported skill directly in a provider without the MyNotes
+launcher/agent, add `--include-core` to the first context command to load the
+common coordination policy once. Later context calls need only their activity.
 
 Open MyNotes and select **Open chat**, or run `mynotes`. Use `mynotes codex`, `mynotes agy` or `mynotes claude` to select an agent explicitly. Saved model preferences apply to that agent. In a conversation, ask to change the model; the agent can save it with `mynotes preferences --provider PROVIDER --model MODEL`. The new choice applies to the next chat and future notes. `mynotes setup` reopens setup and `mynotes doctor --json` gives actionable component checks. These checks do not prove listening, model quality or completed classroom recording.
 

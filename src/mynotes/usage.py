@@ -200,7 +200,7 @@ def _attempt_usage(data):
     usage = data.get("reported_usage")
     if usage is None:
         usage = reported_usage(data["requested"]["provider"], data.get("stdout", ""), data.get("envelope"))
-    if usage is None and (data.get("envelope") or {}).get("transport") == "agy_parts_v1":
+    if usage is None and (data.get("envelope") or {}).get("transport") in {"agy_parts_v1","agy_progressive_v2","agy_risk_v2"}:
         # Older local-rejection records have no summary envelope usage, but
         # retain the original per-turn result events. Never edit those records.
         for line in reversed(data.get("stdout", "").splitlines()):

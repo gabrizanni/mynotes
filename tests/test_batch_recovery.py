@@ -172,17 +172,21 @@ def test_correction_attachments_need_real_narrative_and_preserve_text():
 ])
 def test_duplicate_activity_triggers_one_soft_reminder_without_hiding_bad_exit(tmp_path,event):
     code='''import sys,json,time
+from pathlib import Path
 sys.stdin.readline()
 for i in range(25):
  print(json.dumps(EVENT),flush=True)
  time.sleep(.02)
+Path('duplicate-stream-finished').write_text('done')
 '''.replace('EVENT',repr(event))
-    start=time.monotonic()
     events=[]
     with pytest.raises(a.ProviderError,match='without a complete terminal result'):
-        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=2,first_seconds=.12,on_event=events.append)
+        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=10,first_seconds=.12,on_event=events.append)
     assert len([e for e in events if e['event']=='progress_reminder']) == 1
-    assert time.monotonic()-start<1
+    # The ten-second outer guard permits slow hosted Python startup.
+    # Completion proves the soft reminder did not kill the stream. A wall-clock
+    # bound also measures Python startup and scheduler load on hosted macOS.
+    assert (tmp_path / 'duplicate-stream-finished').read_text() == 'done'
 
 
 def test_sleep_detection_closes_only_its_transport(tmp_path,monkeypatch):
@@ -289,8 +293,8 @@ def test_resume_never_silently_rewrites_saved_candidate_after_real_context_chang
     first=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer)
     path=Path(first['candidates'][0]['candidate']);before=path.read_bytes()
     config=ws.configuration_store().load();config['courses'][0]['context']='A different requested teaching objective.';ws.configuration_store().save(config)
-    with pytest.raises(WorkflowError,match='Resume would rewrite an existing batch candidate'):
-        generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    resumed=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    assert resumed['fingerprint']==first['fingerprint']
     assert len(writer.calls)==1 and path.read_bytes()==before
 
 

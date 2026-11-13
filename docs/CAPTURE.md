@@ -1,36 +1,35 @@
 # MyNotes Capture
 
-Capture is the native macOS 14+ menu-bar recorder included with MyNotes 0.2.
+Capture is the native macOS 14+ menu-bar recorder included with MyNotes.
 It records selected lectures through the Mac microphone and works with the chat
-closed. Configuration goes through the Capture tab in MyNotes, your agent or the CLI. Capture never
+closed. Configuration goes through MyNotes Settings, your agent or the CLI. Capture never
 starts transcription, AI generation, or Word publication.
 
-## Capture tab in MyNotes
+## Calendar and recording in MyNotes
 
-Open **Capture** beside the MyNotes tab. Connect an HTTPS/webcal calendar with
+Open **Settings → Calendars**. Connect an HTTPS/webcal calendar with
 its timezone, teaching period and title-to-course mappings. Calendar cards show
 the last successful refresh, next attempt and failures; refresh one calendar or
 all connected calendars. The subscription URL remains private.
 
-Upcoming lessons are ordered by time and searchable. Select a lesson to inspect
+The **Calendar** page shows lessons in a week or month grid. Select a lesson to inspect
 its origin, times, timezone and recording eligibility. **Modifica** saves local
 time/title changes and recording exclusions without writing to the external
 calendar. These changes survive refresh; **Ripristina calendario** restores the
 latest source values. Conflicts, cancellations and unresolved events are explicit.
 An externally cancelled or disappeared event cannot be re-enabled locally.
 
-The status banner identifies the next blocked lesson and its cause. Each lesson
+**Today** shows lessons and situations that need attention. Each lesson
 distinguishes scheduling eligibility from actual recording, saving, completion,
 interruption or failure. A scheduled lesson is not proof of microphone capture.
 Timing errors, unknown courses, cancelled events and conflicts have different
 explanations and corrective actions. Native recorder validation failures also
 appear on the affected lesson rather than only in a general warning.
 
-**Aggiungi lezione** schedules a special lesson for an existing course.
-**Registra ora** requests a recording with course, number and duration when
+**Aggiungi → Programma lezione** schedules a special lesson for an existing course.
+**Registra** requests a recording with course, number and duration when
 Capture is running. A pending request is not proof that recording started;
-the UI confirms recording only from the recorder's reported state. Opening the
-tab does not activate Capture or request microphone permission. Editing a
+the UI confirms recording only from the recorder's reported state. Reading the calendar does not activate a disabled Capture or request microphone permission. Editing a
 currently recorded/exported lesson is blocked, and Stop remains available while
 a calendar refresh runs.
 

@@ -10,6 +10,8 @@ import os
 import shutil
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -124,12 +126,20 @@ def _materialize(data: dict, entry: Path, source: Path, visual_dir: Path | None)
 def extract_cached(source: Path, cache_dir: Path, *, visual_dir: Path | None = None, lesson_number: int | None = None):
     """Reuse content only after metadata and all visual bytes pass validation."""
     source = Path(source)
+    started = time.monotonic(); wall = time.time()
     options = {"lesson_number": lesson_number, "render_visuals": visual_dir is not None}
     identity = extractor_identity(source.suffix.casefold(), render_visuals=visual_dir is not None)
     source_hash = file_sha256(source)
     key = _json_hash({"source_sha256": source_hash, "suffix": source.suffix.casefold(), "identity": identity, "options": options})
     cache_dir.mkdir(parents=True, exist_ok=True)
     entry = cache_dir / key
+    def observed(result, reused):
+        atomic_json_write(cache_dir.parent / 'extraction-events' / (uuid.uuid4().hex + '.json'), {
+            'phase': 'extraction', 'source': str(source), 'source_sha256': source_hash,
+            'cache_key': key, 'cache_reused': reused, 'started_at_epoch': wall,
+            'ended_at_epoch': time.time(), 'elapsed_seconds': time.monotonic() - started,
+            'chunks': len(result[0]), 'visuals': len(result[1]), 'provider_invoked': False})
+        return result
     with (cache_dir / (key + ".lock")).open("a+") as lease:
         fcntl.flock(lease.fileno(), fcntl.LOCK_EX)
         if file_sha256(source) != source_hash or extractor_identity(source.suffix.casefold(), render_visuals=visual_dir is not None) != identity:
@@ -141,7 +151,7 @@ def extract_cached(source: Path, cache_dir: Path, *, visual_dir: Path | None = N
             result = _materialize(cached, entry, source, visual_dir)
             if file_sha256(source) != source_hash:
                 raise extraction.ExtractionError("Source changed during cache materialization; retry preparation")
-            return result
+            return observed(result, True)
         with tempfile.TemporaryDirectory(dir=cache_dir, prefix=".extract-") as temporary:
             staging = Path(temporary)
             chunks, visuals = extraction.extract_material(source, visual_dir=staging / "visuals" if visual_dir is not None else None, lesson_number=lesson_number)
@@ -165,4 +175,4 @@ def extract_cached(source: Path, cache_dir: Path, *, visual_dir: Path | None = N
             result = _materialize(data, entry, source, visual_dir)
             if file_sha256(source) != source_hash:
                 raise extraction.ExtractionError("Source changed during extraction materialization; retry preparation")
-            return result
+            return observed(result, False)

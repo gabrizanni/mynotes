@@ -61,7 +61,7 @@ else:raise SystemExit(2)
 }
 ''')
     source=Path(__file__).parents[1]/'setup/Sources/MyNotesSetup';binary=tmp_path/'model-test'
-    result=subprocess.run(['swiftc','-parse-as-library','-swift-version','5','-target','arm64-apple-macosx14.0','-module-cache-path',str(tmp_path/'module-cache'),str(source/'CaptureDashboard.swift'),str(source/'CaptureModel.swift'),str(driver),'-o',str(binary)],text=True,capture_output=True)
+    result=subprocess.run(['swiftc','-parse-as-library','-swift-version','5','-target','arm64-apple-macosx14.0','-module-cache-path',str(tmp_path/'module-cache'),str(source/'CaptureDashboard.swift'),str(source/'WorkspaceModels.swift'),str(source/'CaptureModel.swift'),str(driver),'-o',str(binary)],text=True,capture_output=True)
     assert result.returncode==0,result.stderr
     environment={**os.environ,'MYNOTES_PREFIX':str(prefix),'MYNOTES_WORKSPACE':str(store.workspace.root),'MYNOTES_HOME':str(tmp_path/'home'),'UI_TEST_ROOT':str(tmp_path)}
     environment.pop('MYNOTES_CAPTURE_PREVIEW',None)

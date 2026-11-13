@@ -1,15 +1,22 @@
 """One ordinary writing call places shared slides and proceeds to Word."""
 from copy import deepcopy
+from dataclasses import replace
 import json
 from pathlib import Path
 
 import pytest
 
-from mynotes.batch import generate_batch, plan_batch
+from mynotes.batch import generate_batch as _generate_batch, plan_batch
 from mynotes.providers import ProviderResponse
 from mynotes.utils import atomic_json_write, file_sha256
 from mynotes.workflow import WorkflowError
 from test_batch_generation import workspace_and_deck, notes_for, VERIFIED
+
+
+def generate_batch(*args, **kwargs):
+    # Explicit verified fixture limits, never real-provider metadata.
+    kwargs.setdefault('budgets', replace(VERIFIED, visual_tokens_per_image=1000))
+    return _generate_batch(*args, **kwargs)
 
 
 def prepared(tmp_path):
@@ -31,32 +38,32 @@ class IntegratedWriter:
     def generate(self, request):
         self.calls.append(request)
         assert request.phase == 'writing'
-        lecture = request.lecture_id
         decisions = []
         filtered = deepcopy(request)
         filtered.batch_context['ownership'] = []
+        lessons = request.batch_context['lessons']
         for choice in request.batch_context['ownership']:
-            unsettled = choice.get('provisional') or choice['status'] in {'pending', 'deferred'}
-            if not unsettled:
+            if not (choice.get('provisional') or choice['status'] in {'pending', 'deferred'}):
                 filtered.batch_context['ownership'].append(choice)
                 continue
-            current = lecture.endswith('02') or choice['evidence_id'] in {'S001', 'S002'}
-            status = 'taught' if current else 'pending'
-            decisions.append({'canonical_slide_id': choice['canonical_slide_id'], 'status': status,
-                              'reason': 'This full transcript establishes these concepts.' if current else 'Review next complete lesson before placement.',
-                              'evidence_ids': ['T001'] if current else []})
-            filtered.batch_context['ownership'].append({**choice, 'owner': lecture if current else 'OPS-L99', 'status': status})
-        result = {'organization': decisions, 'lessons': [{'lecture_id': lecture, 'notes': notes_for(filtered, lecture)}]}
+            owner = lessons[0] if choice['evidence_id'] in {'S001', 'S002'} else lessons[-1]
+            turns = [i for i in request.batch_context['lesson_evidence'][owner] if i.startswith('T')]
+            decisions.append({'canonical_slide_id': choice['canonical_slide_id'], 'owner': owner,
+                              'status': 'taught', 'reason': 'This full transcript establishes these concepts.',
+                              'evidence_ids': turns})
+            filtered.batch_context['ownership'].append({**choice, 'owner': owner, 'status': 'taught'})
+        result = {'organization': decisions, 'lessons': [
+            {'lecture_id': lecture, 'notes': notes_for(filtered, lecture)} for lecture in lessons]}
         if self.transform: self.transform(result, request)
         return ProviderResponse(result, 'codex', 'test-model', 'high')
 
 
-def test_autonomous_plan_is_read_only_and_keeps_ordered_single_lesson_groups(tmp_path):
+def test_autonomous_plan_is_read_only_and_keeps_one_joint_group(tmp_path):
     ws = prepared(tmp_path)
     before = {p: p.read_bytes() for p in ws.root.rglob('*') if p.is_file()}
     plan = plan_batch(ws, 'OPS', [1, 2], autonomous_organization=True, budgets=VERIFIED)
     assert plan['status'] == 'PLANNED'
-    assert plan['groups'] == [['OPS-L01'], ['OPS-L02']]
+    assert plan['groups'] == [['OPS-L01', 'OPS-L02']]
     assert {p: p.read_bytes() for p in ws.root.rglob('*') if p.is_file()} == before
 
 
@@ -69,7 +76,7 @@ def test_integrated_placement_reaches_both_lessons_and_resumes_without_model_cal
         from mynotes.publication import _load_candidate
         _load_candidate(workspace, lecture)
         # L01 is built before writing L02; pending pool never blocks settled L01.
-        assert len(writer.calls) == len(built) + 1
+        assert len(writer.calls) == 1
         path = workspace.runs_dir / lecture / 'synthetic.docx'; path.write_bytes(b'synthetic Word')
         built.append(lecture)
         return {'candidate': str(path)}
@@ -78,7 +85,7 @@ def test_integrated_placement_reaches_both_lessons_and_resumes_without_model_cal
     assert result['status'] == 'CANDIDATE_READY'
     assert result['pending_course_slides'] == []
     assert built == ['OPS-L01', 'OPS-L02']
-    assert len(writer.calls) == 2
+    assert len(writer.calls) == 1
     assert len(result['organization_receipts']) == 2
     paragraphs = []
     for row in result['candidates']:
@@ -88,26 +95,69 @@ def test_integrated_placement_reaches_both_lessons_and_resumes_without_model_cal
     assert paragraphs == [[['S001'], ['S002']], [['S003'], ['S004']]]
     assert {p: p.read_bytes() for p in originals} == originals
     again = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, build_word=True, batch_id=result['batch_id'])
-    assert again['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2 and len(built) == 2
+    assert again['status'] == 'CANDIDATE_READY' and len(writer.calls) == 1 and len(built) == 2
 
 
 def test_final_selected_lesson_cannot_silently_leave_unexplained_exam_slides(tmp_path):
     ws = prepared(tmp_path)
     def leave(result, request):
-        if request.lecture_id.endswith('02'):
+        if 'OPS-L02' in request.batch_context['lessons']:
             result['organization'][-1].update(status='pending', evidence_ids=[])
     writer = IntegratedWriter(leave)
-    with pytest.raises(WorkflowError, match='last selected lesson'):
+    with pytest.raises(WorkflowError, match='settle every page'):
         generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer)
-    assert (ws.runs_dir / 'OPS-L01/lecture_notes.candidate.json').is_file()
+    assert not (ws.runs_dir / 'OPS-L01/lecture_notes.candidate.json').exists()
     assert not (ws.runs_dir / 'OPS-L02/lecture_notes.candidate.json').exists()
 
 
 def test_taught_decision_requires_actual_current_transcript_evidence(tmp_path):
     ws = prepared(tmp_path)
     def wrong(result, request): result['organization'][0]['evidence_ids'] = ['T999']
-    with pytest.raises(WorkflowError, match='T999.*UNKNOWN_REFERENCE'):
+    with pytest.raises(WorkflowError, match='T999|transcript evidence'):
         generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=IntegratedWriter(wrong))
+
+
+@pytest.mark.parametrize('unknown', [False, True])
+def test_canonical_aliases_resolve_only_from_the_staged_source_map(tmp_path, unknown):
+    ws=prepared(tmp_path)
+    def alias(result, request):
+        mapping={r['canonical_slide_id']:r['evidence_id'] for r in request.batch_context['ownership']}
+        for decision in result['organization']:
+            identifier=mapping[decision['canonical_slide_id']]
+            decision['canonical_slide_id']=identifier
+            decision['evidence_ids'].insert(0,identifier)
+        if unknown:result['organization'][0]['canonical_slide_id']='S999'
+    if unknown:
+        with pytest.raises(WorkflowError,match='unknown/duplicate page'):
+            generate_batch(ws,'OPS',[1,2],autonomous_organization=True,provider_adapter=IntegratedWriter(alias))
+    else:
+        result=generate_batch(ws,'OPS',[1,2],autonomous_organization=True,provider_adapter=IntegratedWriter(alias))
+        for row in result['candidates']:
+            candidate=json.loads(Path(row['candidate']).read_text())
+            assert all(key.startswith('sha256:') for key in candidate['slide_ownership'])
+            from mynotes.batch import _read
+            receipt=_read(Path(candidate['organization_receipt']['path']))
+            assert len(receipt['reference_normalizations'])==4
+
+
+@pytest.mark.parametrize('supported', [False, True])
+def test_teacher_links_are_derived_only_from_the_same_page_narrative(tmp_path, supported):
+    ws=prepared(tmp_path)
+    def omit_metadata(result, request):
+        decision=result['organization'][0]
+        page=next(r['evidence_id'] for r in request.batch_context['ownership']
+                  if r['canonical_slide_id']==decision['canonical_slide_id'])
+        turns=list(decision['evidence_ids']);decision['evidence_ids']=[]
+        if supported:
+            block=next(b for b in result['lessons'][0]['notes']['blocks']
+                       if b['kind']=='paragraph' and page in b['evidence_ids'])
+            block['evidence_ids'].extend(turns)
+    if not supported:
+        with pytest.raises(WorkflowError,match='taught slide needs'):
+            generate_batch(ws,'OPS',[1,2],autonomous_organization=True,provider_adapter=IntegratedWriter(omit_metadata))
+    else:
+        result=generate_batch(ws,'OPS',[1,2],autonomous_organization=True,provider_adapter=IntegratedWriter(omit_metadata))
+        assert result['status']=='CANDIDATE_READY'
 
 
 def test_organization_receipt_tampering_blocks_word(tmp_path):
@@ -150,7 +200,7 @@ def test_publication_markers_do_not_force_paid_rewrite_on_resume(tmp_path):
         candidate.update(published_to_word=True, published_path='saved-handout.docx', published_hash='publishedhash')
         atomic_json_write(path, candidate)
     second = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, batch_id=first['batch_id'])
-    assert second['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2
+    assert second['status'] == 'CANDIDATE_READY' and len(writer.calls) == 1
     assert all(json.loads(Path(row['candidate']).read_text())['published_to_word'] for row in second['candidates'])
 
 
@@ -170,7 +220,7 @@ def test_module_change_reuses_source_bound_autonomous_writing(tmp_path, monkeypa
     original = batch.file_sha256
     monkeypatch.setattr(batch, 'file_sha256', lambda p: 'newmodulecontract' if Path(p).name == 'providers.py' else original(p))
     second = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, batch_id=first['batch_id'])
-    assert second['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2
+    assert second['status'] == 'CANDIDATE_READY' and len(writer.calls) == 1
     for row in second['candidates']:
         candidate = json.loads(Path(row['candidate']).read_text())
         assert candidate['source_revalidation']['kind'] == 'organization_revalidation'
@@ -202,13 +252,13 @@ def test_saved_successful_correction_survives_resume_and_module_update(tmp_path,
             return ProviderResponse(response.notes, response.provider, response.model, response.effort, attempt_path=str(path))
     writer = Corrected()
     first = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, repair_missing=True)
-    assert first['status'] == 'CANDIDATE_READY' and len(writer.calls) == 3
+    assert first['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2
     repeat = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, repair_missing=True, batch_id=first['batch_id'])
-    assert repeat['status'] == 'CANDIDATE_READY' and len(writer.calls) == 3
+    assert repeat['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2
     original = batch.file_sha256
     monkeypatch.setattr(batch, 'file_sha256', lambda p: 'newmodulecontract' if Path(p).name == 'providers.py' else original(p))
     after = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True, provider_adapter=writer, repair_missing=True, batch_id=first['batch_id'])
-    assert after['status'] == 'CANDIDATE_READY' and len(writer.calls) == 3
+    assert after['status'] == 'CANDIDATE_READY' and len(writer.calls) == 2
     from mynotes.publication import _load_candidate
     _load_candidate(ws, 'OPS-L01')
 

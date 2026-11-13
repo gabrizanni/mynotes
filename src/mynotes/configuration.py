@@ -98,6 +98,8 @@ def course_template() -> dict[str, Any]:
             "personal_notes": "",
             "handout": "",
             "syllabus": "",
+            "recordings": "",
+            "transcripts": "",
         },
         # Exact per-lesson sources take precedence over filename discovery.
         # Paths remain private workspace configuration, never bundled with code.
@@ -133,6 +135,16 @@ def _string_list(value: Any, field: str) -> list[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigurationError(f"{field} must be a list of text values")
     return [item.strip() for item in value if item.strip()]
+
+
+def instruction_map(value: Any) -> dict[str, str]:
+    """Named user rules support explicit replacement and course overrides."""
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}", key)
+        or not isinstance(text, str) for key, text in value.items()
+    ):
+        raise ConfigurationError("Instructions must map short identifiers to text")
+    return {key: text.strip() for key, text in value.items()}
 
 
 def normalize_style_profile(value: dict[str, Any], *, partial: bool = False) -> dict[str, Any]:
@@ -270,6 +282,9 @@ def normalize_course(value: dict[str, Any]) -> dict[str, Any]:
         course["preferences"].get("persistent_instructions", []),
         "course persistent instructions",
     )
+    for field in ("note_instructions", "dialogue_instructions"):
+        if field in course["preferences"]:
+            course["preferences"][field] = instruction_map(course["preferences"][field])
     if course["web_access"] not in {"disabled", "linked_resources"}:
         raise ConfigurationError("Course web access must be disabled or linked_resources")
     if not isinstance(course["transcription"], dict):
@@ -318,7 +333,17 @@ def merge_course(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, A
     merged = copy.deepcopy(existing)
     for key, value in patch.items():
         if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
-            merged[key].update(value)
+            if key == "preferences":
+                for field, answer in value.items():
+                    if field == "persistent_instructions":
+                        merged[key][field] = list(dict.fromkeys(
+                            _string_list(merged[key].get(field, []), field) + _string_list(answer, field)))
+                    elif field in {"note_instructions", "dialogue_instructions"}:
+                        merged[key].setdefault(field, {}).update(instruction_map(answer))
+                    else:
+                        merged[key][field] = answer
+            else:
+                merged[key].update(value)
         else:
             merged[key] = value
     return normalize_course(merged)
@@ -354,6 +379,8 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Personal background must be text")
     if type(personal.get("background_confirmed", False)) is not bool:
         raise ConfigurationError("Background confirmation must be true or false")
+    if "dialogue_instructions" in personal:
+        personal["dialogue_instructions"] = instruction_map(personal["dialogue_instructions"])
     paths = configuration.get("paths")
     if not isinstance(paths, dict):
         raise ConfigurationError("Paths must be an object")
@@ -377,6 +404,8 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
         raise ConfigurationError("Invalid default quality")
     if not isinstance(style.get("freeform_preferences"), str):
         raise ConfigurationError("Style preferences must be text")
+    if "note_instructions" in style:
+        style["note_instructions"] = instruction_map(style["note_instructions"])
     # Old version-2 workspaces remain loadable; the profile is filled with
     # deterministic defaults instead of consulting any external Word file.
     style["profile"] = normalize_style_profile(style.get("profile", {}))
@@ -475,7 +504,8 @@ class ConfigurationStore:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         return normalized
 
-    def update(self, transform: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
+    def update(self, transform: Callable[[dict[str, Any]], dict[str, Any]], *,
+               expected_configuration: dict[str, Any] | None = None) -> dict[str, Any]:
         """Apply an edit to the latest settings in one atomic read-modify-write.
 
         The callback must not call save/update on this store: it already owns
@@ -487,6 +517,8 @@ class ConfigurationStore:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
             try:
                 current = self.load()
+                if expected_configuration is not None and current != expected_configuration:
+                    raise ConfigurationError("CONFIGURATION_CONFLICT: settings changed; reread before saving")
                 edited = transform(copy.deepcopy(current))
                 normalized = self._resolve_relative_paths(validate_configuration(edited))
                 if normalized != current:

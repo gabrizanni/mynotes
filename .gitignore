@@ -9,6 +9,7 @@ build/
 
 # Local environments and editor state
 .venv/
+/.test-*/
 .DS_Store
 
 # User workspaces are always external to this repository. This guard also

@@ -22,6 +22,7 @@ def intent(plan, lectures, continuity, *, reviewed=False):
             'budgets':plan['budgets'],'contract':plan['contract'],'generation_contract':plan['generation_contract'],
             'prompt_contract':plan['prompt_contract'],'continuity':continuity,
             **({'autonomous_organization':True} if plan.get('autonomous_organization') else {}),
+            **({'risk_policy_version':plan['risk_policy_version']} if plan.get('risk_policy_version') else {}),
             **({'context_sources':plan['context_sources']} if plan.get('context_sources') else {})}
 
 
@@ -41,9 +42,13 @@ def prompt_matches(directory,old,plan,lectures,continuity):
     if old['prompt_contract']==plan['prompt_contract']:return True
     from .batch import _request
     from .providers import RequestedModel,_prompt,_context
-    from .agy_parts import fingerprint,part_schema
+    from .agy_parts import fingerprint,part_schema,_writing_identity
     runtime={**old,'packs':plan['packs'],'inventory':plan['inventory'],'requested':RequestedModel(**old['requested_model'])}
     request,_=_request(runtime,lectures,directory,continuity)
+    semantic_identity = _writing_identity(request, part_schema(request))
+    semantic_state = directory/'writing-parts'/semantic_identity/'state.json'
+    if semantic_state.is_file() and json.loads(semantic_state.read_text()).get('fingerprint') == semantic_identity:
+        return True
     context=_context(request);lines=context.splitlines();current=json.loads(lines[1])
     def canonical_configuration(value):
         value=deepcopy(value)
@@ -243,7 +248,13 @@ def certify_response(response,request,root):
         if response.notes != raw: raise WorkflowError('Recovered result changed')
         return response
     if record.get('error') or record.get('returncode')!=0:raise WorkflowError('Saved response came from a failed provider transport')
-    if record.get('envelope',{}).get('transport')=='agy_parts_v1':
+    if record.get('envelope',{}).get('transport')=='agy_progressive_v2':
+        from .agy_progressive import verify_receipt
+        raw=verify_receipt(record,root)
+    elif record.get('envelope',{}).get('transport')=='agy_joint_v1':
+        from .simple_notes import certified
+        raw=certified(record,request)
+    elif record.get('envelope',{}).get('transport')=='agy_parts_v1':
         from .agy_parts import verify_receipt
         raw=verify_receipt(record,root)
     elif record.get('requested',{}).get('provider')=='agy':
@@ -317,6 +328,39 @@ def bound_budget_checkpoints(root, plan, lectures):
     return sorted(directories)
 
 
+def validate_review_defects(review, response, lectures, maps):
+    """Accept an actual review only against the exact retained response.
+
+    These are coordinator observations, never an automatic semantic verdict.
+    Paths and citations must identify existing blocks of the frozen result.
+    """
+    from .batch import _hash
+    import re
+    if (not isinstance(review, dict) or set(review) != {'base_notes_sha256', 'defects'}
+            or review['base_notes_sha256'] != _hash(response.notes)
+            or not isinstance(review['defects'], list) or not review['defects']):
+        raise WorkflowError('Reviewed defects need the exact retained response hash and a nonempty defects array')
+    rows = {r['lecture_id']: r['notes'] for r in response.notes['lessons']}
+    seen = set()
+    for defect in review['defects']:
+        if (not isinstance(defect, dict) or set(defect) != {'lecture_id', 'path', 'evidence_id', 'reason'}
+                or defect['lecture_id'] not in lectures or not isinstance(defect['path'], str)
+                or not isinstance(defect['reason'], str) or not defect['reason'].strip()):
+            raise WorkflowError('A reviewed defect needs a selected lesson, block path, evidence ID and reason')
+        match = re.fullmatch(r'blocks\[(\d+)\]', defect['path'])
+        blocks = rows[defect['lecture_id']]['blocks']
+        if not match or int(match[1]) >= len(blocks):
+            raise WorkflowError('Reviewed block path is unavailable')
+        identifier = maps[defect['lecture_id']].get(defect['evidence_id'])
+        if identifier is None or identifier not in blocks[int(match[1])].get('evidence_ids', []):
+            raise WorkflowError('Reviewed defect is not linked to its actual source block')
+        key = (defect['lecture_id'], defect['path'], identifier)
+        if key in seen:
+            raise WorkflowError('Duplicate reviewed defect')
+        seen.add(key)
+    return deepcopy(review['defects'])
+
+
 def _correction_contract(request, response, defects, maps):
     from .batch import _hash
     base_hash=_hash(response.notes)
@@ -334,7 +378,8 @@ def _correction_contract(request, response, defects, maps):
     task['editable_blocks'] = [{'lecture_id': l, 'block_sha256': digest} for l, digest in sorted(editable)]
     task['lesson_evidence'] = request.batch_context['lesson_evidence']
     block={'type':'object','additionalProperties':False,'properties':{
-        'kind':{'type':'string','enum':['paragraph']},'text':{'type':'string'},
+        'kind':{'type':'string','enum':['paragraph','visual']},'text':{'type':'string'},
+        'visual_id':{'type':'string','enum':sorted(allowed)},
         'evidence_ids':{'type':'array','items':{'type':'string','enum':sorted(allowed)}},
         'coverage_role':{'type':'string','enum':['full','supplement']}},
         'required':['kind','text','evidence_ids','coverage_role']}
@@ -342,7 +387,7 @@ def _correction_contract(request, response, defects, maps):
         'items':{'type':'object','additionalProperties':False,'properties':{'lecture_id':{'type':'string'},'after_block_sha256':{'type':'string'},'block':block},
                  'required':['lecture_id','after_block_sha256','block']}}},'required':['insertions']}
     schema['properties']['attachments']={'type':'array','maxItems':len(defects),'items':{'type':'object','additionalProperties':False,'properties':{'lecture_id':{'type':'string'},'block_sha256':{'type':'string'},'evidence_ids':{'type':'array','items':{'type':'string','enum':sorted(allowed)}}},'required':['lecture_id','block_sha256','evidence_ids']}}
-    schema['properties']['visual_updates']={'type':'array','maxItems':len(defects),'items':{'type':'object','additionalProperties':False,'properties':{'evidence_id':{'type':'string','enum':sorted(allowed)},'decision':{'type':'string','enum':['exclude']},'reason':{'type':'string'},'inspected':{'type':'boolean'}},'required':['evidence_id','decision','reason','inspected']}}
+    schema['properties']['visual_updates']={'type':'array','maxItems':len(defects),'items':{'type':'object','additionalProperties':False,'properties':{'evidence_id':{'type':'string','enum':sorted(allowed)},'decision':{'type':'string','enum':['include','exclude']},'reason':{'type':'string'},'inspected':{'type':'boolean'}},'required':['evidence_id','decision','reason','inspected']}}
     schema['required']+=['attachments','visual_updates']
     from .providers import notes_schema
     replacement_block = deepcopy(notes_schema(compact=True)['properties']['blocks']['items'])
@@ -415,6 +460,8 @@ def repair_coverage(request,response,defects,maps,adapter,timeout,*,retained_fro
     if not path.exists() and retained_from is not None:
         retained_from = Path(retained_from)
         candidate = retained_from/'coverage-repair/repair.json'
+        if not candidate.exists() and (retained_from/'coverage-repair/started.json').exists():
+            raise WorkflowError('Targeted correction already attempted in the retained checkpoint; no paid retry after an update')
         if candidate.is_file():
             if (retained_from.is_symlink() or not retained_from.resolve().is_relative_to(request.run_dir.parent.resolve())):
                 raise WorkflowError('Retained correction is outside its source-bound batch checkpoints')
@@ -422,9 +469,10 @@ def repair_coverage(request,response,defects,maps,adapter,timeout,*,retained_fro
             proof_directory = candidate.parent
     task,schema,allowed=_correction_contract(request,response,defects,maps)
     base_hash=task["base_notes_sha256"]
+    visual_ids = {maps[d['lecture_id']][d['evidence_id']] for d in defects}
     selected={'lecture_id':request.lecture_id,'course':request.source_pack.get('course',{}),
               'evidence':[e for e in request.source_pack['evidence'] if e['id'] in allowed],
-              'visuals':[deepcopy(v) for v in request.source_pack.get('visuals',[]) if v.get('evidence_id') in allowed]}
+              'visuals':[deepcopy(v) for v in request.source_pack.get('visuals',[]) if v.get('evidence_id') in visual_ids]}
     for visual in selected['visuals']:
         image=Path(visual['image_path']);target=directory/'visuals'/(file_sha256(image)+image.suffix)
         target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(image,target);visual['image_path']=str(target)
@@ -483,6 +531,7 @@ def apply_correction(original,patch,task):
             if not ids or set(ids)-set(task.get('lesson_evidence',{}).get(lecture,[])):
                 raise WorkflowError('Replacement cites evidence outside its lesson context')
             blocks[index]=deepcopy(block)
+            anchors[key]=blocks[index]
         elif op in moves:
             if set(op)!={'lecture_id','block_sha256','to_lecture_id','after_block_sha256'}:raise WorkflowError('Invalid targeted move')
             dest=op['to_lecture_id'];target=anchors.get((dest,op['after_block_sha256']))
@@ -497,27 +546,35 @@ def apply_correction(original,patch,task):
     for op in insertions:
         if not isinstance(op,dict) or set(op)!={'lecture_id','after_block_sha256','block'} or op['lecture_id'] not in rows:raise WorkflowError('Correction may only insert into the affected lesson')
         l=op['lecture_id'];b=op['block'];ids=b.get('evidence_ids',[]);anchor=anchors.get((l,op['after_block_sha256']))
-        if b.get('kind')!='paragraph' or not str(b.get('text','')).strip() or not ids or set(ids)-by_lesson[l] or set(ids)&seen or b.get('coverage_role') not in {'full','supplement'}:
+        visual = b.get('kind') == 'visual'
+        if (b.get('kind') not in {'paragraph','visual'} or not str(b.get('text','')).strip()
+                or not ids or set(ids)-by_lesson[l] or (set(ids)&seen and not visual)
+                or b.get('coverage_role') not in {'full','supplement'}
+                or (visual and (len(ids) != 1 or b.get('visual_id') != ids[0]
+                    or any(v.get('kind') == 'visual' and v.get('visual_id') == ids[0] for v in rows[l]['blocks'])))):
             raise WorkflowError('Correction changed its allowed coverage scope')
         if anchor is None or anchor['kind'] not in NARRATIVE_KINDS | {'heading'}:
             raise WorkflowError('Targeted correction anchor changed')
-        blocks=rows[l]['blocks'];index=next(i for i,v in enumerate(blocks) if v is anchor)
+        blocks=rows[l]['blocks'];index=next((i for i,v in enumerate(blocks) if v is anchor),None)
+        if index is None:raise WorkflowError('Targeted correction anchor was removed')
         blocks.insert(index+1,deepcopy(b));seen.update(ids)
     for op in attachments:
         if not isinstance(op,dict) or set(op)!={'lecture_id','block_sha256','evidence_ids'} or op['lecture_id'] not in rows:raise WorkflowError('Invalid source attachment')
         l=op['lecture_id'];ids=op['evidence_ids'];anchor=anchors.get((l,op['block_sha256']))
-        if not ids or set(ids)-by_lesson[l] or set(ids)&seen or anchor is None or anchor['kind'] not in NARRATIVE_KINDS or anchor.get('coverage_role') not in {'full','supplement'}:
+        if not ids or set(ids)-by_lesson[l] or set(ids)&seen or anchor is None or not any(b is anchor for b in rows[l]['blocks']) or anchor['kind'] not in NARRATIVE_KINDS or anchor.get('coverage_role') not in {'full','supplement'}:
             raise WorkflowError('Source attachment is outside the specific coverage defect')
         anchor['evidence_ids']+=list(ids);seen.update(ids)
     visual_seen=set()
     for update in updates:
         id=update.get('evidence_id')
         if (set(update)!={'evidence_id','decision','reason','inspected'} or id not in allowed or id in visual_seen
-                or update['decision']!='exclude' or update['inspected'] is not True or not str(update['reason']).strip()):raise WorkflowError('Invalid inspected visual correction')
+                or update['decision'] not in {'include','exclude'} or update['inspected'] is not True or not str(update['reason']).strip()):raise WorkflowError('Invalid inspected visual correction')
         visual_seen.add(id)
         row=next(rows[l] for l in rows if id in by_lesson[l]);old=next((v for v in row['visual_decisions'] if v['evidence_id']==id),None)
         if old is None:raise WorkflowError('Correction cannot create an unrelated visual decision')
         old.update(update)
+        if update['decision'] == 'include' and not any(b.get('kind') == 'visual' and b.get('visual_id') == id for b in row['blocks']):
+            raise WorkflowError('An included correction image needs an anchored visual block')
     if seen!=allowed:raise WorkflowError('Targeted correction did not cover every reported defect')
     for row in rows.values():
         for coverage in row['evidence_coverage']:
@@ -583,6 +640,13 @@ def batch_status(workspace,batch_id):
         except PermissionError:activity={**activity,'status':'UNKNOWN','reported_status':activity.get('status'),'liveness':'permission_denied'}
         directory=Path(activity.get('checkpoint',''))
         if directory.is_absolute() and directory.resolve().is_relative_to(root.resolve()):
+            progressive=directory/'progressive-v2/state.json'
+            if progressive.is_file():
+                value=json.loads(progressive.read_text())
+                activity={**activity,'progressive_status':value.get('status'),'accepted_sections':len(value.get('units',[])),
+                    **{key:value[key] for key in ('written_sections','verified_sections','waiting_sections','deliverable') if key in value},
+                    'current_unit':value.get('current_unit'),'last_step':value.get('last_step'),
+                    'last_activity':value.get('last_activity'),'progressive_problem':value.get('problem')}
             states=list(directory.glob('writing-parts/*/state.json'))
             if states:
                 state=json.loads(max(states,key=lambda p:p.stat().st_mtime).read_text())

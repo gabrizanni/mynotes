@@ -67,6 +67,23 @@ def test_word_transient_failure_is_local_retry_without_model(tmp_path, monkeypat
     assert result['status'] == 'COMPLETED' and len(calls) == 2
 
 
+def test_renderer_change_rebuilds_only_word_and_preserves_notes(tmp_path, monkeypatch):
+    ws,batch_id=finished_batch(tmp_path,monkeypatch)
+    first=nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
+    originals={p:p.read_bytes() for p in ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json')}
+    current=pub.word_renderer_hash()+'-synthetic-update'
+    monkeypatch.setattr(pub,'word_renderer_hash',lambda:current)
+    monkeypatch.setattr(bd,'word_renderer_hash',lambda:current)
+    monkeypatch.setattr('mynotes.batch.generate_batch',lambda *a,**k:pytest.fail('Renderer recovery must not regenerate notes'))
+    result=nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
+    assert result['status']=='COMPLETED' and result['delivery']['renderer_hash']==current
+    assert first['delivery']['files']!=result['delivery']['files']
+    assert result['publication']['status']=='PUBLISHED' and result['publication']['renderer_hash']==current
+    assert result['publication']['output_hash']!=first['publication']['output_hash']
+    assert all(json.loads(p.read_text())['notes']==json.loads(data)['notes'] for p,data in originals.items())
+    assert nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())['reused']
+
+
 def test_failure_after_words_resumes_publication_without_generation(tmp_path, monkeypatch):
     from mynotes import course_update
     ws, batch_id = finished_batch(tmp_path, monkeypatch)
@@ -79,6 +96,9 @@ def test_failure_after_words_resumes_publication_without_generation(tmp_path, mo
     monkeypatch.setattr('mynotes.batch.generate_batch', lambda *a, **k: pytest.fail('Publication recovery must reuse verified content'))
     result = nr.run_notes(ws, 'OPS', resume=batch_id, provider_adapter=NoProvider())
     assert result['status'] == 'COMPLETED'
+
+    assert 'problem' not in result
+    assert result['resolved_problems'][0]['message'] == 'synthetic commit defect'
 
 
 def test_review_mode_preserves_official_word_and_returns_candidate(tmp_path, monkeypatch):
@@ -216,13 +236,15 @@ def test_edited_capture_txt_retains_known_partial_recording_coverage(tmp_path, m
 
 def test_autonomous_recovery_accepts_bound_effective_context_without_writes(tmp_path):
     from test_autonomous_organization import prepared, IntegratedWriter
+    from test_batch_generation import VERIFIED
     from mynotes.local_recovery import recover_batch
     ws = prepared(tmp_path)
     first = generate_batch(ws, 'OPS', [1, 2], autonomous_organization=True,
-                           provider_adapter=IntegratedWriter(), pause_after='OPS-L01')
+                           provider_adapter=IntegratedWriter(), pause_after='OPS-L01', budgets=VERIFIED)
     before = {str(p): p.read_bytes() for p in ws.root.rglob('*') if p.is_file()}
     result = recover_batch(ws, first['batch_id'])
-    assert result['lessons'][0]['status'] == 'NOT_STARTED' and not result['provider_invoked']
+    # The joint request has settled both lessons; no unfinished second group.
+    assert result['lessons'] == [] and not result['provider_invoked']
     assert before == {str(p): p.read_bytes() for p in ws.root.rglob('*') if p.is_file()}
 
 
@@ -264,3 +286,52 @@ def test_legacy_successful_repair_migrates_and_continues_without_rewriting(tmp_p
     assert result['status'] == 'COMPLETED', result.get('problem')
     assert calls == [('OPS-L01', 'writing'), ('OPS-L01', 'coverage_repair'), ('OPS-L02', 'writing')]
     assert original_patch.read_bytes() == raw
+
+
+def test_completed_batch_accepts_one_source_bound_review_then_reuses(tmp_path, monkeypatch):
+    import subprocess
+    from mynotes.batch import _hash
+    from mynotes.workflow import _load_generation_phase
+    from mynotes.providers import ProviderResponse, _save_attempt, AttemptStart
+    from test_autonomous_organization import prepared, IntegratedWriter
+    ws = prepared(tmp_path)
+    monkeypatch.setattr(pub, '_render_and_validate', fake_render)
+    monkeypatch.setattr(bd, '_render_and_validate', fake_render)
+    class Recorded(IntegratedWriter):
+        def generate(self, request):
+            result = super().generate(request)
+            attempt = _save_attempt(request, command=['synthetic'], started=AttemptStart(),
+                completed=subprocess.CompletedProcess(['synthetic'],0,json.dumps(result.notes),''))
+            return ProviderResponse(result.notes,'codex','test-model','high',attempt_path=str(attempt))
+    built = generate_batch(ws,'OPS',[1,2],autonomous_organization=True,provider_adapter=Recorded())
+    batch_id = built['batch_id']
+    nr.run_notes(ws, 'OPS', resume=batch_id, provider_adapter=NoProvider())
+    root = ws.runs_dir/'_batches'/batch_id
+    raw_path = next(root.glob('generation-checkpoints/*/returned-writing-*.json'))
+    original = raw_path.read_bytes()
+    response = _load_generation_phase(raw_path, previous=None)
+    blocks = response.notes['lessons'][0]['notes']['blocks']
+    index = next(i for i,b in enumerate(blocks) if b['kind']=='paragraph')
+    review = {'base_notes_sha256': _hash(response.notes), 'defects': [
+        {'lecture_id': 'OPS-L01', 'path': f'blocks[{index}]', 'evidence_id': 'S001', 'reason': 'Observed unsupported specificity'}]}
+    class Correction:
+        calls = 0
+        def generate(self, request):
+            self.calls += 1
+            assert request.phase == 'coverage_repair'
+            task = request.batch_context['repair_task']; anchor = task['editable_blocks'][0]
+            block = {**blocks[index], 'text': 'A corrected, source-supported explanation.'}
+            notes = {'insertions': [], 'attachments': [], 'visual_updates': [], 'replacements': [{**anchor, 'block': block}]}
+            attempt = _save_attempt(request, command=['synthetic'], started=AttemptStart(),
+                completed=subprocess.CompletedProcess(['synthetic'],0,json.dumps(notes),''))
+            return ProviderResponse(notes,'codex','test-model','high',attempt_path=str(attempt))
+    adapter = Correction()
+    result = nr.run_notes(ws,'OPS',resume=batch_id,review_defects=review,provider_adapter=adapter)
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'}, result.get('problem')
+    assert adapter.calls == 1 and raw_path.read_bytes() == original
+    again = nr.run_notes(ws,'OPS',resume=batch_id,provider_adapter=NoProvider())
+    assert again['reused'] and not again['provider_invoked']
+    same = nr.run_notes(ws,'OPS',resume=batch_id,review_defects=review,provider_adapter=NoProvider())
+    assert same['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'}, same.get('problem')
+    changed = nr.run_notes(ws,'OPS',resume=batch_id,review_defects={**review,'defects': [{**review['defects'][0], 'reason': 'Another review'}]},provider_adapter=NoProvider())
+    assert changed['status'] == 'FAILED' and 'already consumed' in changed['problem']['message']

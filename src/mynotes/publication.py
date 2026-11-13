@@ -673,6 +673,14 @@ def _lesson_heading(lecture_id: str, title: str) -> str:
     return f"Lecture {lesson_number}: {clean_title}" if clean_title else f"Lecture {lesson_number}"
 
 
+def _display_source_citations(text: str, evidence_ids: list[str]) -> str:
+    """Keep technical source IDs in metadata, removing only exact cited lists."""
+    known = set(evidence_ids)
+    protected = ['`[^`]*`', *[re.escape(value) for value in _inline_math_tokens(text)]]
+    pattern = '|'.join(protected) + r'|[ \t]*\((?P<ids>[ST]\d+(?:\s*[,;]\s*[ST]\d+)*)\)'
+    return re.sub(pattern, lambda m: '' if m['ids'] and set(re.findall(r'[ST]\d+', m['ids'])) <= known else m[0], text)
+
+
 def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, language: str = "en", recap_language: str = "it") -> None:
     """Shared native Word narrative renderer for lectures and standalone study guides."""
     italian = language.lower().startswith("it")
@@ -682,7 +690,13 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
     if blocks:
         key_terms = _key_terms(blocks)
         qa_heading_added = False
-        for block in blocks:
+        for original_block in blocks:
+            first_rendered_paragraph=len(document.paragraphs)
+            block = deepcopy(original_block)
+            for field in ('text', 'question', 'answer'):
+                if isinstance(block.get(field), str) and block['kind'] != 'formula':
+                    block[field] = _display_source_citations(block[field],
+                        [*block.get('evidence_ids', []), *pack.get('_render_reference_ids', [])])
             kind = block["kind"]
             if kind == "overview":
                 _heading(document, "Argomenti della lezione" if italian else "Lecture overview", 3)
@@ -733,7 +747,18 @@ def append_note_blocks(document: Document, notes: dict[str, Any], pack: dict[str
                 identifier = str(block["visual_id"])
                 if identifier not in visuals or decisions.get(identifier, {}).get("decision") != "include":
                     raise PublicationError("Ordered visual is unavailable or not approved")
-                _append_visual(document, visuals[identifier], decisions[identifier])
+                # The reviewed visual description is a caption; the decision's
+                # reason is an internal inclusion/inspection audit trail.
+                _append_visual(document, visuals[identifier], {**decisions[identifier],
+                    'reason': block.get('text') or decisions[identifier].get('reason', 'Relevant course visual')})
+            if original_block.get('review_comments'):
+                paragraphs=document.paragraphs[first_rendered_paragraph:]
+                if not paragraphs and kind=='table':paragraphs=document.tables[-1].cell(0,0).paragraphs
+                if not paragraphs:raise PublicationError('A review comment has no rendered content anchor')
+                paragraph=paragraphs[0]
+                anchor=paragraph.runs[0] if paragraph.runs else paragraph.add_run('')
+                for reason in original_block['review_comments']:
+                    document.add_comment(runs=[anchor],text=str(reason),author='MyNotes',initials='MN')
 
 
 def _append_block(document: Document, notes: dict[str, Any], pack: dict[str, Any], *, page_break_before: bool = False, language: str = "en", recap_language: str = "it") -> None:
@@ -1137,6 +1162,18 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                 p = Path(origin[key])
                 if not p.resolve().is_relative_to(workspace.root.resolve()) or file_sha256(p) != origin[key+'_sha256']:
                     raise PublicationError('Original writing revalidation provenance changed')
+    if candidate.get('reviewed_revision'):
+        try:
+            from .reviewed_revision import verify
+            verify(candidate, workspace.root)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            raise PublicationError('Observed-defect revision cannot be verified: ' + str(error)) from error
+    if candidate.get('reference_review'):
+        try:
+            from .reference_review import verify
+            verify(candidate['reference_review'], workspace.root)
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+            raise PublicationError('Source reference rectification cannot be verified: ' + str(error)) from error
     if candidate.get("repair_lineage"):
         try:
             from .batch_recovery import verify_repair_lineage
@@ -1157,7 +1194,38 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                 from .local_recovery import verify_local_receipt
                 verify_local_receipt(attempt, workspace.root)
                 continue
-            if record.get("envelope", {}).get("transport") == "agy_parts_v1":
+            if record.get("envelope", {}).get("transport") == "agy_progressive_v2":
+                from .agy_progressive import verify_receipt
+                verified_notes = verify_receipt(record, workspace.root)
+                # A joint response uses global IDs; lesson candidates use local
+                # IDs. Only aliases proven by the intact transport may be hidden
+                # in display text. Do not infer aliases from unverified prose.
+                def references(value):
+                    if isinstance(value, dict):
+                        return [i for key,item in value.items() for i in
+                                (item if key == 'evidence_ids' and isinstance(item,list) else references(item))]
+                    if isinstance(value, list):
+                        return [i for item in value for i in references(item)]
+                    return []
+                pack['_render_reference_ids'] = sorted(set(pack.get('_render_reference_ids', [])) | set(references(verified_notes)))
+                envelope = record['envelope']
+            elif record.get("envelope", {}).get("transport") == "agy_joint_v1":
+                from .simple_notes import certified
+                from .providers import ProviderRequest, RequestedModel
+                from .batch import batch_notes_schema
+                expected=candidate.get('requested_model',record['requested'])
+                request=ProviderRequest(lecture_id,{}, {},RequestedModel(**expected),
+                    response_schema=batch_notes_schema(autonomous_organization=True))
+                verified_notes=certified(record,request)
+                def joint_references(value):
+                    if isinstance(value,dict):
+                        return [i for key,item in value.items() for i in
+                            (item if key=='evidence_ids' and isinstance(item,list) else joint_references(item))]
+                    if isinstance(value,list):return [i for item in value for i in joint_references(item)]
+                    return []
+                pack['_render_reference_ids']=sorted(set(pack.get('_render_reference_ids',[]))|set(joint_references(verified_notes)))
+                envelope=record['envelope']
+            elif record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
                 verify_receipt(record, workspace.root)
                 envelope = record["envelope"]
@@ -1189,11 +1257,39 @@ def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float
     pages = []
     try:
         for index, page in enumerate(rendered):
-            text = page.get_textpage().get_text_range().strip()
-            images = sum(1 for obj in page.get_objects() if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE)
-            if not text and not images:
+            textpage = page.get_textpage()
+            try:
+                text = textpage.get_text_range().strip()
+                # Check actual positioned glyphs, not only extracted text.
+                # Footers may be below the body margin; horizontal overflow
+                # and physical-page clipping are never intentional layout.
+                width, height = page.get_size()
+                margin = 1.5 / 2.54 * 72
+                body_characters = 0
+                for character in range(textpage.count_chars()):
+                    if not textpage.get_text_range(character, 1).strip():
+                        continue
+                    left, bottom, right, top = textpage.get_charbox(character)
+                    if right <= left or top <= bottom:
+                        continue
+                    if top >= margin - 3 and bottom <= height - margin + 3:
+                        body_characters += 1
+                    if left < margin - 3 or right > width - margin + 3 or bottom < -1 or top > height + 1:
+                        raise PublicationError(f'Rendered Word has text outside the printable area at page {index + 1}')
+                images = body_images = 0
+                for obj in page.get_objects():
+                    if obj.type == pdfium_raw.FPDF_PAGEOBJ_IMAGE:
+                        images += 1
+                        left, bottom, right, top = obj.get_bounds()
+                        if top >= margin - 3 and bottom <= height - margin + 3:
+                            body_images += 1
+                        if left < margin - 3 or right > width - margin + 3 or bottom < -1 or top > height + 1:
+                            raise PublicationError(f'Rendered Word has an image outside the printable area at page {index + 1}')
+            finally:
+                textpage.close()
+            if not body_characters and not body_images:
                 raise PublicationError(f"Rendered Word contains an empty page at {index + 1}")
-            pages.append({"page": index + 1, "characters": len(text), "images": images})
+            pages.append({"page": index + 1, "characters": len(text), "body_characters": body_characters, "images": images})
     finally:
         rendered.close()
     if not pages:
@@ -1201,10 +1297,22 @@ def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float
     return {"pdf": str(pdf), "pages": pages, "renderer": soffice}
 
 
+def _validate_comment_links(archive, document_xml):
+    from xml.etree import ElementTree as ET
+    referenced={n.get(qn('w:id')) for n in ET.fromstring(document_xml).iter(qn('w:commentReference'))}
+    if not referenced:return 0
+    if 'word/comments.xml' not in archive.namelist():
+        raise PublicationError('Word review comments have no content part')
+    known={n.get(qn('w:id')) for n in ET.fromstring(archive.read('word/comments.xml')).iter(qn('w:comment'))}
+    if referenced-known:raise PublicationError('Word review comment references are dangling')
+    return len(referenced)
+
+
 def _docx_structure(path: Path, lecture_id: str, expected_visuals: int, expected_formula: bool,
                     expected_tables: list[list[list[str]]] | None = None) -> dict[str, Any]:
     with zipfile.ZipFile(path) as archive:
         document_xml = archive.read("word/document.xml")
+        _validate_comment_links(archive,document_xml)
         media = [name for name in archive.namelist() if name.startswith("word/media/")]
     start = document_xml.count(f"MYNOTES START {lecture_id}".encode())
     end = document_xml.count(f"MYNOTES END {lecture_id}".encode())
@@ -1262,6 +1370,8 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
     source_candidate = workspace.runs_dir / lecture_id / "lecture_notes.candidate.json"
     source_candidate_hash = file_sha256(source_candidate)
     candidate, pack = _load_candidate(workspace, lecture_id); notes = candidate["notes"]
+    from .memory import candidate_style
+    profile = candidate_style(configuration, code, candidate)
     image_limit = candidate.get("request_options", {}).get("image_limit")
     if image_limit is None:
         image_limit = profile.get("image_limit")
@@ -1290,7 +1400,7 @@ def build_word_candidate(workspace: Workspace, lecture_id: str, *, timeout_secon
         _configure_document(document, profile)
     else:
         document = _new_document(course, profile)
-    _replace_or_append(document, notes, pack, language=str(course.get("languages", {}).get("notes", "en")), recap_language=str(profile.get("recap_language", "it")))
+    _replace_or_append(document, notes, pack, language=str(profile.get("notes_language") or course.get("languages", {}).get("notes", "en")), recap_language=str(profile.get("recap_language", "it")))
     document.save(output)
     expected_visuals = sum(1 for item in notes.get("visual_decisions", []) if item.get("decision") == "include")
     expected_formula = bool(notes.get("formula") or notes.get("formulas") or any(block.get("kind") == "formula" for block in notes.get("blocks", [])))

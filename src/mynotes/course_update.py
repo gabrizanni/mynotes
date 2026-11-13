@@ -228,7 +228,8 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
         related = set(payload.get('related_lessons', [])) - set(lectures)
         if related:
             raise pub.PublicationError('Related published lessons require the same coordinated revision: ' + ', '.join(sorted(related)))
-        profile = pub.effective_style(workspace.configuration_store().load(), code)
+        from .memory import candidate_style
+        profile = candidate_style(workspace.configuration_store().load(), code, payload)
         limit = payload.get('request_options', {}).get('image_limit')
         if limit is None: limit = profile.get('image_limit')
         count = sum(v.get('decision') == 'include' for v in payload['notes'].get('visual_decisions', []))
@@ -236,7 +237,7 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
             raise pub.PublicationError('Candidate exceeds the effective image policy; review it before cumulative update')
         payloads[lecture] = (payload, pack)
         sources[lecture] = file_sha256(path)
-        pub._replace_or_append(generated, payload['notes'], pack, language=course.get('languages', {}).get('notes', 'en'), recap_language=pub.effective_style(workspace.configuration_store().load(), code).get('recap_language', 'it'))
+        pub._replace_or_append(generated, payload['notes'], pack, language=profile.get('notes_language') or course.get('languages', {}).get('notes', 'en'), recap_language=profile.get('recap_language', 'it'))
     directory = workspace.runs_dir / '_course_updates' / code / uuid.uuid4().hex
     directory.mkdir(parents=True, exist_ok=True)
     raw = directory / 'generated.docx'; generated.save(raw)
@@ -276,7 +277,8 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
         'candidate': str(output), 'candidate_hash': file_sha256(output), 'baseline_hash': baseline_hash,
         'source_candidate_hashes': sources, 'generated_baseline': str(raw), 'generated_baseline_sha256': file_sha256(raw),
         'structure': structure, 'render': render, 'conflicts': conflicts, 'preserved_edits': preserved,
-        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied}, 'validated_at': now_compact_utc()}
+        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied},
+        'renderer_hash': pub.word_renderer_hash(), 'validated_at': now_compact_utc()}
     atomic_json_write(output.with_suffix('.validation.json'), validation)
     return {'status': 'WORD_CANDIDATE_VALIDATED', **validation}
 
@@ -305,6 +307,7 @@ def publish_course_revision(workspace, candidate_path):
             'baseline_hash': validation['baseline_hash'], 'status': 'PREPARED', 'created_at': now_compact_utc(),
             'content_hashes': validation['content_hashes'], 'content_hash': validation['content_hashes'][lectures[0]],
             'publication_state': pub._publication_state(workspace, target)}
+        transaction['renderer_hash'] = validation.get('renderer_hash')
         originals_dir = candidate_path.parent / 'original-candidates'
         originals_dir.mkdir(exist_ok=True)
         transaction['original_candidates'] = {}
@@ -411,7 +414,7 @@ def recover_course_revision(workspace, transaction):
     return transaction
 
 
-def update_course(workspace, lectures, *, timeout_seconds=None):
+def update_course(workspace, lectures, *, timeout_seconds=None, before_publish=None):
     from . import publication as pub
     if isinstance(lectures, str): lectures = [lectures]
     lectures = [value.upper() for value in lectures]
@@ -427,13 +430,17 @@ def update_course(workspace, lectures, *, timeout_seconds=None):
         unchanged = True
         for lecture in lectures:
             payload, _ = pub._load_candidate(workspace, lecture)
-            previous = next((t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')}).get(lecture)
-                             for t in transactions if t.get('status') == 'COMPLETED' and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), None)
-            unchanged &= bool(payload.get('published_to_word')) and previous == pub._content_fingerprint(payload)
+            previous = next((t for t in transactions if t.get('status') == 'COMPLETED'
+                             and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), {})
+            content = previous.get('content_hashes', {previous.get('lecture_id'): previous.get('content_hash')}).get(lecture)
+            unchanged &= (bool(payload.get('published_to_word')) and content == pub._content_fingerprint(payload)
+                          and previous.get('renderer_hash') == pub.word_renderer_hash())
         if unchanged:
             return {'status': 'SKIPPED', 'lecture_id': lectures[0], 'lectures': lectures, 'output': str(target), 'reason': 'already_published'}
     built = build_course_revision(workspace, lectures, timeout_seconds=timeout_seconds)
     if built['status'] == 'PERSONAL_CONTENT_CONFLICT': return built
     if course['publication']['mode'] == 'review':
         return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show the cumulative candidate and publish only after approval.'}
+    if before_publish is not None:
+        before_publish(built)
     return publish_course_revision(workspace, Path(built['candidate']))
