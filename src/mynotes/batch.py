@@ -861,7 +861,8 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
         pack = plan["packs"][lecture]
         # Ownership is authoritative application metadata. A writer need not
         # spend tokens excluding untouched slides belonging to other lessons.
-        # Never synthesize an exclusion for an owned or actually cited page.
+        # Cited foreign pages keep their evidence links. An unused foreign
+        # figure may be excluded without claiming a second inspection.
         cited = {identifier for block in notes.get('blocks', []) for identifier in block.get('evidence_ids', [])}
         coverage = {item.get('evidence_id') for item in notes.get('evidence_coverage', [])}
         visuals = {item.get('evidence_id') for item in notes.get('visual_decisions', [])}
@@ -870,16 +871,19 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
             identifier, canonical = item['id'], item.get('canonical_slide_id')
             owner = plan['ownership'].get(canonical, {}).get('owner')
             deferred = plan['ownership'].get(canonical, {}).get('status') in {'deferred', 'pending'}
-            if not owner or (owner == lecture and not deferred) or identifier in cited:
+            if not owner or (owner == lecture and not deferred):
                 continue
             reason = (f'Course pool pending later transcript review; not covered in this lesson.'
                       if deferred else f'Assigned by the reviewed batch ownership ledger to {owner}; not used in this lesson.')
-            if identifier not in coverage:
+            if identifier not in coverage and identifier not in cited:
                 notes['evidence_coverage'].append({'evidence_id': identifier, 'disposition': 'excluded', 'reason': reason})
-            if identifier in available_visuals and identifier not in visuals:
-                notes['visual_decisions'].append({'evidence_id': identifier, 'decision': 'exclude', 'reason': reason, 'inspected': False})
+            if (identifier in available_visuals and identifier not in visuals
+                    and not any(b.get('kind')=='visual' and b.get('visual_id')==identifier for b in notes['blocks'])):
+                visual_reason=(f'Figure not selected in this lesson; main page explanation belongs to {owner}. Narrative citations remain intact.' if identifier in cited else reason)
+                notes['visual_decisions'].append({'evidence_id': identifier, 'decision': 'exclude', 'reason': visual_reason, 'inspected': False})
         notes = _validate_candidate_notes(notes, lecture, pack, source_root=Path(plan["sources"][lecture]["path"]).parent.parent,
-                                          style=plan["style"], final_phase=final_phase)
+                                          style=plan["style"], final_phase=final_phase,
+                                          editorial_warnings=plan.get('progressive_protocol')==3 and plan['requested_model']['quality']=='standard')
         if plan["style"].get("image_limit") is not None and sum(v.get("decision") == "include" for v in notes["visual_decisions"]) > plan["style"]["image_limit"]:
             raise WorkflowError("Batch lesson exceeds its image limit")
         local_slides = {item["id"]: item["canonical_slide_id"] for item in pack["evidence"] if item.get("canonical_slide_id")}

@@ -468,6 +468,9 @@ def test_black_emphasis_is_distinct_from_bold_orange_terms(tmp_path) -> None:
     # Writing remains reviewable and saved legacy candidates still build.
     assert _validate_candidate_notes(candidate, "OPS7-L01", pack, style=style, final_phase=False)
     assert _validate_candidate_notes(candidate, "OPS7-L01", pack)
+    warned = _validate_candidate_notes(candidate, "OPS7-L01", pack, style=style, editorial_warnings=True)
+    assert warned['blocks'][1]['text'] == candidate['blocks'][1]['text']
+    assert 'grassetto' in warned['blocks'][0]['review_comments'][0]
     candidate["blocks"][1]["text"] += " **Additional stock has a cost.**"
     assert _validate_candidate_notes(candidate, "OPS7-L01", pack, style=style)
 

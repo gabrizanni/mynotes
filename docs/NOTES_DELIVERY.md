@@ -1,5 +1,7 @@
 # Current simple joint flow (new requests)
 
+For the current operational flow, controls and limits see [NOTES_FLOW.md](NOTES_FLOW.md).
+
 New `notes` requests use contract marker `progressive_protocol=3`: one joint
 writing response, complete transcripts and a single copy of shared slide pages.
 This marker distinguishes persisted behavior; it does not enable progressive

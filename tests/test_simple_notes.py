@@ -185,6 +185,26 @@ def test_provided_video_links_are_preserved_locally_not_invented_as_a_lecture(tm
     assert notes==before
 
 
+def test_resource_only_page_does_not_certify_unsupported_teaching_claim(tmp_path):
+    from test_progressive_v2 import request,unit
+    from mynotes import progressive_wire as wire
+    req=request(tmp_path)
+    one,_=wire.validate_unit(req,unit(),[]);two,_=wire.validate_unit(req,unit(1,True),[one])
+    notes=wire.assemble(req,[one,two])
+    req.batch_context.update(progressive_protocol=3,ownership=[{'evidence_id':'S001','canonical_slide_id':'deck:page:1'},{'evidence_id':'S002','canonical_slide_id':'deck:page:2'}])
+    req.source_pack['evidence'][1].update(content='Source video https://youtu.be/exact 2',page=2)
+    owner=notes['lessons'][1]['notes'];owner['blocks']=[b for b in owner['blocks'] if b.get('coverage_role') not in {'full','supplement'}]
+    decision=next(c for c in notes['organization'] if c['canonical_slide_id']=='S002')
+    decision.update(status='taught',evidence_ids=['S002'])
+    original=deepcopy(notes);after=simple.project(req,notes)
+    decision=next(c for c in after['organization'] if c['canonical_slide_id']=='deck:page:2')
+    assert decision['status']=='supplement' and decision['evidence_ids']==[]
+    block=next(b for b in after['lessons'][1]['notes']['blocks'] if b.get('source_derivation',{}).get('kind')=='exact_source_resource')
+    assert block['evidence_ids']==['S002'] and 'https://youtu.be/exact' in block['text']
+    assert 'unverified_resource_teaching' in json.dumps(after)
+    assert simple.project(req,after)==after and notes==original
+
+
 def test_native_heading_alias_is_normalized_without_rewriting_content():
     from mynotes.batch import batch_notes_schema
     from mynotes.progressive_wire import native_schema
@@ -246,3 +266,29 @@ def test_foreign_clarification_does_not_prove_the_owner_taught_a_slide(tmp_path,
     assert result['status'] in {'FAILED','NEEDS_REVIEW'} and calls==[1]
     assert 'transcript' in json.dumps(result.get('problem')).lower()
     assert not list(ws.runs_dir.glob('OPS-L*/lecture_notes.candidate.json'))
+
+
+def test_standard_keeps_foreign_page_recall_without_another_image_decision(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    from PIL import Image
+    image=tmp_path/'text-page.png';Image.new('RGB',(100,100),'white').save(image)
+    source=ws.runs_dir/'OPS-L01/source_pack.json';pack=json.loads(source.read_text())
+    pack['visuals']=[{'evidence_id':'S001','image_path':str(image)}];source.write_text(json.dumps(pack))
+    def recall(result,request):
+        second=result['lessons'][1]['notes']
+        second['blocks'].insert(1,{'kind':'paragraph','text':'Brief recall linking the earlier main explanation to the current discussion.',
+            'evidence_ids':['S001'],'coverage_role':'full'})
+        second['visual_decisions']=[v for v in second['visual_decisions'] if v['evidence_id']!='S001']
+    calls=[];install(monkeypatch,calls,transform=recall)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status']=='COMPLETED_WITH_WARNINGS',result.get('problem')
+    note=json.loads((ws.runs_dir/'OPS-L02/lecture_notes.candidate.json').read_text())['notes']
+    block=next(b for b in note['blocks'] if b.get('text','').startswith('Brief recall'))
+    assert block['coverage_role']=='reference' and block['prior_lecture_id']=='OPS-L01'
+    assert block['evidence_ids']==['S001'] and block['review_comments']
+    assert next(v for v in note['visual_decisions'] if v['evidence_id']=='S001')['decision']=='exclude'
+    assert calls==[1]

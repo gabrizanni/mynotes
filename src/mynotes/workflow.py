@@ -643,7 +643,7 @@ def ordinary_emphasis_diagnostics(notes: dict[str, Any], source_pack: dict[str, 
             "required": required, "missing": required and not spans}
 
 
-def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True, normalization_report_path: Path | None = None) -> dict[str, Any]:
+def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True, normalization_report_path: Path | None = None, editorial_warnings: bool = False) -> dict[str, Any]:
     """Reject a polished-looking draft unless it accounts for its actual evidence."""
     from .evidence_refs import normalize_references, EvidenceReferenceError
     try:
@@ -853,7 +853,12 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     if style is not None and technical_structure and narrative_words >= 500 and narrative_term_count == 0:
         raise WorkflowError("Long technical candidate needs a [[term:...]] key term in its narrative")
     if style is not None and final_phase and ordinary_emphasis_diagnostics(result, source_pack)["missing"]:
-        raise WorkflowError("Long technical candidate needs ordinary black **emphasis** in its narrative, distinct from orange terms")
+        if not editorial_warnings:
+            raise WorkflowError("Long technical candidate needs ordinary black **emphasis** in its narrative, distinct from orange terms")
+        from .note_assembly import attach_comments
+        from .progressive_review import digest
+        attach_comments(result,[{'block_sha256':digest(result['blocks'][0]),'issue_code':'minor_editorial',
+            'reason':'Manca l’enfasi ordinaria in grassetto nel testo; appunti conservati senza riscrittura automatica. I termini tecnici arancioni restano distinti.'}])
     # Saved candidates from earlier versions may contain only legacy blocks.
     # Once a draft opts into the explicit editorial structure, validate its
     # sequence rather than trusting a prompt alone to produce it consistently.

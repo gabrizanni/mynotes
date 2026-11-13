@@ -9,6 +9,11 @@ Use the ordinary notes command through delivery. Historical progressive-v2 jobs
 keep their recorded protocol and correction limits when resumed. New requests
 have no section queue or six/twelve-block writing turns. A successful provider
 response is saved before local processing; ERROR is never publishable.
+Standard reports missing ordinary bold and possible repeated recall as warnings,
+not reasons for another model turn. Source-only video pages retain their exact
+titles/links; they do not require invented video contents or teaching citations.
+The explicit main owner determines cross-lesson recall metadata. Do not perfect
+otherwise usable notes or treat local checks as semantic certification.
 
 A concrete operational request takes precedence over optional setup. Reuse saved
 courses, folders, languages and style. Ask only for indispensable missing source

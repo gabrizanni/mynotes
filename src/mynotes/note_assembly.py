@@ -63,6 +63,17 @@ def compile_notes(request, notes, decisions):
         lecture=row['lecture_id'];note=row['notes']
         own={r['canonical_slide_id'] for r in result['organization'] if r['owner']==lecture}
         if request.batch_context.get('progressive_protocol')==3:
+            owners={c['canonical_slide_id']:c['owner'] for c in result['organization']}
+            for block in note['blocks']:
+                linked={owners[i] for i in block.get('evidence_ids',[]) if i in owners}
+                if (request.requested.quality=='standard' and linked and lecture not in linked
+                        and len(linked)==1 and block.get('coverage_role') in {'full','supplement'}):
+                    # Explicit joint ownership determines where the main
+                    # explanation belongs. Keep this linked passage as recall,
+                    # never another main explanation or a semantic certificate.
+                    block.update(coverage_role='reference',prior_lecture_id=next(iter(linked)))
+                    attach_comments(note,[{'block_sha256':digest(block),'issue_code':'cross_lesson_recall',
+                        'reason':'Passaggio collegato alla spiegazione principale dell’altra lezione, conservato come richiamo. Possibili ripetizioni segnalate senza riscrittura automatica.'}])
             from .progressive_wire import source_resources
             for identifier in sorted(own):
                 source=sources.get(identifier,{})
@@ -77,6 +88,16 @@ def compile_notes(request, notes, decisions):
                 coverage={v['evidence_id']:v for v in note['evidence_coverage']}
                 coverage[identifier]={'evidence_id':identifier,'disposition':'used','reason':'Exact supplied resource titles/URLs preserved; video content not inferred.'}
                 note['evidence_coverage']=list(coverage.values())
+                choice=next(c for c in result['organization'] if c['canonical_slide_id']==identifier)
+                if choice.get('status')=='taught' and not any(i.startswith('T') for i in choice.get('evidence_ids',[])):
+                    # This exact resource block has no speech evidence. Retain
+                    # the supplied link without certifying the writer's claim
+                    # that its unseen content was taught. Never invent T links.
+                    choice.update(status='supplement',evidence_ids=[],
+                        reason='Exact supplied resource retained; the original taught attribution has no linked speech evidence and is not certified.')
+                    attach_comments(note,[{'block_sha256':digest(note['blocks'][-1]),
+                        'issue_code':'unverified_resource_teaching',
+                        'reason':'Il modello indicava questa risorsa come spiegata dal docente senza collegare il parlato. Conservati solo titolo e link delle slide; contenuto del video e attribuzione al docente non verificati.'}])
         placed={b.get('visual_id') for b in note['blocks'] if b['kind']=='visual'}
         for identifier,decision in decisions.items():
             if identifier not in own or (decision.get('decision')!='include' and identifier not in required) or identifier in placed:continue
