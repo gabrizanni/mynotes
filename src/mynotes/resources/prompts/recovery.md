@@ -1,3 +1,10 @@
+The joint writer permits one observed native stream-idle recovery in the same
+Agy invocation. A second native retry remains blocking; a final ERROR is never
+publishable. Do not launch another whole generation to replace it.
+A stream-idle log does not establish a universal Google API deadline. Model-step
+wall time is not measured thinking time. Do not promise fixed Medium latency or
+identical quality across effort settings; retain the user's selected model.
+
 For new simple joint jobs (progressive_protocol=3), use the ordinary
 `notes CODE --resume BATCH_ID` to reuse certified successful writing and finish
 local metadata, layout and Word processing. Standard does not call a model

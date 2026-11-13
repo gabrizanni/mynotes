@@ -220,7 +220,8 @@ def _wire(prompt: str) -> bytes:
 def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | None], *, cwd: str, env: dict,
                 total_seconds: float = TOTAL_SECONDS, first_seconds: float = FIRST_TURN_SECONDS,
                 next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None,
-                abort_errors: bool = False, log_file: Path | None = None) -> subprocess.CompletedProcess:
+                abort_errors: bool = False, log_file: Path | None = None,
+                stream_recovery: bool = False) -> subprocess.CompletedProcess:
     """One process/conversation; separate stderr, bounded turns, group cleanup."""
     from .review_dispatch import cancel_event
     outputs = [bytearray(), bytearray()]
@@ -232,8 +233,16 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         previous = signal.signal(signal.SIGTERM, interrupted)
     started = turn_started = time.monotonic(); turn_limit = first_seconds
     pending = b''; finished = False; nudged = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
-    log_position = 0
+    log_position = 0; failure_tail = ''
     def provider_failure(message):
+        nonlocal failure_tail
+        failure_tail=(failure_tail+message)[-4096:]
+        if stream_recovery and re.search(r'stream idle timeout',message,re.I) and not re.search(r'output token limit|response was cut off',message,re.I):
+            attempts=[int(n) for n in re.findall(r'attempt (\d+) failed',failure_tail,re.I)]
+            if max(attempts,default=1)<=1:
+                if on_event is not None:
+                    on_event({'event':'transport_recovery','kind':'stream_idle_timeout','maximum_internal_retries':1})
+                return
         if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|attempt \d+ failed.*retrying', message, re.I):
             raise ProviderError('Provider interrupted or truncated this unit; no internal restart permitted: ' + message[:500])
     try:

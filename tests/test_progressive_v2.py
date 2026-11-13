@@ -277,6 +277,20 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
     assert result.returncode==0
 
 
+@pytest.mark.parametrize('attempt',[1,2])
+def test_joint_stream_permits_only_first_native_idle_recovery(tmp_path,attempt):
+    import sys,os
+    from mynotes.agy_parts import run_session
+    events=[]
+    code="import sys,json,time\nsys.stdin.readline()\nprint('attempt %d failed (stream idle timeout (5m0s): context deadline exceeded), retrying',file=sys.stderr,flush=True)\ntime.sleep(.1)\nprint(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)\n" % attempt
+    def run():return run_session([sys.executable,'-u','-c',code],'test',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),abort_errors=True,stream_recovery=True,total_seconds=3,on_event=events.append)
+    if attempt==2:
+        with pytest.raises(ProviderError,match='interrupted'):run()
+    else:
+        assert run().returncode==0
+        assert any(e.get('event')=='transport_recovery' for e in events)
+
+
 def install_fake_transport(monkeypatch, calls, invalid=False, transform=None):
     from mynotes import agy_parts
     from mynotes import providers

@@ -88,6 +88,7 @@ PUBLIC_FILES = (
     "setup/Sources/MyNotesSetup/WorkspaceSettingsView.swift",
     "scripts/build_capture.py",
     "scripts/capture_install_guard.py",
+    "scripts/cleanup_launch_services.py",
     "scripts/test_capture_native.py",
     "scripts/build_base_template.py",
     "scripts/check_public_tree.py",

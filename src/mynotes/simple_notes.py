@@ -96,12 +96,17 @@ def generate(request):
     sheets=previews(request)
     request=replace(request,batch_context={**request.batch_context,'preview_sheets':sheets})
     context=_stage_agy_context(request,root)
-    context+='\nThe declared preview_sheets are for selection only. Inspect grouped previews once. Open full image_path for included figures, numerical visual data and uncertain pages. Covers/separators may be classified from an opened grouped preview. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection.'
+    image_ids={v['evidence_id'] for v in request.source_pack.get('visuals',[])}
+    unreadable=[r['id'] for r in request.source_pack['evidence'] if r['id'] in image_ids and (r.get('textless') or not str(r.get('content') or r.get('text') or '').strip())]
+    context+='\nThe declared preview_sheets are for selection only. Inspect grouped previews once. Open full image_path for every chart, diagram, table, formula or uncertain image, EVEN IF you exclude it from the Word; explaining it in prose does not waive reading the source. Also open every included figure and every cited textless source. Covers/separators may be classified from an opened grouped preview. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection. Complete these source reads before finish, grouping independent image reads and avoiding repeated reads.'
+    if unreadable:
+        context+='\nImage-only source IDs requiring full reading when substantively cited: '+', '.join(unreadable)+'.'
     args=command(request,request.response_schema,root/'joint-provider.log')
     from .visual_memory import certificate_access
     access=certificate_access(request.batch_context.get('cached_visual_inspections',[]),asdict(request.requested))
-    answer={};envelopes=[];completed=None;started=AttemptStart()
+    answer={};envelopes=[];completed=None;started=AttemptStart();recovery_events=[]
     def observe(event):
+        if event.get('event')=='transport_recovery' and event not in recovery_events:recovery_events.append(event)
         row=observed_access(event,root)
         if row:access.append(row)
     def accept(envelope):
@@ -114,10 +119,10 @@ def generate(request):
         with prevent_idle_sleep():
             completed=run_session(args,'Open the explicitly provided preview sheet images before choosing exclusions. They are allowed source images. Preview-only inspection must use inspected=false. '+_prompt(request,context=context),accept,cwd=str(root),
                 env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},on_event=observe,
-                abort_errors=True,log_file=root/'joint-provider.log')
+                abort_errors=True,log_file=root/'joint-provider.log',stream_recovery=True)
         if completed.returncode or len(envelopes)!=1:raise ProviderError('Joint writing did not complete')
         attempt=_save_attempt(request,command=args,completed=completed,started=started,
-            envelope={'transport':'agy_joint_v1','status':'SUCCESS','source_access':access,'preview_sheets':sheets})
+            envelope={'transport':'agy_joint_v1','status':'SUCCESS','source_access':access,'preview_sheets':sheets,'transport_recoveries':recovery_events})
         model,effort=_reported_settings(envelopes)
         return ProviderResponse(answer,'agy',model,effort,envelopes[0].get('usage',{}),str(attempt))
     except BaseException as error:
@@ -125,5 +130,5 @@ def generate(request):
             out=error.output;err=getattr(error,'stderr','')
             completed=subprocess.CompletedProcess(args,None,out.decode(errors='replace') if isinstance(out,bytes) else out,err.decode(errors='replace') if isinstance(err,bytes) else err)
         _save_attempt(request,command=args,completed=completed,started=started,error=str(error),
-            envelope={'transport':'agy_joint_v1','status':'ERROR','source_access':access,'preview_sheets':sheets})
+            envelope={'transport':'agy_joint_v1','status':'ERROR','source_access':access,'preview_sheets':sheets,'transport_recoveries':recovery_events})
         raise

@@ -88,6 +88,13 @@ to conceal missing content or fabricate evidence.
   receipts remain retained.
 - Provider `ERROR` results are preserved for diagnosis and never published.
   There is no automatic full-generation restart to make a failed run look good.
+- A new joint writer permits the first observed native Agy stream-idle retry
+  inside the same invocation/conversation. This may repeat the last provider
+  model request; it does not start another MyNotes generation. A second observed
+  retry stops the process. Only a final successful result can be delivered.
+- Full-source reads are required for charts, diagrams, tables, formulas and
+  uncertain images even when excluded from Word, and for substantively cited
+  image-only pages. The writer receives these requirements before writing.
 - `--regenerate` is an explicit new revision, incompatible with `--resume`.
   Historical jobs retain their original schema, checkpoints and correction
   allowances; reopening does not reset attempts.
