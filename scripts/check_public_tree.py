@@ -72,6 +72,7 @@ PUBLIC_FILES = (
     "setup/Resources/MyNotesGuideLogo.png",
     "setup/Resources/MyNotes.icns",
     "setup/Sources/MyNotesSetup/App.swift",
+    "setup/Sources/MyNotesSetup/ChatTerminal.swift",
     "setup/Sources/MyNotesSetup/SetupProgress.swift",
     "setup/Sources/MyNotesSetup/ModelChoices.swift",
     "setup/Sources/MyNotesSetup/ModelCatalogCommand.swift",
