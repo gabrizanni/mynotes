@@ -19,6 +19,10 @@ def validate(notes, request, access, sheets):
             if visual and file_sha256(Path(visual['image_path']))==member['source_sha256']:
                 preview.add(member['evidence_id'])
     all_choices=[v for lesson in notes['lessons'] for v in lesson['notes']['visual_decisions']]
+    lecture_scope=request.style.get('slide_scope')=='lecture'
+    cited={i for row in notes['lessons'] for b in row['notes'].get('blocks',[])
+           if b.get('kind') in {'paragraph','bullets','table','formula','visual'} and b.get('coverage_role')!='reference'
+           for i in b.get('evidence_ids',[])}
     decisions={v['evidence_id']:v for v in all_choices}
     def opened(identifier):
         visual=visuals.get(identifier)
@@ -27,14 +31,17 @@ def validate(notes, request, access, sheets):
     for choice in all_choices:
         identifier=choice['evidence_id']
         if opened(identifier):continue
-        if (choice.get('decision')=='include' or choice.get('content_kind') in {'chart','diagram','table','formula','uncertain'}):
+        needs_data=(choice.get('content_kind') in {'chart','diagram','table','formula','uncertain'}
+                    and (not lecture_scope or (choice.get('content_kind')=='uncertain' and identifier in cited)))
+        if (choice.get('decision')=='include' or identifier in request.batch_context.get('required_visual_ids',[]) or needs_data):
             raise ProviderError('NEEDS_REVIEW: source needs observed full access: '+identifier)
         if choice.get('inspected') is True:
-            if identifier not in preview:
+            if identifier not in preview and not lecture_scope:
                 raise ProviderError('NEEDS_REVIEW: source inspection claim lacks observed full access: '+identifier)
             choice['inspected']=False
             notices.append({'evidence_id':identifier,'issue_code':'optional_visual_disagreement',
-                'reason':'Classificazione da anteprima osservata; nessuna ispezione completa dichiarata dal programma.'})
+                'reason':('Classificazione da anteprima osservata; nessuna ispezione completa dichiarata dal programma.'
+                          if identifier in preview else 'Figura esclusa: ispezione completa dichiarata dal modello ma non osservata; il programma non la certifica.')})
     for choice in notes.get('organization',[]):
         structural=choice.get('structural_review')
         if not structural:continue

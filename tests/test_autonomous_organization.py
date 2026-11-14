@@ -233,6 +233,7 @@ def test_saved_successful_correction_survives_resume_and_module_update(tmp_path,
     from mynotes.providers import _save_attempt, AttemptStart
     from mynotes import batch
     ws = prepared(tmp_path)
+    config=ws.configuration_store().load();config['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(config)
     class Corrected(IntegratedWriter):
         def generate(self, request):
             if request.phase == 'coverage_repair':

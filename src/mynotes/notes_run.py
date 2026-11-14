@@ -288,6 +288,7 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
                     emit(generated['status'], generated.get('problem'))
                     return deepcopy(state)
                 state['generation_complete'] = True
+                state['pending_course_slides'] = generated.get('pending_course_slides', [])
                 state.pop('observed_defects_unresolved',None)
                 state['candidate_hashes'] = {l: _candidate_hash(workspace.runs_dir / l / 'lecture_notes.candidate.json') for l in plan['lectures']}
                 state['warnings'] += generated.get('warnings', [])

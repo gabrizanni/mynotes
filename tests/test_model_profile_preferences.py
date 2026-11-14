@@ -33,7 +33,9 @@ def test_saved_model_reaches_both_chat_and_notes_and_default_clears_override(wor
     monkeypatch.setattr("mynotes.chat.subprocess.run", lambda cmd, **kwargs: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0))
     launch_chat(workspace, settings, provider)
     assert calls[0][calls[0].index("--model") + 1] == "chosen-model"
-    assert "Studio economia" in calls[0][-1]
+    startup = workspace.state_dir / 'chat-startup-data.json'
+    assert str(startup) in calls[0][-1]
+    assert 'Studio economia' in json.loads(startup.read_text())['learner_profile']['background']
     assert "Do not repeat the background question" in calls[0][-1]
     save_preferences(workspace, provider, "", "it")
     settings = workspace.configuration_store().load()

@@ -67,6 +67,7 @@ def test_stopped_real_controller_can_rectify_refs_deliver_and_reuse_without_mode
     from test_publication import fake_render
     from mynotes.utils import file_sha256
     ws=prepared(tmp_path);config=ws.configuration_store().load()
+    config['style']['profile']['slide_scope']='all_supplied'
     config['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(config)
     calls=[]
     def bad_refs(notes,request):
@@ -102,6 +103,7 @@ def test_page_attachment_derives_organization_receipts_without_overwriting_previ
     from test_publication import fake_render
     from mynotes.utils import file_sha256
     ws=prepared(tmp_path);config=ws.configuration_store().load()
+    config['style']['profile']['slide_scope']='all_supplied'
     config['providers']['configured']['agy']={'model':'gemini-test','effort':'high'};ws.configuration_store().save(config)
     calls=[]
     def omit_link(notes,request):

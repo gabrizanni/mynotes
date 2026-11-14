@@ -282,6 +282,8 @@ def test_final_batch_coverage_stays_strict_without_another_paid_write(tmp_path,m
     from mynotes.workflow import WorkflowError
     from test_batch_generation import workspace_and_deck,notes_for
     ws,_,selection=workspace_and_deck(tmp_path,lessons=1,slides=3)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     config=ws.configuration_store().load();config['providers']['configured']['agy']={'model':'test-model','effort':'high'};ws.configuration_store().save(config)
     commands=[];monkeypatch.setenv('MYNOTES_AGY_PARTS','1')
     monkeypatch.setattr(providers,'provider_executable',lambda _:sys.executable)

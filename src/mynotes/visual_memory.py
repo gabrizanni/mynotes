@@ -45,9 +45,13 @@ def save(directory, request, response):
     record=json.loads(Path(response.attempt_path).read_text())
     if record.get('error'):return
     transport=record.get('envelope',{}).get('transport')
-    if transport=='agy_joint_v1':
-        from .simple_notes import certified
-        raw=certified(record,request)
+    if transport=='agy_joint_v1' or (transport=='agy_parts_v1' and record['envelope'].get('writing_contract')=='joint_topics_v1'):
+        if transport=='agy_joint_v1':
+            from .simple_notes import certified
+            raw=certified(record,request)
+        else:
+            from .agy_parts import verify_receipt
+            raw=verify_receipt(record,request.run_dir)
         access={row['sha256']:row for row in record['envelope']['source_access']}
         decisions={v['evidence_id']:v for row in raw['lessons'] for v in row['notes']['visual_decisions'] if v.get('content_kind')}
     elif transport=='agy_progressive_v2':

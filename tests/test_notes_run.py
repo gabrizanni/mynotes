@@ -255,6 +255,8 @@ def test_legacy_successful_repair_migrates_and_continues_without_rewriting(tmp_p
     from test_progressive_slides import initial_deck, ProgressiveWriter
     from test_autonomous_organization import IntegratedWriter
     ws, selection = initial_deck(tmp_path)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     monkeypatch.setattr(pub, '_render_and_validate', fake_render)
     monkeypatch.setattr(bd, '_render_and_validate', fake_render)
     calls = []

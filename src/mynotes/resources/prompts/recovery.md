@@ -1,3 +1,13 @@
+New requests write once following the selected lecture boundary. Unreached pages
+are pending source material for the next lecture, not a failed current lesson.
+Use notes --resume to finish local processing from a certified successful response.
+Historical topic jobs keep their saved prefix and original continuation contract.
+An actual provider ERROR stays blocked; never use its payload as successful notes
+or restart the whole writing task automatically.
+A stream-idle log does not establish a universal Google API deadline. Model-step
+wall time is not measured thinking time. Do not promise fixed Medium latency or
+identical quality across effort settings; retain the user's selected model.
+
 For new simple joint jobs (progressive_protocol=3), use the ordinary
 `notes CODE --resume BATCH_ID` to reuse certified successful writing and finish
 local metadata, layout and Word processing. Standard does not call a model

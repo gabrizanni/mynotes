@@ -11,24 +11,60 @@ from test_autonomous_organization import prepared,IntegratedWriter
 from test_publication import fake_render
 
 
-def install(monkeypatch, calls, *, fail=False, transform=None):
+def install(monkeypatch, calls, *, fail=False, transform=None, split=False, interrupt=False):
     lookup=providers.provider_executable
     monkeypatch.setattr(providers,'provider_executable',lambda name:'/synthetic/agy' if name=='agy' else lookup(name))
     def run(command,prompt,accept,**kwargs):
         calls.append(1)
         request=active[0]
         assert request.batch_context['progressive_protocol']==3
+        if not split:
+            # New single-pass jobs let the native task finish and judge its
+            # terminal envelope, rather than cancelling on diagnostic log text.
+            assert kwargs['abort_errors'] is False
         result=IntegratedWriter().generate(request).notes
         if transform:transform(result,request)
-        envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(result)}
-        assert accept(envelope) is None
-        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in [{'event':'init','conversation_id':'one'},{'event':'result','result':envelope}]),'')
+        events=[{'event':'init','conversation_id':'one'}]
+        kwargs['on_event'](events[0])
+        if split:
+            block=result['lessons'][0]['notes']['blocks'][1]
+            for index in range(13):
+                result['lessons'][0]['notes']['blocks'].insert(1,{'kind':'paragraph','coverage_role':'full',
+                    'text':f'Distinct source-supported development {index}.','evidence_ids':block['evidence_ids']})
+            portions=[{'lessons':[row],'organization':[c for c in result['organization'] if c['owner']==row['lecture_id']]}
+                      for row in result['lessons']]
+            if split=='same_lesson':
+                first=deepcopy(portions[0]);second=deepcopy(portions[0])
+                first['lessons'][0]['notes']['blocks']=first['lessons'][0]['notes']['blocks'][:14]
+                first['lessons'][0]['notes']['review_questions']=[]
+                note=second['lessons'][0]['notes'];note['blocks']=note['blocks'][14:]
+                note.update(title='',summary='',evidence_coverage=[],visual_decisions=[])
+                second['organization']=[]
+                portions=[first,second,portions[1]]
+        else:portions=[result]
+        first=1 if '--conversation' in command else 0
+        for index in range(first,len(portions)):
+            part={'part_index':index,'complete':index==len(portions)-1,'next_topic':'' if index==len(portions)-1 else 'Next lesson', 'result':portions[index]}
+            value=part if split else result
+            envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(value)}
+            events.append({'event':'result','result':envelope})
+            following=accept(envelope)
+            assert (following is None)==part['complete']
+            if following is not None:assert 'APPLICATION-STAGED REQUEST INPUTS' not in following
+            if interrupt and index==0:
+                from mynotes.providers import ProviderCancelledError
+                error=ProviderCancelledError('Explicit test interruption');error.output='\n'.join(json.dumps(e) for e in events);error.stderr=''
+                raise error
+        return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in events),'')
     active=[];original=simple.generate
-    def generate(req):active[:]=[req];return original(req)
+    def generate(req):
+        if split:req=replace(req,batch_context={**req.batch_context,'writing_contract':'joint_topics_v1'})
+        active[:]=[req];return original(req)
     monkeypatch.setattr(simple,'generate',generate)
     monkeypatch.setattr('mynotes.agy_progressive.command',lambda *a:['synthetic'])
     monkeypatch.setattr(simple,'_stage_agy_writer',lambda *a:None)
     monkeypatch.setattr(agy_parts,'run_session',run)
+    monkeypatch.setattr(agy_parts,'provider_executable',lambda _:'/synthetic/agy')
     monkeypatch.setattr('mynotes.agy_progressive.run_single',lambda *a:pytest.fail('No Standard reviewer'))
     monkeypatch.setattr('mynotes.batch_recovery.repair_coverage',lambda *a,**kw:pytest.fail('No Standard model repair'))
 
@@ -74,6 +110,68 @@ def test_error_retains_attempt_and_cannot_restart(tmp_path,monkeypatch):
     assert calls==[1]
 
 
+def test_lecture_boundary_carries_remaining_slides_to_next_request(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    original_second=(ws.runs_dir/'OPS-L02/source_pack.json').read_bytes()
+    assert not any(r['id'].startswith('S') for r in json.loads(original_second)['evidence'])
+    def boundary(result,request):
+        if request.batch_context['lessons']!=['OPS-L01']:return
+        pending={'S003','S004'}
+        aliases={r['canonical_slide_id']:r['evidence_id'] for r in request.batch_context['ownership']}
+        turns=[i for i in request.batch_context['lesson_evidence']['OPS-L01'] if i.startswith('T')]
+        for choice in result['organization']:
+            if aliases[choice['canonical_slide_id']] in pending:
+                choice.update(status='pending',reason='The complete transcript stops before these next-lecture topics.',evidence_ids=turns)
+        note=result['lessons'][0]['notes']
+        note['blocks']=[b for b in note['blocks'] if not pending.intersection(b['evidence_ids'])]
+        for decision in note['visual_decisions']:
+            if decision['evidence_id'] in pending:decision.update(decision='exclude',inspected=False)
+    calls=[];install(monkeypatch,calls,transform=boundary)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    first=notes_run.run_notes(ws,'OPS',[1],provider='agy')
+    assert first['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},first.get('problem')
+    saved=json.loads((ws.runs_dir/'OPS-L01/lecture_notes.candidate.json').read_text())
+    assert len(saved['pending_course_slides'])==2 and len(saved['slide_ownership'])==2
+    second=notes_run.run_notes(ws,'OPS',[2],provider='agy')
+    assert second['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},second.get('problem')
+    saved2=json.loads((ws.runs_dir/'OPS-L02/lecture_notes.candidate.json').read_text())
+    assert not saved2['pending_course_slides'] and len(saved2['slide_ownership'])==2
+    assert {int(key.rsplit(':',1)[1]) for key in saved2['slide_ownership']}=={3,4}
+    assert (ws.runs_dir/'OPS-L02/source_pack.json').read_bytes()==original_second
+    assert notes_run.run_notes(ws,'OPS',resume=second['batch_id'])['reused']
+    assert calls==[1,1]
+
+
+@pytest.mark.parametrize('interrupt',[False,True])
+@pytest.mark.parametrize('split',[True,'same_lesson'])
+def test_broad_topics_deliver_without_block_cap_and_resume_saved_prefix(tmp_path,monkeypatch,interrupt,split):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['style']['profile']['slide_scope']='all_supplied'
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    calls=[];install(monkeypatch,calls,split=split,interrupt=interrupt)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    if interrupt:
+        assert result['status'] not in {'COMPLETED','COMPLETED_WITH_WARNINGS'}
+        saved=next(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/writing-parts/*/part-000.json'))
+        original=saved.read_bytes()
+        result=notes_run.run_notes(ws,'OPS',resume=result['batch_id'])
+        assert saved.read_bytes()==original
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
+    assert len(result['delivery']['files'])==3 and len(calls)==1+int(interrupt)
+    assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused']
+    assert len(calls)==1+int(interrupt)
+    receipts=list(ws.runs_dir.glob('_batches/*/generation-checkpoints/*/writing-parts/*/complete.json'))
+    assert len(receipts)==1
+    receipt=json.loads(receipts[0].read_text())
+    assert receipt['block_limit'] is None and len(receipt['parts'])==(3 if split=='same_lesson' else 2)
+
+
 def test_preview_sheets_are_grouped_hash_bound_but_do_not_claim_full_inspection(tmp_path):
     from PIL import Image
     from test_progressive_v2 import request
@@ -94,6 +192,53 @@ def test_new_joint_contract_never_activates_legacy_parts_even_when_forced(tmp_pa
     req=request(tmp_path);req=replace(req,batch_context={**req.batch_context,'progressive_protocol':3})
     monkeypatch.setenv('MYNOTES_AGY_PARTS','1')
     assert providers._agy_uses_parts(req) is False
+
+
+def test_compact_bookkeeping_preserves_content_and_canonical_contract(tmp_path):
+    from test_progressive_v2 import request,unit
+    from mynotes import progressive_wire as wire
+    from mynotes.batch import batch_notes_schema
+    req=replace(request(tmp_path),response_schema=batch_notes_schema(autonomous_organization=True))
+    req.batch_context['ownership']=[{'evidence_id':i,'canonical_slide_id':'deck:'+i} for i in ('S001','S002')]
+    original=deepcopy(req.response_schema)
+    schema=simple.writing_schema(req)
+    assert schema['properties']['organization']['items']['properties']['canonical_slide_id']['enum']==['S001','S002']
+    assert schema['properties']['lessons']['items']['properties']['notes']['properties']['evidence_coverage']['maxItems']==0
+    assert req.response_schema==original
+    without_slides=replace(req,batch_context={**req.batch_context,'ownership':[]})
+    empty=simple.writing_schema(without_slides)['properties']['organization']
+    assert empty['maxItems']==0 and 'enum' not in empty['items']['properties']['canonical_slide_id']
+    one,_=wire.validate_unit(req,unit(),[]);two,_=wire.validate_unit(req,unit(1,True),[one])
+    notes=wire.assemble(req,[one,two]);blocks=deepcopy([r['notes']['blocks'] for r in notes['lessons']])
+    for row in notes['lessons']:row['notes']['evidence_coverage']=[]
+    simple.derive_coverage(req,notes)
+    assert [r['notes']['blocks'] for r in notes['lessons']]==blocks
+    for row in notes['lessons']:
+        cited={i for b in row['notes']['blocks'] for i in b['evidence_ids']}
+        assert all((c['disposition']=='used')==(c['evidence_id'] in cited) for c in row['notes']['evidence_coverage'])
+    prior=deepcopy(notes);simple.derive_coverage(req,notes);assert notes==prior
+
+
+def test_compact_response_delivers_using_only_existing_citations(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    def compact(result,request):
+        aliases={r['canonical_slide_id']:r['evidence_id'] for r in request.batch_context['ownership']}
+        for choice in result['organization']:
+            choice['canonical_slide_id']=aliases[choice['canonical_slide_id']]
+            note=next(r['notes'] for r in result['lessons'] if r['lecture_id']==choice['owner'])
+            block=next(b for b in note['blocks'] if b['kind']=='paragraph' and choice['canonical_slide_id'] in b['evidence_ids'])
+            block['evidence_ids'].extend(choice['evidence_ids'])
+            choice['evidence_ids']=[]
+        for row in result['lessons']:row['notes']['evidence_coverage']=[]
+    calls=[];install(monkeypatch,calls,transform=compact)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    result=notes_run.run_notes(ws,'OPS',[1,2],provider='agy')
+    assert result['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},result.get('problem')
+    assert notes_run.run_notes(ws,'OPS',resume=result['batch_id'])['reused']
+    assert calls==[1]
 
 
 def test_joint_figure_assembly_uses_source_alias_then_preserves_canonical_ownership(tmp_path):

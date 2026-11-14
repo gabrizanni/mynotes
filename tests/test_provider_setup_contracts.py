@@ -124,6 +124,23 @@ def test_chat_launches_defaults_in_private_workspace_with_managed_instructions(t
         assert command[command.index("--append-system-prompt-file") + 1] == str(root / "SKILL.md")
 
 
+def test_chat_keeps_large_profile_and_paths_out_of_startup_message(tmp_path, monkeypatch):
+    monkeypatch.delenv('MYNOTES_CHAT_ACTIVE',raising=False)
+    ws=Workspace.from_value(tmp_path/'private');ws.initialize()
+    config=ws.configuration_store().load();config['personal']['background']='Saved personal context. '*500
+    monkeypatch.setattr('mynotes.chat.shutil.which',lambda _:'/bin/agy')
+    calls=[]
+    monkeypatch.setattr('mynotes.chat.subprocess.run',lambda command,**kw:calls.append(command) or subprocess.CompletedProcess(command,0))
+    before=ws.configuration_path.read_bytes()
+    assert launch_chat(ws,config,'agy')==0
+    assert len(calls[0][-1])<1800
+    assert 'Saved personal context.' not in calls[0][-1]
+    data=json.loads((ws.state_dir/'chat-startup-data.json').read_text())
+    assert data['learner_profile']['background']==config['personal']['background']
+    assert data['source_paths']['paths_are_search_hints_not_verified_inventory']
+    assert ws.configuration_path.read_bytes()==before
+
+
 def test_claude_integration_is_managed_and_protects_edits(tmp_path):
     from mynotes.integrations import IntegrationError
     installed = install_integration("claude", tmp_path)

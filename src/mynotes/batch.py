@@ -175,10 +175,10 @@ def _style(configuration: dict, code: str, instructions: str, image_limit: int |
         raise WorkflowError(str(error)) from error
 
 
-def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]:
+def _packs(workspace: Workspace, lectures: list[str], *, paths=None) -> tuple[dict, dict, dict]:
     packs, snapshots, inventory = {}, {}, {}
     for lecture in lectures:
-        path = workspace.runs_dir / lecture / "source_pack.json"
+        path = Path((paths or {}).get(lecture,workspace.runs_dir / lecture / "source_pack.json"))
         try:
             content = path.read_bytes()
             pack = json.loads(content)
@@ -217,10 +217,29 @@ def _packs(workspace: Workspace, lectures: list[str]) -> tuple[dict, dict, dict]
     return packs, snapshots, inventory
 
 
-def _prepared_context(workspace, lectures, context_lessons=None, selection=None, autonomous_organization=False, joint_speech=False):
+def _prepared_context(workspace, lectures, context_lessons=None, selection=None, autonomous_organization=False, joint_speech=False, carry_pending=False):
     """Import explicitly relevant other lessons with stable local IDs/provenance."""
     context_lessons = sorted(set(context_lessons or []) - set(lectures))
     packs, snapshots, _ = _packs(workspace, lectures + context_lessons)
+    pending_snapshots = {}
+    if carry_pending:
+        from .publication import _load_candidate, PublicationError
+        for target in lectures:
+            number=int(target[-2:])
+            if number<=1:continue
+            previous=target[:-2]+f'{number-1:02d}'
+            path=workspace.runs_dir/previous/'lecture_notes.candidate.json'
+            if previous in lectures or not path.is_file():continue
+            saved=json.loads(path.read_text())
+            if not saved.get('published_to_word') or not saved.get('pending_course_slides'):continue
+            try:
+                candidate,_=_load_candidate(workspace,previous)
+            except PublicationError as error:
+                raise WorkflowError('Cannot reuse pending course slides: '+str(error)) from error
+            previous_packs,previous_snapshots,_=_packs(workspace,[previous],paths={previous:candidate['source_pack']})
+            packs.update(previous_packs)
+            pending_snapshots.update(previous_snapshots)
+            carry_slides(packs,{key:{'uses':{target:{}}} for key in candidate['pending_course_slides']},[target])
     originals = deepcopy(packs)
     for lecture in lectures:
         pack = packs[lecture]
@@ -266,7 +285,7 @@ def _prepared_context(workspace, lectures, context_lessons=None, selection=None,
             if canonical:
                 item = inventory.setdefault(canonical, {'canonical_slide_id': canonical, 'page': row['page'], 'source_sha256': canonical.split(':')[1], 'occurrences': {}})
                 item['occurrences'][lecture] = row['id']
-    return packs, {l: snapshots[l] for l in lectures}, inventory, {l: snapshots[l] for l in context_lessons}
+    return packs, {l: snapshots[l] for l in lectures}, inventory, {**pending_snapshots,**{l: snapshots[l] for l in context_lessons}}
 
 
 def carry_slides(packs, selection, lectures):
@@ -341,7 +360,7 @@ def _published_history(workspace: Workspace, code: str, selected: list[str], inv
             if not path.is_file() or file_sha256(path) != digest:
                 raise ValueError("published candidate changed")
             payload = json.loads(path.read_text())
-            prior_packs, prior_snapshots, prior_inventory = _packs(workspace, [lecture])
+            prior_packs, prior_snapshots, prior_inventory = _packs(workspace, [lecture],paths={lecture:payload['source_pack']})
             overlap = set(prior_inventory) & set(inventory)
             if not overlap:
                 continue
@@ -355,6 +374,7 @@ def _published_history(workspace: Workspace, code: str, selected: list[str], inv
                 raise ValueError("published source pack changed")
             manifest = workspace.runs_dir / "_batches" / payload["batch_id"] / payload["batch_fingerprint"] / "manifest.json"
             bound = _read(manifest)
+            _unchanged({'sources':{lecture:bound['sources'][lecture]}})
             completion = _read(manifest.parent / f"group-{payload['batch_group']:03d}" / "complete.json")
             before_publish = deepcopy(payload)
             before_publish["published_to_word"] = False
@@ -575,6 +595,18 @@ def _request(plan: dict, lectures: list[str], run_dir: Path, continuity: list[di
                 "Cover every provided teaching page across the selected lessons, including when only one lesson is selected. Never leave pending pages, ask the user to map slides, or assign leftovers to the last lesson by default. "
                 "Choose the best thematic placement using all transcripts; never invent teaching or duplicate a settled main explanation. "
                 "Do not change already settled prior ownership. Material exemption needs a visually inspected title/divider structural_review bound to its actual source image hash; never exempt code, data or diagrams."))
+        if plan['style'].get('slide_scope')=='lecture':
+            context['slide_scope']='lecture'
+            context['organization_instructions']=(
+                'Follow the actual progress of the professor in the complete selected transcripts. '
+                'Assign each covered slide to its main selected lesson; integrate explanations once without duplicating the shared deck. '
+                'Stop at the last selected lecture boundary. Mark not-yet-reached pages pending, owned by the last selected lesson, '
+                'with a concrete reason and its actual T boundary evidence_ids. They are preserved for the next lecture, not discarded. '
+                'Do not invent supplementary chapters solely to explain the unreached remainder. When several lectures are selected, '
+                'use all their transcripts before deferring pages. Keep settled prior ownership; use brief references instead of repeating it. '
+                'Pending does not mean permanently excluded or inspected: do not open future images just to classify exclusions. '
+                'Explicitly requested figures cannot be deferred. Use material only for inspected structural covers/dividers. '
+                'Follow the saved course writing style and detail; do not impose a page or word target.')
         if plan.get('progressive_protocol')==3:
             context['organization_instructions'] += (
                 ' Narrative explanations may cite clarifications from any selected transcript. '
@@ -701,7 +733,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
             course = deepcopy(old_course)
     budget = budgets if isinstance(budgets, BatchBudget) else BatchBudget(**(budgets or {}))
     try:
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization, progressive_protocol==3)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, lectures, context_lessons, selection, autonomous_organization, progressive_protocol==3,style.get('slide_scope')=='lecture')
     except WorkflowError:
         pending = []
         for lecture in lectures + context_lessons:
@@ -709,6 +741,7 @@ def plan_batch(workspace: Workspace, course_code: str, lesson_numbers: list[int]
                 _packs(workspace, [lecture])
             except WorkflowError as error:
                 pending.append({"lecture_id": lecture, "reason": str(error)})
+        if not pending:raise
         return {"status": "NEEDS_PREPARATION", "course_code": code, "lectures": lectures, "batch_id": batch_id,
                 "requested_model": asdict(requested), "style": style, "selection": selection, "budgets": asdict(budget),
                 "request_options": {"instructions": instructions, "image_limit": image_limit},
@@ -817,6 +850,7 @@ def _normalized(block: dict) -> str:
 
 
 def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str], maps: dict, *, final_phase: bool, continuity: list[dict]) -> dict:
+    editorial_coverage=(plan['style'].get('slide_scope')=='lecture' and plan['requested_model']['quality'] in {'base','standard'})
     from .evidence_refs import normalize_references, EvidenceReferenceError
     valid_ids = {i for mapping in maps.values() for i in mapping.values()}
     try:
@@ -915,7 +949,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                     if role == 'new_insight' and not any(identifier.startswith('T') and local_evidence.get(identifier, {}).get('origin_lecture_id', lecture) == lecture for identifier in block['evidence_ids']):
                         raise WorkflowError("New insight requires this lesson's transcript evidence")
                     slide_id = plan["inventory"][canonical]["occurrences"][lecture]
-                    if not str(local_evidence[slide_id].get("content", "")).strip() and decisions.get(slide_id, {}).get("inspected") is not True:
+                    if not editorial_coverage and not str(local_evidence[slide_id].get("content", "")).strip() and decisions.get(slide_id, {}).get("inspected") is not True:
                         raise WorkflowError("A textless slide explanation requires confirmed source image inspection")
                     if role in {"full", "supplement", "new_insight"}:
                         primary.add(canonical)
@@ -934,7 +968,7 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                     if block.get("prior_lecture_id") not in {None, owner["owner"]}:
                         raise WorkflowError("Linked slide refers to the wrong main lesson")
                     slide_id = plan["inventory"][canonical]["occurrences"][lecture]
-                    if not str(local_evidence[slide_id].get("content", "")).strip() and block["kind"] != "visual" and decisions.get(slide_id, {}).get("inspected") is not True:
+                    if not editorial_coverage and role!='reference' and not str(local_evidence[slide_id].get("content", "")).strip() and block["kind"] != "visual" and decisions.get(slide_id, {}).get("inspected") is not True:
                         raise WorkflowError("A textless slide explanation requires confirmed source image inspection")
                     if use and use["role"] == "supplement" and block["kind"] == "paragraph" and not block.get("supplement_labelled"):
                         prefix = "Integrazione dalle slide: " if plan["course"].get("languages", {}).get("notes") == "it" else "Supplementary slide material: "
@@ -954,6 +988,9 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
             block["kind"] in NARRATIVE_KINDS and block.get("coverage_role") in {"full", "supplement", "new_insight"}
             and plan["inventory"][key]["occurrences"][lecture] in block["evidence_ids"]
             for block in notes["blocks"])}
+        if editorial_coverage:
+            reported={row['evidence_id']:row['disposition'] for row in notes['evidence_coverage']}
+            primary|={key for key in required if reported.get(plan['inventory'][key]['occurrences'][lecture])=='used'}
         if required - primary:
             raise CoverageError([{"lecture_id":lecture, "evidence_id":plan["inventory"][key]["occurrences"][lecture],
                                   "source_file":local_evidence[plan["inventory"][key]["occurrences"][lecture]]["source_file"],
@@ -1074,7 +1111,7 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
         if plan["status"] != "PLANNED":
             _save(workspace.runs_dir / "_batches" / plan["batch_id"] / "manifest.json", plan)
             return plan
-        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection, autonomous_organization, progressive_protocol==3)
+        packs, snapshots, inventory, context_sources = _prepared_context(workspace, plan["lectures"], context_lessons, selection, autonomous_organization, progressive_protocol==3,plan['style'].get('slide_scope')=='lecture')
         if snapshots != plan["sources"]:
             raise WorkflowError("Sources changed while preparing the batch request; no provider was invoked")
         _published_history(workspace, plan["course_code"], plan["lectures"], inventory)
@@ -1228,6 +1265,9 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                         guard = _invocation_guard(root, phase, runtime, lectures, continuity)
                         resumable_parts = (_agy_uses_parts(active)
                             and (any(group_dir.glob('writing-parts/*/state.json')) or (group_dir/'progressive-v2/state.json').is_file()))
+                        if progressive_protocol==3 and active.requested.provider=='agy':
+                            resumable_parts = any(json.loads(path.read_text()).get('writing_contract')=='joint_topics_v1'
+                                                  for path in group_dir.glob('writing-parts/*/state.json'))
                         explicit_external_resume = (batch_id is not None and guard.exists()
                             and any(_read(guard).get(key) is True for key in ('paused_quota', 'paused_auth')))
                         if (guard.exists() or started_path.exists()) and not resumable_parts and not explicit_external_resume:
