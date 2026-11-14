@@ -18,6 +18,10 @@ def install(monkeypatch, calls, *, fail=False, transform=None, split=False, inte
         calls.append(1)
         request=active[0]
         assert request.batch_context['progressive_protocol']==3
+        if not split:
+            # New single-pass jobs let the native task finish and judge its
+            # terminal envelope, rather than cancelling on diagnostic log text.
+            assert kwargs['abort_errors'] is False
         result=IntegratedWriter().generate(request).notes
         if transform:transform(result,request)
         events=[{'event':'init','conversation_id':'one'}]

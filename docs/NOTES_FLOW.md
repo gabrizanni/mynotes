@@ -99,10 +99,11 @@ to conceal missing content or fabricate evidence.
   `all_supplied` keeps full-deck behavior; old frozen styles are not reinterpreted.
 - Historical topic jobs preserve their successful checkpoints and original
   contract. New requests use a single joint writing pass, not a section queue.
-- Native `error_message` events may omit diagnostic text. The adapter classifies
-  the exact error step from Agy's local conversation database, read-only. Output
-  truncation and unknown errors stop immediately; duplicate events and log lines
-  do not trigger hidden writing restarts.
+- New single-pass jobs let the native task finish and evaluate its terminal
+  envelope. Diagnostic log messages do not cancel a progressing task. Provider
+  internal recoveries may occur; the application records them and starts no
+  second whole-writing request. Historical progressive jobs keep their original
+  error-step handling and checkpoints.
 - New joint requests return short source aliases and keep duplicate coverage and
   organization-reference registers empty. The program derives those registers
   from existing block citations without adding citations, teaching claims or

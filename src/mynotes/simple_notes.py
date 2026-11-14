@@ -205,7 +205,7 @@ def _single(request,context,sheets,access,observe):
         with prevent_idle_sleep():
             completed=run_session(args,_prompt(request,context=context),accept,cwd=str(request.run_dir),
                 env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},on_event=observe,
-                abort_errors=True,log_file=request.run_dir/'joint-provider.log')
+                abort_errors=False,log_file=request.run_dir/'joint-provider.log')
         if completed.returncode or len(answers)!=1:raise ProviderError('Joint writing did not complete')
         notes=_normalize_transport_notes(_decode_agy(answers[0]),request.response_schema,provider='agy')
         attempt=_save_attempt(request,command=args,completed=completed,started=started,
