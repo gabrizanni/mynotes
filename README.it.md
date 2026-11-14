@@ -17,6 +17,8 @@ Italiano | [English](README.md)
 2. Trascina **MyNotes** in **Applicazioni**.
 3. Apri **MyNotes**, segui il setup e premi **Apri la chat**.
 
+Se Warp è installato, la chat si apre in una nuova scheda Warp. Altrimenti viene usato il terminale predefinito.
+
 Il setup prepara Python, trascrizione locale e strumenti Word. Non devi installare prima Python, Homebrew o Xcode. Scegli Codex, Agy o Claude Code: se manca, MyNotes apre la guida ufficiale per installarlo e ti invita a ricontrollare. Accesso ed eventuale abbonamento dipendono dal provider.
 
 Per Claude Code serve un piano abilitato oppure accesso API con crediti: l’account Claude Free non include la CLI, anche usando Haiku. [Piani Claude](https://claude.com/pricing).
