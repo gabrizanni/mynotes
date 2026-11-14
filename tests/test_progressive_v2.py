@@ -277,6 +277,25 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
     assert result.returncode==0
 
 
+def test_native_telemetry_failure_does_not_cancel_generation(tmp_path):
+    import sys, os
+    from mynotes.agy_parts import run_session
+    code = '''import sys,json,time
+sys.stdin.readline()
+print('E client.go:97] Post "https://play.googleapis.com/log": unexpected EOF',file=sys.stderr,flush=True)
+time.sleep(.1)
+print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
+'''
+    result = run_session([sys.executable,'-u','-c',code],'test',lambda _:None,
+                         cwd=str(tmp_path),env=dict(os.environ),abort_errors=True,total_seconds=3)
+    assert result.returncode == 0
+    assert 'unexpected EOF' in result.stderr
+    broken = code.replace('https://play.googleapis.com/log', 'https://generation.invalid/stream')
+    with pytest.raises(ProviderError,match='interrupted'):
+        run_session([sys.executable,'-u','-c',broken],'test',lambda _:None,
+                    cwd=str(tmp_path),env=dict(os.environ),abort_errors=True,total_seconds=3)
+
+
 @pytest.mark.parametrize('attempt',[1,2])
 def test_joint_stream_permits_only_first_native_idle_recovery(tmp_path,attempt):
     import sys,os

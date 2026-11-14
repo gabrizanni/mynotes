@@ -139,6 +139,8 @@ def test_batch_correction_can_run_more_than_ten_minutes_after_eight_minute_writi
     clock = [1.]
     monkeypatch.setattr(generation_budget.time, 'monotonic', lambda: clock[0])
     ws, _, selection = workspace_and_deck(tmp_path, lessons=1, slides=2)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     class Writer:
         calls = []
         def generate(self, req):

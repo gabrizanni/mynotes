@@ -41,7 +41,8 @@ def install(monkeypatch, calls, *, fail=False, transform=None, split=False, inte
         first=1 if '--conversation' in command else 0
         for index in range(first,len(portions)):
             part={'part_index':index,'complete':index==len(portions)-1,'next_topic':'' if index==len(portions)-1 else 'Next lesson', 'result':portions[index]}
-            envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(part)}
+            value=part if split else result
+            envelope={'status':'ERROR','error':'test failure'} if fail else {'status':'SUCCESS','conversation_id':'one','response':json.dumps(value)}
             events.append({'event':'result','result':envelope})
             following=accept(envelope)
             assert (following is None)==part['complete']
@@ -52,7 +53,9 @@ def install(monkeypatch, calls, *, fail=False, transform=None, split=False, inte
                 raise error
         return subprocess.CompletedProcess(command,0,'\n'.join(json.dumps(e) for e in events),'')
     active=[];original=simple.generate
-    def generate(req):active[:]=[req];return original(req)
+    def generate(req):
+        if split:req=replace(req,batch_context={**req.batch_context,'writing_contract':'joint_topics_v1'})
+        active[:]=[req];return original(req)
     monkeypatch.setattr(simple,'generate',generate)
     monkeypatch.setattr('mynotes.agy_progressive.command',lambda *a:['synthetic'])
     monkeypatch.setattr(simple,'_stage_agy_writer',lambda *a:None)
@@ -103,11 +106,47 @@ def test_error_retains_attempt_and_cannot_restart(tmp_path,monkeypatch):
     assert calls==[1]
 
 
+def test_lecture_boundary_carries_remaining_slides_to_next_request(tmp_path,monkeypatch):
+    from mynotes import notes_run,publication,batch_documents
+    ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
+    original_second=(ws.runs_dir/'OPS-L02/source_pack.json').read_bytes()
+    assert not any(r['id'].startswith('S') for r in json.loads(original_second)['evidence'])
+    def boundary(result,request):
+        if request.batch_context['lessons']!=['OPS-L01']:return
+        pending={'S003','S004'}
+        aliases={r['canonical_slide_id']:r['evidence_id'] for r in request.batch_context['ownership']}
+        turns=[i for i in request.batch_context['lesson_evidence']['OPS-L01'] if i.startswith('T')]
+        for choice in result['organization']:
+            if aliases[choice['canonical_slide_id']] in pending:
+                choice.update(status='pending',reason='The complete transcript stops before these next-lecture topics.',evidence_ids=turns)
+        note=result['lessons'][0]['notes']
+        note['blocks']=[b for b in note['blocks'] if not pending.intersection(b['evidence_ids'])]
+        for decision in note['visual_decisions']:
+            if decision['evidence_id'] in pending:decision.update(decision='exclude',inspected=False)
+    calls=[];install(monkeypatch,calls,transform=boundary)
+    monkeypatch.setattr(publication,'_render_and_validate',fake_render)
+    monkeypatch.setattr(batch_documents,'_render_and_validate',fake_render)
+    first=notes_run.run_notes(ws,'OPS',[1],provider='agy')
+    assert first['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},first.get('problem')
+    saved=json.loads((ws.runs_dir/'OPS-L01/lecture_notes.candidate.json').read_text())
+    assert len(saved['pending_course_slides'])==2 and len(saved['slide_ownership'])==2
+    second=notes_run.run_notes(ws,'OPS',[2],provider='agy')
+    assert second['status'] in {'COMPLETED','COMPLETED_WITH_WARNINGS'},second.get('problem')
+    saved2=json.loads((ws.runs_dir/'OPS-L02/lecture_notes.candidate.json').read_text())
+    assert not saved2['pending_course_slides'] and len(saved2['slide_ownership'])==2
+    assert {int(key.rsplit(':',1)[1]) for key in saved2['slide_ownership']}=={3,4}
+    assert (ws.runs_dir/'OPS-L02/source_pack.json').read_bytes()==original_second
+    assert notes_run.run_notes(ws,'OPS',resume=second['batch_id'])['reused']
+    assert calls==[1,1]
+
+
 @pytest.mark.parametrize('interrupt',[False,True])
 @pytest.mark.parametrize('split',[True,'same_lesson'])
 def test_broad_topics_deliver_without_block_cap_and_resume_saved_prefix(tmp_path,monkeypatch,interrupt,split):
     from mynotes import notes_run,publication,batch_documents
     ws=prepared(tmp_path);cfg=ws.configuration_store().load()
+    cfg['style']['profile']['slide_scope']='all_supplied'
     cfg['providers']['configured']['agy']={'model':'gemini-test','effort':'medium'};ws.configuration_store().save(cfg)
     calls=[];install(monkeypatch,calls,split=split,interrupt=interrupt)
     monkeypatch.setattr(publication,'_render_and_validate',fake_render)

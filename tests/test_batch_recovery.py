@@ -226,6 +226,8 @@ def test_batch_builds_each_word_before_advancing_and_pauses(tmp_path,monkeypatch
 def test_saved_correction_can_use_reserved_local_build_time_without_another_provider_call(tmp_path,monkeypatch):
     from mynotes import batch_recovery,publication
     ws,_,sel=workspace_and_deck(tmp_path,lessons=1,slides=2)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     class Writer:
         calls=[]
         def generate(self,req):

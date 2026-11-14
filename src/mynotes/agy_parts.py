@@ -264,6 +264,12 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
     log_position = 0; failure_tail = ''; transport_steps = set(); error_steps = set()
     def provider_failure(message):
         nonlocal failure_tail
+        # Native telemetry is independent of the generation transport. Keep its
+        # diagnostics in the logs without cancelling an otherwise active task.
+        message = '\n'.join(line for line in message.splitlines()
+                            if not re.search(r'Post "https://play\.googleapis\.com/log(?:[?/"]|$)', line))
+        if not message.strip():
+            return
         failure_tail=(failure_tail+message)[-4096:]
         if stream_recovery and re.search(r'stream idle timeout|The stream was interrupted',message,re.I) and not re.search(r'output token limit|response was cut off',message,re.I):
             attempts=[int(n) for n in re.findall(r'attempt (\d+) failed',failure_tail,re.I)]

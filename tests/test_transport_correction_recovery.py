@@ -53,6 +53,8 @@ class RetainedAgy:
 
 def failed_legacy_batch(tmp_path,monkeypatch):
     workspace,_,selection=workspace_and_deck(tmp_path,lessons=1,slides=2)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=workspace.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';workspace.configuration_store().save(legacy)
     config=workspace.configuration_store().load();config['providers']['default']='agy'
     config['providers']['configured']['agy']={'model':'test-model','effort':'high'}
     workspace.configuration_store().save(config)

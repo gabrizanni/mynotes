@@ -1,8 +1,10 @@
 # Current notes flow and limits
 
-MyNotes prepares sources locally, writes joint notes in a few broad topic groups
-in the same conversation, then checks and builds Word documents. Each successful
-group is saved before requesting the next. Standard has no model reviewer,
+MyNotes prepares sources locally, writes one joint response following the professor's
+actual lecture progress, then checks and builds Word documents. Unreached pages
+remain pending and are reused by the next lecture. Shared slides are not assigned
+a second main explanation. Length follows the saved course style and actual
+content, without a page/word target. Standard has no extra model reviewer,
 automatic model correction or whole-writing retry.
 
 ## Roles and instructions
@@ -12,9 +14,9 @@ automatic model correction or whole-writing retry.
   It does not independently reread the full sources or perfect usable notes.
 - The writer reads complete selected transcripts and one copy of each shared
   slide page. It writes structured content, chooses figures and assigns the
-  main explanation of each topic to one lesson in the shared task. Text sources
-  are read once; future figure decisions are left to their topic.
-- The program preserves responses, checks source links, resolves demonstrable
+  main explanation of each topic to one lesson in the shared task. It records
+  actual transcript evidence for the lecture boundary and pending pages.
+- The program preserves responses, checks existing source links, resolves demonstrable
   metadata, assembles Word, validates its rendering and handles publication.
 
 The managed Codex, Agy and Claude entrypoints load these modules through the
@@ -47,8 +49,8 @@ Standard response can be retained as annotated references to their declared
 owner, without changing prose or citations. This is metadata reconciliation,
 not a semantic guarantee that no repetition remains.
 
-Grouped previews support selection of text/decorative pages. Included figures,
-visual data and uncertain pages require observed access to the actual source;
+Grouped previews support figure selection. Included figures and details needing
+verification require observed access to the actual source;
 preview access is recorded separately. Verified image decisions are reusable
 only while their fingerprints match. A claimed `inspected=true` alone is not
 proof. Required figures cannot silently disappear.
@@ -90,9 +92,13 @@ to conceal missing content or fabricate evidence.
   receipts remain retained.
 - Provider `ERROR` results are preserved for diagnosis and never published.
   There is no automatic full-generation restart to make a failed run look good.
-- New joint topic writing saves hash-bound successful responses and resumes an
-  explicitly interrupted conversation from the next topic. Provider ERROR or
-  truncation blocks continuation; earlier groups remain preserved.
+- New requests default to `slide_scope=lecture`: stop at the actual selected
+  lecture boundary, retaining pending source IDs and boundary evidence. The next
+  lecture imports pending pages from the verified preceding publication, without
+  extracting the deck again or rewriting its raw source pack. Explicit
+  `all_supplied` keeps full-deck behavior; old frozen styles are not reinterpreted.
+- Historical topic jobs preserve their successful checkpoints and original
+  contract. New requests use a single joint writing pass, not a section queue.
 - Native `error_message` events may omit diagnostic text. The adapter classifies
   the exact error step from Agy's local conversation database, read-only. Output
   truncation and unknown errors stop immediately; duplicate events and log lines
@@ -102,18 +108,15 @@ to conceal missing content or fabricate evidence.
   from existing block citations without adding citations, teaching claims or
   semantic certification. Narrative, source text and visual decisions stay intact;
   retained historical registers remain unchanged.
-- Full-source reads are required for charts, diagrams, tables, formulas and
-  uncertain images even when excluded from Word, and for substantively cited
-  image-only pages. The writer receives these requirements before writing.
+- Full-source inspection follows the reference selection rule: included figures and
+  items that need verification from the previews. Excluded or pending figures
+  do not require a full-source read. A full inspection
+  claim still requires observed access; explicit required figures stay blocking.
 - `--regenerate` is an explicit new revision, incompatible with `--resume`.
   Historical jobs retain their original schema, checkpoints and correction
   allowances; reopening does not reset attempts.
-- New joint writing has no six/twelve-block cap or separate planning call.
-  Topic groups aim for 1000-2000 words and about 24 KiB of JSON; these are
-  writing targets, not a model capacity claim or permission to cut content.
-  The existing sixteen-return safety guard remains; exhaustion retains the
-  unfinished work instead of declaring completeness.
-  Standard has no corrective model allowance because it starts no such call.
+- New writing has no six/twelve-block cap, word target or page target. Historical
+  topic-checkpoint requests retain their recorded boundaries and safety guard.
 - Verified context/output limits are enforced before invocation. If Agy does
   not expose them, the request reports `UNVERIFIED_MODEL_LIMITS`; it does not
   invent a limit or silently split/repeat the deck.
@@ -128,3 +131,11 @@ to conceal missing content or fabricate evidence.
 Automated rendering checks are distinct from manual Microsoft Word inspection.
 Installation, GitHub integration and production document publication are separate
 operations and are never implied by a benchmark or a generated candidate.
+
+For Base/Standard in lecture scope, coverage follows the writer's source-bound
+editorial ledger. The application does not add a separate per-page
+semantic audit or require a full image read merely because an excluded chart
+is mentioned. Ledger coverage is a model declaration, not certification of
+every claim. Unknown references, missing required figures, invalid Word output
+and personal-edit conflicts remain blocking. Ownership/continuity and duplicate
+main-explanation checks prevent repeated material across shared-deck lessons.

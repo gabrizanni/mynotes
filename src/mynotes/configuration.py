@@ -21,6 +21,7 @@ QUALITY_LEVELS = {"base", "standard", "approfondito", "revisione"}
 SUPPORTED_PROVIDERS = {"codex", "agy", "claude"}
 STYLE_PROFILE_DEFAULTS: dict[str, Any] = {
     "writing_style": "clear_study",
+    "slide_scope": "lecture",
     "list_density": "balanced",
     "image_policy": "essential",
     "image_limit": None,
@@ -48,6 +49,7 @@ STYLE_PROFILE_DEFAULTS: dict[str, Any] = {
     "page_number_position": "center",
 }
 EDITABLE_STYLE_FIELDS = {
+    "slide_scope": {"lecture", "all_supplied"},
     "writing_style": {"clear_study", "concise", "detailed"},
     "list_density": {"balanced", "prose_first", "list_first"},
     "image_policy": {"essential", "none", "explanatory"},

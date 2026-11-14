@@ -71,6 +71,8 @@ def test_writer_has_no_shell_and_has_bounded_runtime(tmp_path, monkeypatch):
 
 def test_rejected_batch_retains_transport_without_a_second_paid_call(tmp_path):
     ws, _, selection = workspace_and_deck(tmp_path)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     def invalid(response, request):
         response["lessons"][0]["notes"]["blocks"][1]["coverage_role"] = "reference"
     adapter = Adapter(invalid)

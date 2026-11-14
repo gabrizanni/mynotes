@@ -1,15 +1,19 @@
-New complete notes requests use one joint writing task for all selected
-lessons, returned in a few broad topic groups in the same conversation. Shared slide pages appear once beside all complete transcripts. The
-writer integrates lecture clarification into each topic's main explanation;
-later lessons add only distinct developments and short references.
-Standard uses local checks and warning comments only: do not start a model
-review, model repair or another writing request to perfect its output. Base
-retains mandatory local checks; extended quality levels are explicit choices.
-Use the ordinary notes command through delivery. Historical progressive-v2 jobs
-keep their recorded protocol and correction limits when resumed. New requests
-have no reviewer queue or six/twelve-block cap. Each successful topic response
-is saved before continuing; ERROR is never publishable. Resume an explicitly
-interrupted job from its saved topics with notes --resume, without repeating them.
+New complete notes requests follow the professor's actual progress. Read all selected
+transcripts and one shared copy of the deck, then write one joint response.
+Integrate clarifications once; later lessons add new developments and brief references.
+Stop at the last selected lecture boundary. Preserve unreached slides as pending,
+with actual transcript-boundary evidence, for the next lecture. Never discard them
+or fill the current lesson with future chapters. The next request reuses saved
+pending materials and existing extraction; do not repeat settled explanations.
+Length depends on the lesson contents and saved course style: no page or word target.
+Standard uses local checks and warning comments only, with no extra model reviewer,
+model repair or whole-writing restart. ERROR remains unpublishable.
+Keep source inspection proportional: use previews to select figures; open full
+images only for included figures or actual details needing verification. Do not
+add an exhaustive page-by-page inspection. Prevent duplicate explanations when
+slides or concepts recur across lessons; this is not an extra review phase.
+Historical topic-checkpoint jobs retain their recorded contract and saved prefix;
+their existence does not force new requests back into section queues.
 Standard reports missing ordinary bold and possible repeated recall as warnings,
 not reasons for another model turn. Source-only video pages retain their exact
 titles/links; they do not require invented video contents or teaching citations.
@@ -120,12 +124,12 @@ one owner per page; the program verifies source links and saves organization
 and image decisions. Do not independently read every transcript and slide in
 the coordinator just to duplicate the writer's work. Inspect headings/content
 only to resolve actual source identity or a reported defect.
-One supplied lesson covers all supplied teaching slides, including clearly
-labelled unspoken supplementary content. Multiple supplied lessons distribute
-all pages by topic and transcript support, never by dumping leftovers into the
-last lesson. Do not ask the user to map slides or defer required pages to an
-unspecified future lesson. Inspected title/divider pages may be exempted with
-an image-bound structural review; diagrams/code/data are substantive.
+By default, cover the material reached by the professor, preserving unreached pages
+for the next lecture. With multiple selected lectures, use all their transcripts
+before deciding what remains pending. Each pending choice needs a concrete reason
+and actual last-selected-lecture T evidence; pending is not permanent exclusion.
+An explicit all_supplied slide_scope retains full-deck behavior. Required figures
+and personal-content protection remain mandatory. Do not ask the user to map slides.
 Use --budgets FILE when selected-model context/output/image limits are verified;
 never invent limits. Known exceeded limits stop before calling a provider.
 When Agy does not declare limits, MyNotes attempts the joint request and reports

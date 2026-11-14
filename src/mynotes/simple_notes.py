@@ -1,9 +1,12 @@
-"""One shared writing task in broad topics; local layout starts no reviewer."""
+"""One joint writing response; local layout starts no reviewer."""
 from copy import deepcopy
 from dataclasses import asdict, replace
+import json
 from pathlib import Path
-from .providers import (ProviderError, _decode_agy,
-    _normalize_transport_notes, _stage_agy_context, _stage_agy_writer, _jsonl_events)
+from .providers import (ProviderError, ProviderResponse, _decode_agy, _prompt, _save_attempt,
+    _normalize_transport_notes, _stage_agy_context, _stage_agy_writer, _jsonl_events,
+    provider_environment, _reported_settings)
+from .execution import AttemptStart, prevent_idle_sleep
 from .utils import file_sha256
 
 
@@ -17,22 +20,34 @@ def writing_schema(request):
     choice['canonical_slide_id']={'type':'string',**({'enum':identifiers} if identifiers else {})}
     if not identifiers:
         schema['properties']['organization']['maxItems']=0
-    choice['evidence_ids']['maxItems']=0
+    if request.style.get('slide_scope')!='lecture':choice['evidence_ids']['maxItems']=0
     return schema
 
 
 def derive_coverage(request, result):
-    """Record actual citations, not a claim of semantic completeness or teaching."""
+    """Keep cited coverage, or the declared lecture ledger, without a semantic audit."""
     for row in result['lessons']:
         note=row['notes']
         if note['evidence_coverage']:
             continue  # Retained historical responses keep their original ledger.
         used={i for block in note['blocks'] for i in block.get('evidence_ids',[])}
+        aliases={c['canonical_slide_id']:c['evidence_id'] for c in request.batch_context.get('ownership',[])}
+        declared={aliases.get(c['canonical_slide_id'],c['canonical_slide_id']):c for c in result.get('organization',[])
+                  if c.get('owner')==row['lecture_id']}
+        lecture_scope=request.style.get('slide_scope')=='lecture'
+        if lecture_scope:
+            used|={i for i,c in declared.items() if c['status'] in {'taught','supplement'}}
         note['evidence_coverage']=[{'evidence_id':source['id'],
             'disposition':'used' if source['id'] in used else 'uncertain',
             'reason':'Derived from explicit block citations; not semantic certification.' if source['id'] in used else
                      'Not explicitly cited in this lesson; substantive coverage is checked separately.'}
             for source in request.source_pack['evidence'] if source['id'].startswith(('S','H','W'))]
+        if lecture_scope:
+            for entry in note['evidence_coverage']:
+                choice=declared.get(entry['evidence_id'])
+                if not choice:continue
+                entry.update(disposition='excluded' if choice['status']=='pending' else 'used',
+                    reason='Writer editorial ledger, not an additional semantic audit: '+choice['reason'])
 
 
 def certified(record, request):
@@ -120,6 +135,7 @@ def generate(request):
     sheets=previews(request)
     request=replace(request,batch_context={**request.batch_context,'preview_sheets':sheets})
     context=_stage_agy_context(request,root)
+    base_context=context
     image_ids={v['evidence_id'] for v in request.source_pack.get('visuals',[])}
     unreadable=[r['id'] for r in request.source_pack['evidence'] if r['id'] in image_ids and (r.get('textless') or not str(r.get('content') or r.get('text') or '').strip())]
     context+='\nThe declared preview_sheets are for selection only. Inspect grouped previews once. Open full image_path for every chart, diagram, table, formula or uncertain image, EVEN IF you exclude it from the Word; explaining it in prose does not waive reading the source. Also open every included figure and every cited textless source. Covers/separators may be classified from an opened grouped preview. For text/decorative pages assessed only in previews, return exclude with inspected=false. Preview access never means full-source inspection. Complete the required source reads for the CURRENT topic before returning it; defer future pages to their topic. Group independent image reads and avoid repeated reads.'
@@ -133,6 +149,22 @@ def generate(request):
     def observe(event):
         row=observed_access(event,root)
         if row:access.append(row)
+    historical_topics=(request.batch_context.get('writing_contract')=='joint_topics_v1' or any(
+        json.loads(path.read_text()).get('writing_contract')=='joint_topics_v1'
+        for path in root.glob('writing-parts/*/state.json')))
+    if not historical_topics and request.style.get('slide_scope')=='lecture':
+        context=base_context+(
+            '\nUse grouped previews for selection. Open full source images ONLY for figures you decide to include '
+            'or items that need verification from the previews. Excluded or deferred figures do not need full inspection. '
+            'Return pending visual decisions as exclude, inspected=false. Never claim an inspection from a preview. '
+            'Return evidence_coverage=[]; the program derives that register. Use short S aliases in organization. '
+            'Give taught pages their actual owner transcript IDs and pending pages the actual last-selected transcript boundary IDs. '
+            'Stop where the professor stopped; preserve every unreached page as pending for the next lesson. '
+            'Read the complete selected transcripts and a single copy of the shared deck. Reuse settled earlier explanations. '
+            'The lesson length follows its contents and saved course style: no page target, word target or padding.')
+        return _single(request,context,sheets,access,observe)
+    if not historical_topics:
+        return _single(request,context,sheets,access,observe)
     protocol=(
         'TOPIC WRITING CONTRACT v1. This is one joint writing task in the same conversation, '
         'returned in a few broad, coherent topic groups. Return the wrapper part_index, complete, next_topic, result. '
@@ -155,3 +187,35 @@ def generate(request):
     )
     return generate_parts(request,joint={'schema':schema,'context':context,'protocol':protocol,
         'access':access,'sheets':sheets,'observe':observe})
+
+
+def _single(request,context,sheets,access,observe):
+    """One source-bounded writing pass, matching the simple reference workflow."""
+    import subprocess
+    from .agy_parts import run_session
+    from .agy_progressive import command
+    args=command(request,writing_schema(request),request.run_dir/'joint-provider.log')
+    started=AttemptStart();completed=None;answers=[]
+    def accept(envelope):
+        if answers or envelope.get('status')!='SUCCESS':
+            raise ProviderError('Joint writer did not return one SUCCESS; saved without regeneration')
+        answers.append(envelope)
+        return None
+    try:
+        with prevent_idle_sleep():
+            completed=run_session(args,_prompt(request,context=context),accept,cwd=str(request.run_dir),
+                env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'},on_event=observe,
+                abort_errors=True,log_file=request.run_dir/'joint-provider.log')
+        if completed.returncode or len(answers)!=1:raise ProviderError('Joint writing did not complete')
+        notes=_normalize_transport_notes(_decode_agy(answers[0]),request.response_schema,provider='agy')
+        attempt=_save_attempt(request,command=args,completed=completed,started=started,
+            envelope={'transport':'agy_joint_v1','status':'SUCCESS','source_access':access,'preview_sheets':sheets})
+        model,effort=_reported_settings(answers)
+        return ProviderResponse(notes,'agy',model,effort,answers[0].get('usage',{}),str(attempt))
+    except BaseException as error:
+        if hasattr(error,'output'):
+            def text(value):return value.decode(errors='replace') if isinstance(value,bytes) else value or ''
+            completed=subprocess.CompletedProcess(args,None,text(error.output),text(getattr(error,'stderr','')))
+        _save_attempt(request,command=args,completed=completed,started=started,error=str(error),
+            envelope={'transport':'agy_joint_v1','status':'ERROR','source_access':access,'preview_sheets':sheets})
+        raise

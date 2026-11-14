@@ -1,8 +1,9 @@
-New joint topic jobs save each successful response before continuing in the
-same conversation. An explicit interruption preserves the accepted prefix for
-notes --resume. An actual provider ERROR or truncation stays blocked; never
-restart the whole writing task or reuse the ERROR payload as successful notes.
-Historical single-response jobs retain their original recovery behavior.
+New requests write once following the selected lecture boundary. Unreached pages
+are pending source material for the next lecture, not a failed current lesson.
+Use notes --resume to finish local processing from a certified successful response.
+Historical topic jobs keep their saved prefix and original continuation contract.
+An actual provider ERROR stays blocked; never use its payload as successful notes
+or restart the whole writing task automatically.
 A stream-idle log does not establish a universal Google API deadline. Model-step
 wall time is not measured thinking time. Do not promise fixed Medium latency or
 identical quality across effort settings; retain the user's selected model.

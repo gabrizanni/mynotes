@@ -157,6 +157,7 @@ def integrate_decisions(response, plan, lecture, mapping, *, scope=None):
     local_turns = {mapping[row['id']] for row in plan['packs'][lecture]['evidence']
                    if row['id'].startswith('T') and row.get('origin_lecture_id', lecture) == lecture}
     last = lecture == plan['lectures'][-1]
+    lecture_scope = plan.get('style',{}).get('slide_scope')=='lecture'
     for row in rows:
         if (not isinstance(row, dict) or set(row) - {'canonical_slide_id', 'owner', 'status', 'reason', 'evidence_ids', 'structural_review'}
                 or not {'canonical_slide_id', 'status', 'reason', 'evidence_ids'}.issubset(row)
@@ -180,9 +181,16 @@ def integrate_decisions(response, plan, lecture, mapping, *, scope=None):
         if status == 'taught' and not ids:
             raise WorkflowError('A taught slide needs current-lesson transcript evidence')
         if status == 'pending':
-            if ids or last:
+            if lecture_scope:
+                if not ids or prior.get('required_visual'):
+                    raise WorkflowError('Pending course slides need transcript boundary evidence and cannot hide a required figure')
+            elif ids or last:
                 raise WorkflowError('The last selected lesson cannot leave unresolved course slide coverage')
             ownership[canonical] = {'owner': lecture, 'status': 'pending', 'reason': row['reason']}
+            if lecture_scope:
+                reverse={value:key for key,value in mapping.items()}
+                ownership[canonical].update(boundary_evidence_ids=[reverse[i] for i in ids],
+                    review_before=lecture[:-2]+f'{int(lecture[-2:])+1:02d}')
         elif status == 'material':
             review = row.get('structural_review') or prior.get('structural_review')
             if not review:
@@ -293,7 +301,9 @@ def integrate_group_decisions(response, plan, lectures, mappings):
         key, owner = row.get('canonical_slide_id'), row.get('owner')
         if key not in plan['inventory'] or key in seen or owner not in lectures:
             raise WorkflowError('Joint organization has an unknown/duplicate page or owner')
-        if owner not in plan['inventory'][key]['occurrences'] or row.get('status') == 'pending':
+        pending_allowed=(plan.get('style',{}).get('slide_scope')=='lecture' and owner==lectures[-1]
+                         and bool(row.get('evidence_ids')))
+        if owner not in plan['inventory'][key]['occurrences'] or (row.get('status') == 'pending' and not pending_allowed):
             raise WorkflowError('Joint organization must settle every page in an available selected lesson')
         seen.add(key)
     if unresolved - seen:

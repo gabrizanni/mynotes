@@ -40,7 +40,8 @@ def test_joint_context_has_one_deck_two_distinct_complete_transcripts(tmp_path):
     prompt = _prompt(request)
     assert 'false-positive rate uses actual negatives' in prompt
     assert 'descriptive distribution chart does not establish causal' in prompt
-    assert 'assign leftovers to the last lesson by default' in request.batch_context['organization_instructions']
+    assert 'Follow the actual progress of the professor' in request.batch_context['organization_instructions']
+    assert 'pending' in request.batch_context['organization_instructions']
 
 
 def test_unknown_joint_limits_are_explicit_but_do_not_force_repeated_decks(tmp_path):
@@ -155,6 +156,8 @@ def test_failed_targeted_correction_is_not_repeated_after_program_update(tmp_pat
     from mynotes import batch
     from mynotes.providers import _save_attempt, AttemptStart, ProviderResponse
     ws = prepared(tmp_path)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     class FailedRepair(IntegratedWriter):
         def generate(self, request):
             if request.phase == 'coverage_repair':

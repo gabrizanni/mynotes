@@ -52,6 +52,18 @@ def test_full_image_observation_still_authorizes_included_diagram(tmp_path):
     assert validate(notes,req,access,[sheet])==[]
 
 
+def test_lecture_scope_uses_preview_selection_without_extra_chart_reads(tmp_path):
+    req,notes,sheet,access=case(tmp_path);req.style['slide_scope']='lecture'
+    choice=notes['lessons'][0]['notes']['visual_decisions'][0]
+    choice.update(content_kind='chart',inspected=False)
+    notes['organization'][0].pop('structural_review')
+    notes['organization'][0].update(status='taught',evidence_ids=['T001'])
+    notes['lessons'][0]['notes']['blocks']=[{'kind':'paragraph','text':'Source-backed explanation.','evidence_ids':['S001','T001']}]
+    assert validate(notes,req,access,[sheet])==[]
+    choice['decision']='include'
+    with pytest.raises(ProviderError,match='full access'):validate(notes,req,access,[sheet])
+
+
 def test_preview_manifest_is_source_data_not_trusted_configuration(tmp_path):
     import json
     from dataclasses import replace
