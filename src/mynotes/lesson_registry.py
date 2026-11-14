@@ -52,6 +52,13 @@ def snapshot(ws, audio=None, transcripts=None):
     store = CaptureStore(ws)
     from .capture_associations import project_events as association_events
     events = association_events(store, store.source_events())
+    # The effective schedule includes local date/title/timezone overrides.
+    # Keep source identity and association provenance, but display the same
+    # saved occurrence as the editor and native recorder.
+    effective = {event['id']: event for event in store.schedule()['events']}
+    for event in events:
+        saved = effective.get(event['id'], {})
+        event.update({key: saved[key] for key in ('startsAt', 'endsAt', 'timezone', 'title') if key in saved})
     if audio is None:
         audio = project(ws, discover(ws))
     if transcripts is None:

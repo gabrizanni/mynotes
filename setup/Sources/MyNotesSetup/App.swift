@@ -343,7 +343,10 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
             let script = "#!/bin/zsh\nexport MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
-            try ChatTerminal.open(script: path, directory: runtime)
+            Task {
+                do { try await ChatTerminal.open(script: path, directory: runtime) }
+                catch { self.error = error.localizedDescription }
+            }
         } catch { self.error = error.localizedDescription }
     }
     func openLogin() {

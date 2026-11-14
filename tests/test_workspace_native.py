@@ -33,6 +33,9 @@ precondition(lesson.transcriptPath=="/synthetic-old.txt")
 precondition(lessons.first{$0.transcripts.contains{$0.id=="text-only"}}?.audio.isEmpty==true)
 precondition(lessons.first{$0.id=="audio:unassigned"}?.isUnassigned==true)
 precondition(lessons.map(\.id)==WorkspaceLesson.build(snapshot:f.snapshot,audio:f.audio,transcripts:f.transcripts).map(\.id))
+let stale = LibraryLesson(id: "stable-date", course: "MATH", number: 1, title: "Lecture", date: "2026-10-01T08:00:00Z", recordingIDs: [], transcriptIDs: [], eventIDs: [f.snapshot.events[0].id], notRecorded: false, hidden: false, revisionRequired: false)
+let effective = WorkspaceLesson.build(snapshot:f.snapshot,audio:[],transcripts:[],registry:[stale])
+precondition(effective[0].date == f.snapshot.events[0].start)
 let clock=WorkspaceCalendar(timezone:"Europe/Rome")
 let date=CaptureDates.read("2026-10-25T12:00:00Z")!
 let days=clock.week(date)
@@ -150,6 +153,40 @@ precondition(lessons[0].hasContent)
 print("PASS")
 ''')
     binary=tmp_path/'registry-projection'
+    result=subprocess.run(['swiftc','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'WorkspaceModels.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    result=subprocess.run([str(binary),str(fixture)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    assert 'PASS' in result.stdout
+
+
+def test_calendar_overlap_layout_and_effective_date_precedence(tmp_path):
+    source=Path(__file__).parents[1]/'setup/Sources/MyNotesSetup'
+    fixture=tmp_path/'events.json'
+    values=[]
+    for identifier,start,end in [('a','08:00','09:00'),('b','10:00','11:00'),('c','10:30','11:30'),('d','18:00','19:30')]:
+        values.append({'id':identifier,'sourceID':'special','courseCode':'EXAMPLE','lessonNumber':len(values)+1,'title':identifier,'startsAt':f'2026-11-06T{start}:00Z','endsAt':f'2026-11-06T{end}:00Z','timezone':'UTC','eligibility':'SCHEDULED','stopAt':f'2026-11-06T{end}:00Z','reason':'','localChanges':False,'recordingEnabled':True,'sourceEligibility':'SCHEDULED','special':True})
+    fixture.write_text(json.dumps(values))
+    driver=tmp_path/'main.swift'
+    driver.write_text('''import Foundation
+let events = try JSONDecoder().decode([CaptureEvent].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+let lessons = events.map { WorkspaceLesson(id: $0.id, event: $0) }
+let clock = WorkspaceCalendar(timezone: "UTC")
+let positions = clock.placements(lessons, on: events[0].start)
+precondition(positions.first { $0.id == "a" }!.columnCount == 1)
+precondition(positions.first { $0.id == "d" }!.columnCount == 1)
+precondition(positions.first { $0.id == "b" }!.columnCount == 2)
+precondition(positions.first { $0.id == "c" }!.columnCount == 2)
+precondition(positions.first { $0.id == "b" }!.column != positions.first { $0.id == "c" }!.column)
+var touchingEvent = events[1]
+touchingEvent.startsAt = events[0].endsAt
+let touching = clock.placements([lessons[0], WorkspaceLesson(id: "touching", event: touchingEvent)], on: events[0].start)
+precondition(touching.allSatisfy { $0.columnCount == 1 })
+let sparse = clock.placements([lessons[0], lessons[3]], on: events[0].start)
+precondition(sparse.allSatisfy { $0.span == $0.columnCount })
+print("PASS")
+''')
+    binary=tmp_path/'layout'
     result=subprocess.run(['swiftc','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'WorkspaceModels.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
     assert result.returncode==0,result.stderr
     result=subprocess.run([str(binary),str(fixture)],capture_output=True,text=True,timeout=15)

@@ -78,7 +78,7 @@ struct WorkspaceLesson: Identifiable {
             return registry.filter { !$0.hidden }.map { row in
                 var lesson = Self(id: row.id, event: snapshot?.events.first { row.eventIDs.contains($0.id) }, audio: audio.filter { row.recordingIDs.contains($0.id) }, transcripts: transcripts.filter { row.transcriptIDs.contains($0.id) })
                 lesson.registry = row
-                lesson.resolvedDate = row.date.flatMap(CaptureDates.read) ?? lesson.date
+                lesson.resolvedDate = lesson.event?.start ?? row.date.flatMap(CaptureDates.read) ?? lesson.date
                 return lesson
             }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
         }
@@ -164,5 +164,52 @@ struct WorkspaceCalendar {
     }
     func label(_ date: Date, format pattern: String) -> String {
         CaptureDates.format(date, zone: calendar.timeZone, pattern: pattern)
+    }
+}
+
+// Horizontal space is shared only within a connected group of overlapping
+// visible event cards, never across unrelated hours of the same day.
+struct WorkspaceCalendarPlacement: Identifiable {
+    var lesson: WorkspaceLesson
+    var start: Date
+    var end: Date
+    var column: Int
+    var columnCount: Int
+    var span: Int
+    var id: String { lesson.id }
+}
+
+extension WorkspaceCalendar {
+    func placements(_ lessons: [WorkspaceLesson], on day: Date, minimumMinutes: Double = 0) -> [WorkspaceCalendarPlacement] {
+        let entries = lessons.compactMap { lesson -> WorkspaceCalendarPlacement? in
+            guard let event = lesson.event, let segment = clipped(start: event.start, end: event.end, on: day) else { return nil }
+            return WorkspaceCalendarPlacement(lesson: lesson, start: segment.start,
+                end: max(segment.end, segment.start.addingTimeInterval(minimumMinutes * 60)), column: 0, columnCount: 1, span: 1)
+        }.sorted { $0.start == $1.start ? ($0.end == $1.end ? $0.id < $1.id : $0.end > $1.end) : $0.start < $1.start }
+        var groups: [[WorkspaceCalendarPlacement]] = []
+        var groupEnd = Date.distantPast
+        for entry in entries {
+            if groups.isEmpty || entry.start >= groupEnd { groups.append([entry]); groupEnd = entry.end }
+            else { groups[groups.count - 1].append(entry); groupEnd = max(groupEnd, entry.end) }
+        }
+        return groups.flatMap { group in
+            var ends: [Date] = []
+            var placed: [WorkspaceCalendarPlacement] = []
+            for var entry in group {
+                let column = ends.firstIndex { $0 <= entry.start } ?? ends.count
+                if column == ends.count { ends.append(entry.end) } else { ends[column] = entry.end }
+                entry.column = column; placed.append(entry)
+            }
+            for index in placed.indices {
+                placed[index].columnCount = ends.count
+                var span = 1
+                for column in (placed[index].column + 1)..<ends.count {
+                    if placed.contains(where: { $0.column == column && $0.start < placed[index].end && $0.end > placed[index].start }) { break }
+                    span += 1
+                }
+                placed[index].span = span
+            }
+            return placed
+        }
     }
 }

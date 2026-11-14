@@ -273,3 +273,18 @@ Use is excluded. The writer checks actual slide explanations within its existing
 writing phase rather than treating unrelated citations as coverage. Startup text
 and managed exports carry the same instructions without the duplicate priority block.
 This is an instructions-only correction, not a new generation or public release.
+
+### 0.3.8 — Collection dates, calendar width and external chat
+
+Collection dates now use the saved effective calendar occurrence, including local
+changes to date, time, timezone and title. Native lesson details prefer the same
+effective event over an older collection date.
+
+Week-view cards share horizontal space only with overlapping events. Separate
+time groups regain the full day-column width; a card can expand into adjacent
+columns where there are no overlapping cards.
+
+External chat again opens its executable command file explicitly in macOS
+Terminal. This removes dependence on Warp deep-link handling and the default
+file association. Launch errors are displayed in MyNotes. Provider authentication
+and subscription use continue through the existing CLI launcher.

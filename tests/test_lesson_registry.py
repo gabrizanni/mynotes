@@ -239,3 +239,17 @@ def test_cli_read_and_edit_use_stable_lesson_ids(setup,tmp_path,capsys):
     assert main(['transcription-queue','lesson-edit','--workspace',str(ws.root),'--file',str(payload),'--json'])==0
     assert json.loads(capsys.readouterr().out)['status']=='OK'
     assert lessons.load(ws)['lessons'][row['id']]['number']==7
+
+
+def test_collection_date_matches_saved_calendar_edit_without_mutation(setup):
+    from mynotes import capture_dashboard
+    ws,folder,_=setup;code=course(ws);store=capture.CaptureStore(ws);capture.configure(store,{})
+    capture.import_schedule(store,[event(courseCode=code,startsAt='2026-10-31T12:30:00Z',endsAt='2026-10-31T14:00:00Z',timezone='Asia/Kolkata')])
+    before=lessons.snapshot(ws);row=next(iter(before['lessons'].values()));lessons.save(ws,before)
+    capture_dashboard.edit_lesson(store,row['event_ids'][0],{'startsAt':'2026-11-06T12:30:00Z','endsAt':'2026-11-06T14:00:00Z','title':'Updated lecture'})
+    original=lessons.path(ws).read_bytes()
+    effective=lessons.snapshot(ws)['lessons'][row['id']]
+    assert effective['date']=='2026-11-06T12:30:00Z'
+    assert effective['title']=='Updated lecture'
+    assert lessons.path(ws).read_bytes()==original
+    assert store.source_events()[0]['startsAt']=='2026-10-31T12:30:00Z'
