@@ -830,10 +830,14 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "verify-library", "run", "worker"):
+    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "verify-library", "lessons", "lesson-edit", "course-profile", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
+        if action == 'course-profile':
+            command.add_argument('--course', required=True)
+        if action == 'lesson-edit':
+            command.add_argument('--file', required=True)
         if action == 'associate-audio':
             command.add_argument('--recording', required=True)
             command.add_argument('--file', required=True)
@@ -876,11 +880,33 @@ def run_cli(args):
     ws, action = Workspace.from_value(args.workspace), args.queue_command
     if not ws.is_initialized():
         raise ValueError("Initialize MyNotes first")
-    if action in {'inspect-audio', 'import-audio'}:
-        from .audio_sources import inspect_audio, import_audio
+    if action == 'lessons':
+        from .lesson_registry import listing
+        value = {'status': 'OK', 'lessons': listing(ws)}
+    elif action == 'course-profile':
+        from .lesson_registry import profile
+        value = profile(ws, args.course)
+    elif action == 'lesson-edit':
+        from .lesson_registry import action as edit, renumber, move_audio, trash_completed
         payload = json.loads(Path(args.file).read_text())
-        value = ({'status': 'OK', 'files': [inspect_audio(ws, p) for p in payload['paths']]}
+        if payload.get('action') == 'renumber':
+            value = renumber(ws, payload.get('changes'), preview=payload.get('preview') is True)
+        elif payload.get('action') == 'move-audio':
+            value = move_audio(ws, payload.get('recording'), payload.get('target'))
+        elif payload.get('action') == 'trash-completed':
+            value = trash_completed(ws, payload['id'], payload.get('completed', []))
+        else: value = edit(ws, payload)
+    elif action in {'inspect-audio', 'import-audio'}:
+        from .audio_sources import import_audio
+        from .lesson_registry import inspect_imports
+        payload = json.loads(Path(args.file).read_text())
+        if action == 'import-audio' and 'items' in payload:
+            from .lesson_registry import import_items
+            value = import_items(ws, payload['items'])
+        else:
+            value = ({'status': 'OK', 'files': inspect_imports(ws, payload['paths'])}
                  if action == 'inspect-audio' else import_audio(ws, payload['paths'], event_id=payload.get('event_id'), course=payload.get('course'), lesson=payload.get('lesson')))
+
     elif action == 'associate-audio':
         from .audio_sources import associate
         payload = json.loads(Path(args.file).read_text())
@@ -901,7 +927,7 @@ def run_cli(args):
     elif action == "library":
         from .recording_library import sync, folder, options
         if getattr(args, 'sync', False): sync(ws)
-        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
+        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "lessons": __import__("mynotes.lesson_registry", fromlist=["listing"]).listing(ws), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
     elif action == "enqueue":
         value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
     elif action == "status":

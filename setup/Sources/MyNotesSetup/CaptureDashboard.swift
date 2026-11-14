@@ -359,8 +359,8 @@ struct CaptureTranscript: Codable, Identifiable {
         case courseCode = "course_code", recordingID = "recording_id", lectureID = "lecture_id", createdAt = "created_at"
     }
 }
-struct CaptureLibrary: Decodable { var recordings: [CaptureRecording]; var transcripts: [CaptureTranscript]?; var folder: String?; var folderConfigured: Bool?
-    enum CodingKeys: String, CodingKey { case recordings, transcripts, folder; case folderConfigured = "folder_configured" }
+struct CaptureLibrary: Decodable { var lessons: [LibraryLesson]?; var recordings: [CaptureRecording]; var transcripts: [CaptureTranscript]?; var folder: String?; var folderConfigured: Bool?
+    enum CodingKeys: String, CodingKey { case recordings, transcripts, folder, lessons; case folderConfigured = "folder_configured" }
 }
 struct CaptureQueueJob: Codable, Identifiable {
     var id: String; var createdAt: String?; var recordingID: String; var title: String; var courseCode: String?
@@ -462,6 +462,27 @@ extension CaptureRecording {
         case "enqueue": return ["--recording", id, "--parallel", String(parallel)]
         default: return nil
         }
+    }
+}
+
+
+struct LibraryLesson: Codable, Identifiable {
+    var id: String
+    var course: String?
+    var number: Int?
+    var title: String
+    var date: String?
+    var recordingIDs: [String]
+    var transcriptIDs: [String]
+    var eventIDs: [String]
+    var notRecorded: Bool
+    var hidden: Bool
+    var revisionRequired: Bool
+    var pendingTrash: [String]?
+    enum CodingKeys: String, CodingKey {
+        case id, course, number, title, date, hidden
+        case recordingIDs = "recording_ids", transcriptIDs = "transcript_ids", eventIDs = "event_ids"
+        case notRecorded = "not_recorded", revisionRequired = "revision_required", pendingTrash = "pending_trash"
     }
 }
 

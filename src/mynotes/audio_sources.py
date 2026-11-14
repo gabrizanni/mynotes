@@ -64,11 +64,13 @@ def project(ws, items):
         key = 'event:' + event_id if event_id else ('lesson:' + item['lecture_id'] if item.get('lecture_id') and len(matches) < 2 else 'audio:' + item['id'])
         item['lesson_key'] = key
         item['source_excluded'] = item['id'] in value['excluded']
-        groups[key].append(item)
+        from .lesson_registry import project_audio
+        project_audio(ws, [item])
+        groups[item['lesson_key']].append(item)
     for key, group in groups.items():
         candidates = [i for i in group if not i['source_excluded']]
-        preferred = value['preferred'].get(key)
-        chosen = preferred if preferred else candidates[0]['id'] if len(candidates) == 1 else None
+        preferred = value['preferred'].get(key) or next((value['preferred'].get(i.get('legacy_lesson_key')) for i in group if value['preferred'].get(i.get('legacy_lesson_key'))), None)
+        chosen = None if key in value.get('require_choice', []) else (preferred if preferred else candidates[0]['id'] if len(candidates) == 1 else None)
         available_ids = {i['id'] for i in candidates}
         needs_choice = bool(candidates and (chosen is None or chosen not in available_ids))
         for item in group:
@@ -118,6 +120,7 @@ def choose(ws, identifier, action):
     if action == 'prefer-audio':
         if not Path(item['path']).is_file(): raise ValueError('Ripristina o importa l’audio prima di selezionarlo')
         value['preferred'][item['lesson_key']] = identifier
+        value['require_choice'] = [k for k in value.get('require_choice', []) if k != item['lesson_key']]
         value['excluded'] = [i for i in value['excluded'] if i != identifier]
     elif action in {'exclude-audio', 'prepare-trash'}:
         if identifier not in value['excluded']: value['excluded'].append(identifier)
@@ -223,6 +226,8 @@ def import_audio(ws, paths, *, event_id=None, course=None, lesson=None):
             metadata = {'duration': source['duration'], 'origin': 'Importato', 'original_name': source['name'], 'imported_from': str(path)}
             if event_id: metadata['event_id'] = event_id
             value['imports'][identifier] = metadata
+            if not event_id:
+                value.setdefault('bindings', {})[identifier] = {'event_id': None, 'course_code': course, 'lecture_id': f'{course}-L{lesson:02d}' if course and lesson else None}
             save_policy(ws, value)
             if course:
                 associate(ws, identifier, course=course, lesson=lesson)
@@ -230,6 +235,16 @@ def import_audio(ws, paths, *, event_id=None, course=None, lesson=None):
             sync(ws)
             item = next(i for i in discover(ws) if i['id'] == identifier)
             hashes[sha] = item
+            from .lesson_registry import snapshot, save as save_lessons
+            registry = snapshot(ws)
+            row = next(r for r in registry['lessons'].values() if identifier in r['recording_ids'])
+            row['not_recorded'] = False
+            if len(row['recording_ids']) > 1:
+                choices = policy(ws)
+                choices.setdefault('require_choice', []).append(row['id'])
+                save_policy(ws, choices)
+            save_lessons(ws, registry)
+            value = policy(ws)
             results.append({'recording_id': identifier, 'duplicate': False, 'name': source['name']})
         except BaseException:
             # Once published, retain the complete copy even if metadata/sync fails.
@@ -267,5 +282,7 @@ def associate(ws, identifier, *, event_id=None, course=None, lesson=None):
     value = policy(ws)
     value.setdefault('bindings', {})[identifier] = {'event_id': event_id, 'course_code': course, 'lecture_id': lecture_id}
     save_policy(ws, value)
+    from .lesson_registry import rebind_audio
+    rebind_audio(ws, identifier, course, lesson, event_id)
     sync(ws)
     return {'status': 'OK', 'message': 'Associazione salvata. Scegli la sorgente da trascrivere se la lezione ha più audio.'}

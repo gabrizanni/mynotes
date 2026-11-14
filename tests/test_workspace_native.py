@@ -125,3 +125,33 @@ print("PASS projection_50_ms", elapsed * 1000)
     result = subprocess.run([str(binary), str(fixture)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     assert 'PASS' in result.stdout
+
+
+def test_durable_registry_controls_visibility_number_and_not_recorded(tmp_path):
+    source = Path(__file__).parents[1] / 'setup/Sources/MyNotesSetup'
+    fixture = tmp_path / 'lessons.json'
+    fixture.write_text(json.dumps([
+        {'id':'stable-one','course':'EXAMPLE','number':4,'title':'An existing lesson',
+         'recording_ids':[],'transcript_ids':[],'event_ids':[],
+         'not_recorded':True,'hidden':False,'revision_required':False},
+        {'id':'stable-two','course':'EXAMPLE','number':5,'title':'Removed',
+         'recording_ids':[],'transcript_ids':[],'event_ids':[],
+         'not_recorded':False,'hidden':True,'revision_required':False}]))
+    driver=tmp_path/'main.swift'
+    driver.write_text('''
+import Foundation
+let rows = try JSONDecoder().decode([LibraryLesson].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
+let lessons = WorkspaceLesson.build(snapshot: nil, audio: [], transcripts: [], registry: rows)
+precondition(lessons.count == 1)
+precondition(lessons[0].id == "stable-one")
+precondition(lessons[0].registry?.number == 4)
+precondition(lessons[0].transcriptionLabel == "Non registrata")
+precondition(lessons[0].hasContent)
+print("PASS")
+''')
+    binary=tmp_path/'registry-projection'
+    result=subprocess.run(['swiftc','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'WorkspaceModels.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
+    assert result.returncode==0,result.stderr
+    result=subprocess.run([str(binary),str(fixture)],capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stderr
+    assert 'PASS' in result.stdout

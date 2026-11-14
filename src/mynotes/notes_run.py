@@ -140,6 +140,8 @@ def run_notes(workspace, course_code, lesson_numbers=None, *, resume=None, provi
         raise WorkflowError('Supply --lessons or --resume BATCH_ID')
     if saved and [f'{code}-L{n:02d}' for n in numbers] != saved['lectures']:
         raise WorkflowError('Resume preserves the original selected lessons; finish it before requesting another range')
+    from .lesson_registry import assert_generation_allowed
+    for number in numbers: assert_generation_allowed(workspace, code, number)
     original_lectures = [f'{code}-L{n:02d}' for n in numbers]
     boundary_warnings = []
     if contiguous_transcripts:

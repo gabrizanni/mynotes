@@ -17,8 +17,9 @@ struct WorkspaceLesson: Identifiable {
     var event: CaptureEvent?
     var audio: [CaptureRecording] = []
     var transcripts: [CaptureTranscript] = []
-    var title: String { event?.title ?? audio.first?.title ?? transcripts.first?.title ?? "Registrazione" }
-    var courseCode: String? { event?.courseCode ?? audio.first?.courseCode ?? transcripts.first?.courseCode }
+    var registry: LibraryLesson?
+    var title: String { registry?.title ?? event?.title ?? audio.first?.title ?? transcripts.first?.title ?? "Registrazione" }
+    var courseCode: String? { registry?.course ?? event?.courseCode ?? audio.first?.courseCode ?? transcripts.first?.courseCode }
     private var resolvedDate: Date?
     var date: Date { resolvedDate ?? event?.start ?? CaptureDates.read(audio.first?.createdAt ?? transcripts.first?.createdAt) ?? .distantPast }
     var timezone: String { event?.timezone ?? TimeZone.current.identifier }
@@ -28,7 +29,7 @@ struct WorkspaceLesson: Identifiable {
     }
     var needsChoice: Bool { audio.contains { $0.sourceSelectionRequired == true } || audio.count > 1 && selectedAudio == nil }
     var isUnassigned: Bool { courseCode == nil }
-    var hasContent: Bool { !audio.isEmpty || !transcripts.isEmpty }
+    var hasContent: Bool { registry?.notRecorded == true || !audio.isEmpty || !transcripts.isEmpty }
     var needsAttention: Bool {
         needsChoice || isUnassigned || audio.contains { $0.hasProblem } || event.map { $0.eligibility == "NEEDS_REVIEW" || $0.eligibility == "CONFLICT" } == true
     }
@@ -41,6 +42,8 @@ struct WorkspaceLesson: Identifiable {
         return transcripts.first?.recordingID ?? audio.first(where: { $0.isTranscribed })?.id
     }
     var transcriptionLabel: String {
+        if registry?.notRecorded == true { return "Non registrata" }
+        if registry?.revisionRequired == true { return "Numerazione da verificare" }
         if needsChoice { return "Scegli audio" }
         if let selectedAudio {
             switch selectedAudio.transcriptionState {
@@ -57,6 +60,7 @@ struct WorkspaceLesson: Identifiable {
         return "Nessun audio"
     }
     func recordingLabel(_ snapshot: CaptureSnapshot?) -> String {
+        if registry?.notRecorded == true { return "Non registrata" }
         if let event, snapshot?.isRecording == true, snapshot?.runtime.currentSession?.event.id == event.id { return "In registrazione" }
         if let selectedAudio, selectedAudio.partial == true { return "Registrazione parziale" }
         if audio.contains(where: { $0.audioAvailable != false }) { return "Audio disponibile" }
@@ -69,7 +73,15 @@ struct WorkspaceLesson: Identifiable {
         guard let last = parts.last, let titleNumber = Int(last.replacingOccurrences(of: "L", with: "")) else { return false }
         return titleNumber != number
     }
-    static func build(snapshot: CaptureSnapshot?, audio: [CaptureRecording], transcripts: [CaptureTranscript]) -> [Self] {
+    static func build(snapshot: CaptureSnapshot?, audio: [CaptureRecording], transcripts: [CaptureTranscript], registry: [LibraryLesson] = []) -> [Self] {
+        if !registry.isEmpty {
+            return registry.filter { !$0.hidden }.map { row in
+                var lesson = Self(id: row.id, event: snapshot?.events.first { row.eventIDs.contains($0.id) }, audio: audio.filter { row.recordingIDs.contains($0.id) }, transcripts: transcripts.filter { row.transcriptIDs.contains($0.id) })
+                lesson.registry = row
+                lesson.resolvedDate = row.date.flatMap(CaptureDates.read) ?? lesson.date
+                return lesson
+            }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        }
         let events = snapshot?.events ?? []
         var values: [String: Self] = Dictionary(uniqueKeysWithValues: events.map { ("event:" + $0.id, Self(id: "event:" + $0.id, event: $0)) })
         var eventKeysByLecture: [String: [String]] = [:]

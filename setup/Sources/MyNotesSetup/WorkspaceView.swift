@@ -18,10 +18,10 @@ enum WorkspaceStyle {
 }
 
 private enum WorkspaceSheet: Identifiable {
-    case record, schedule, edit(CaptureEvent), detail(String), importAudio([URL], String?)
+    case courses(String?), record, schedule, edit(CaptureEvent), detail(String), importAudio([URL], String?)
     var id: String {
         switch self {
-        case .record: return "record"; case .schedule: return "schedule"
+        case .courses: return "courses"; case .record: return "record"; case .schedule: return "schedule"
         case .edit(let event): return "edit:" + event.id
         case .detail(let id): return "detail:" + id
         case .importAudio: return "import"
@@ -39,6 +39,7 @@ struct MyNotesWorkspaceView: View {
     @CaptureViewState<String?> private var selectedLessonID: String?
     @CaptureViewState<String> private var query = ""
     @CaptureViewState<String> private var course = "all"
+    @CaptureViewState<Bool> private var coursesExpanded = true
     @CaptureViewState<Bool> private var attentionOnly = false
     @CaptureViewState<String> private var displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
     @CaptureViewState<Date> private var clockInstant = Date()
@@ -50,7 +51,7 @@ struct MyNotesWorkspaceView: View {
     private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: displayTimezoneID) }
     private var collection: [WorkspaceLesson] {
         lessons.filter {
-            ($0.hasContent || ($0.event?.end ?? .distantFuture) < now)
+            ($0.hasContent || $0.registry?.eventIDs.isEmpty == true || ($0.event?.end ?? .distantFuture) < now)
             && (course == "all" || (course == "none" ? $0.isUnassigned : $0.courseCode == course))
             && (!attentionOnly || $0.needsAttention)
             && (query.isEmpty || ($0.title + " " + ($0.courseCode ?? "") + " " + courseName($0.courseCode)).localizedStandardContains(query))
@@ -66,13 +67,27 @@ struct MyNotesWorkspaceView: View {
                 }.padding(.horizontal, 20).padding(.vertical, 24)
                 List(selection: $state.route) {
                     ForEach(WorkspaceRoute.allCases) { route in
-                        HStack {
+                        Button {
+                            state.route = route
+                            if route == .library { course = "all"; coursesExpanded = true }
+                        } label: { HStack {
                             Label(route.title, systemImage: route.symbol)
                             Spacer()
                             if route == .activity, let count = model.queue?.activeJobs.count, count > 0 {
                                 Text(count, format: .number).font(.caption).foregroundStyle(.secondary)
                             }
-                        }.tag(route).padding(.vertical, 5)
+                        } }.buttonStyle(.plain).tag(route).padding(.vertical, 5)
+                        if route == .library {
+                            DisclosureGroup("Corsi", isExpanded: $coursesExpanded) {
+                                ForEach(model.snapshot?.courses ?? []) { item in
+                                    Button { course = item.code; state.route = .library } label: {
+                                        HStack { Text(item.name); Spacer(); if course == item.code && state.route == .library { Image(systemName: "checkmark") } }
+                                    }.buttonStyle(.plain).padding(.vertical, 4)
+                                }
+                                Button("Da associare") { course = "none"; state.route = .library }.buttonStyle(.plain)
+                                Button("Gestisci corsi…") { sheet = .courses(course == "all" || course == "none" ? nil : course) }.buttonStyle(.plain).padding(.top, 8)
+                            }
+                        }
                     }
                 }.listStyle(.sidebar)
                 VStack(spacing: 8) {
@@ -124,6 +139,13 @@ struct MyNotesWorkspaceView: View {
             try? await Task.sleep(for: .seconds(10))
             if !Task.isCancelled && model.notice == notice { model.notice = nil }
         }
+        .onChange(of: course) { _, _ in
+            if let id = selectedLessonID, !collection.contains(where: { $0.id == id }) { selectedLessonID = nil }
+        }
+        .onChange(of: model.lessonProjectionRevision) { _, _ in
+            if let id = selectedLessonID, !collection.contains(where: { $0.id == id }) { selectedLessonID = nil }
+        }
+        .onChange(of: state.route) { _, value in if value == .library { coursesExpanded = true } }
         .onChange(of: model.importedRecordingID) { _, id in
             if let id, let lesson = lessons.first(where: { $0.audio.contains(where: { $0.id == id }) }) {
                 selectedLessonID = lesson.id; query = ""; course = "all"; attentionOnly = false; state.route = .library
@@ -162,10 +184,11 @@ struct MyNotesWorkspaceView: View {
         .sheet(item: $sheet, onDismiss: { Task { await model.refresh(silent: true, includeLibrary: true) } }) { kind in
             if let snapshot = model.snapshot {
                 switch kind {
+                case .courses(let code): LibraryManagementView(model: model, setup: setup, course: code)
                 case .record: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: true)
                 case .schedule: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: false)
                 case .edit(let event): CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false)
-                case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID)
+                case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID, initialCourse: course == "all" || course == "none" ? nil : course)
                 case .detail(let id):
                     NavigationStack {
                         if let lesson = model.lesson(withID: id) {
@@ -264,6 +287,7 @@ struct MyNotesWorkspaceView: View {
                     Text("Tutti i corsi").tag("all"); Text("Da associare").tag("none")
                     ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
                 }.labelsHidden().frame(maxWidth: 210)
+                Button("Gestisci corso…") { sheet = .courses(course == "all" || course == "none" ? nil : course) }
                 Menu {
                     Toggle("Solo da sistemare", isOn: $attentionOnly)
                     Button("Trascrivi audio selezionati per le lezioni") { Task { await model.queueAction("enqueue", arguments: ["--all-untranscribed"]) } }
@@ -330,7 +354,7 @@ struct WorkspaceLessonRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: lesson.hasContent ? "waveform" : "calendar").foregroundStyle(.secondary).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 6) {
-                Text(lesson.title).font(.body.weight(.medium)).lineLimit(2)
+                Text(lesson.registry?.number.map { "Lezione \($0) · \(lesson.title)" } ?? lesson.title).font(.body.weight(.medium)).lineLimit(2)
                 Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 8) {
                     Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).lineLimit(1)

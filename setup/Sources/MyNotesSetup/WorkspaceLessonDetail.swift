@@ -5,8 +5,8 @@ import Combine
 import UniformTypeIdentifiers
 
 private enum LessonSheet: Identifiable {
-    case rename(CaptureRecording), renameTranscript(CaptureTranscript), associate(CaptureRecording), eventAssociation(CaptureEvent), edit(CaptureEvent), files([URL])
-    var id: String { switch self { case .rename(let x): return "rename:" + x.id; case .renameTranscript(let x): return "transcript:" + x.id; case .associate(let x): return "associate:" + x.id; case .eventAssociation(let x): return "event-association:" + x.id; case .edit(let x): return "edit:" + x.id; case .files: return "files" } }
+    case manage, rename(CaptureRecording), renameTranscript(CaptureTranscript), associate(CaptureRecording), eventAssociation(CaptureEvent), edit(CaptureEvent), files([URL])
+    var id: String { switch self { case .manage: return "manage"; case .rename(let x): return "rename:" + x.id; case .renameTranscript(let x): return "transcript:" + x.id; case .associate(let x): return "associate:" + x.id; case .eventAssociation(let x): return "event-association:" + x.id; case .edit(let x): return "edit:" + x.id; case .files: return "files" } }
 }
 
 struct WorkspaceLessonDetail: View {
@@ -17,6 +17,7 @@ struct WorkspaceLessonDetail: View {
     @CaptureViewState<LessonSheet?> private var sheet: LessonSheet?
     @CaptureViewState<Bool> private var showImporter = false
     @CaptureViewState<CaptureRecording?> private var trashCandidate: CaptureRecording?
+    @CaptureViewState<String?> private var trashTranscript: String?
     @CaptureViewState<Bool> private var showAlternatives = false
     @CaptureViewState<String> private var transcript = ""
     init(model: CaptureModel, lesson: WorkspaceLesson, courseName: String) { self.model = model; self.fallback = lesson; self.courseName = courseName }
@@ -28,7 +29,9 @@ struct WorkspaceLessonDetail: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(lesson.title).font(.title2.weight(.semibold)).textSelection(.enabled)
+                        Text(lesson.title).font(.title2.weight(.semibold))
+                        if let number = lesson.registry?.number { Text("Lezione \(number)").font(.headline) }
+                        if lesson.registry != nil { Button("Gestisci lezione…") { sheet = .manage } }
                         Text(courseName).foregroundStyle(.secondary)
                         Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).font(.callout).foregroundStyle(.secondary)
                         if let sourceZone = lesson.event?.timezone, let original = WorkspaceCalendar(timezone: displayTimeZone.identifier).originalTimeLabel(lesson.date, timezone: sourceZone) {
@@ -86,6 +89,7 @@ struct WorkspaceLessonDetail: View {
                                 Button("Mostra nel Finder") { model.revealFile(path) }
                                 if let item = lesson.transcripts.first(where: { $0.path == path }) {
                                     Button("Rinomina trascrizione…") { sheet = .renameTranscript(item) }
+                                    if lesson.registry != nil { Button("Sposta trascrizione nel Cestino…", role: .destructive) { trashTranscript = item.path } }
                                 }
                             } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Azioni trascrizione")
                         }
@@ -130,13 +134,17 @@ struct WorkspaceLessonDetail: View {
         .sheet(item: $sheet) { kind in
             switch kind {
             case .renameTranscript(let transcript): WorkspaceTranscriptRenameView(model: model, transcript: transcript)
+            case .manage: LibraryLessonEditor(model: model, lessonID: lesson.id)
             case .rename(let audio): WorkspaceAudioEditView(model: model, audio: audio, association: false)
             case .associate(let audio): WorkspaceAudioEditView(model: model, audio: audio, association: true)
             case .eventAssociation(let event): WorkspaceEventAssociationView(model: model, event: event)
             case .edit(let event): if let snapshot = model.snapshot { CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false) }
-            case .files(let urls): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: lesson.event?.id, initialCourse: lesson.courseCode, initialLectureID: lesson.selectedAudio?.lectureID)
+            case .files(let urls): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: lesson.event?.id, initialCourse: lesson.courseCode, initialLectureID: lesson.registry.flatMap { row in row.course.flatMap { code in row.number.map { String(format: "%@-L%02d", code, $0) } } } ?? lesson.selectedAudio?.lectureID)
             }
         }
+        .confirmationDialog("Spostare la trascrizione nel Cestino?", isPresented: Binding(get: { trashTranscript != nil }, set: { if !$0 { trashTranscript = nil } }), presenting: trashTranscript) { path in
+            Button("Sposta nel Cestino", role: .destructive) { Task { await model.trashLessonFile(lesson.id, path: path) }; trashTranscript = nil }
+        } message: { _ in Text("Verrà spostata solo questa trascrizione. Audio e altri file restano conservati.") }
         .confirmationDialog("Spostare l’audio nel Cestino?", isPresented: Binding(get: { trashCandidate != nil }, set: { if !$0 { trashCandidate = nil } }), presenting: trashCandidate) { audio in
             Button("Sposta nel Cestino", role: .destructive) { Task { await model.trashAudio(audio) }; trashCandidate = nil }
             Button("Annulla", role: .cancel) { trashCandidate = nil }

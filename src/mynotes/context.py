@@ -102,6 +102,9 @@ def task_context(settings, activity, course=None, *, include_core=False, workspa
     if workspace is not None:
         from .source_routes import route_index
         result['source_paths'] = route_index(workspace, settings, course)
+        from .lesson_registry import load as lesson_state
+        result['lesson_states'] = [{key: row.get(key) for key in ('id', 'course', 'number', 'not_recorded', 'hidden', 'revision_required')} for row in lesson_state(workspace)['lessons'].values() if not course or row['course'] == course.upper()]
+        result['lesson_state_guidance'] = 'Non registrata means the lesson occurred without audio: do not search for or transcribe missing audio. Hidden lessons are excluded. Use mynotes transcription-queue lessons --json for the complete local registry.'
     if course:
         item = next(c for c in settings["courses"] if c["code"] == course.upper())
         result["course"] = {key: item[key] for key in ("code", "name", "kind", "languages", "assessment", "preparation", "difficult_topics", "folders", "files", "publication")}
@@ -115,7 +118,7 @@ def render_context(data):
         parts.append(data["common_instructions"])
     parts.append(data["instructions"])
     parts.extend(render_markdown(memory) for memory in data["memory"].values())
-    for key in ("source_paths", "course", "original_answer_provenance_not_current_preferences"):
+    for key in ("source_paths", "course", "original_answer_provenance_not_current_preferences", "lesson_states", "lesson_state_guidance"):
         if key in data:
             parts += [f"## {key}", json.dumps(data[key], ensure_ascii=False, indent=2)]
     return "\n\n".join(parts)

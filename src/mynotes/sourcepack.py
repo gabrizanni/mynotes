@@ -294,8 +294,12 @@ def _build_source_pack_locked(
 ) -> dict[str, Any]:
     """Extract sources, transcribe optional audio, label evidence, and validate."""
     code, lesson_number = parse_lecture_id(lecture_id)
+    from .lesson_registry import assert_generation_allowed
+    assert_generation_allowed(workspace, code, lesson_number)
     configuration = workspace.configuration_store().load()
     course = course_for(configuration, code)
+    from .lesson_registry import source_number
+    material_number = source_number(workspace, code, lesson_number)
     run_dir = workspace.runs_dir / lecture_id
     source_pack_path = run_dir / "source_pack.json"
     previous = _prior_hashes(source_pack_path)
@@ -303,11 +307,11 @@ def _build_source_pack_locked(
 
     material_paths = list(dict.fromkeys(Path(path) for path in materials))
     if not material_paths and personal_notes is None:
-        material_paths, discovered_notes = discover_materials(course, lesson_number)
+        material_paths, discovered_notes = discover_materials(course, material_number)
         personal_notes = discovered_notes
     if personal_notes is None:
         pinned = course.get('files', {}).get('personal_notes')
-        lesson_note = course.get('lesson_sources', {}).get(str(lesson_number), {}).get('personal_notes')
+        lesson_note = course.get('lesson_sources', {}).get(str(material_number), {}).get('personal_notes')
         remembered = lesson_note or pinned
         if remembered:
             personal_notes = Path(remembered)

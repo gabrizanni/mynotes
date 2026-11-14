@@ -14,12 +14,13 @@ import Combine
     @Published var recordings: [CaptureRecording] = []
     @Published var transcripts: [CaptureTranscript] = []
     @Published private(set) var lessons: [WorkspaceLesson] = []
+    @Published var libraryLessons: [LibraryLesson] = []
     private var lessonsByID: [String: WorkspaceLesson] = [:]
     private var lessonProjectionDirty = true
     private(set) var lessonProjectionRevision = 0
     func lesson(withID id: String) -> WorkspaceLesson? { lessonsByID[id] }
     private func rebuildLessons(snapshot: CaptureSnapshot?) {
-        let next = WorkspaceLesson.build(snapshot: snapshot, audio: recordings, transcripts: transcripts)
+        let next = WorkspaceLesson.build(snapshot: snapshot, audio: recordings, transcripts: transcripts, registry: libraryLessons)
         lessonsByID = Dictionary(uniqueKeysWithValues: next.map { ($0.id, $0) })
         lessons = next
         lessonProjectionDirty = false
@@ -326,6 +327,8 @@ import Combine
             try JSONDecoder().decode(CaptureLibrary.self, from: Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue"))
         }.value
         if version == revision {
+            let nextLessons = value.lessons ?? []
+            if !Self.equal(libraryLessons, nextLessons) { libraryLessons = nextLessons; lessonProjectionDirty = true }
             let nextTranscripts = value.transcripts ?? []
             if !Self.equal(transcripts, nextTranscripts) { transcripts = nextTranscripts; lessonProjectionDirty = true }
             if recordingFolder != value.folder { recordingFolder = value.folder }
@@ -526,6 +529,9 @@ private final class CaptureErrorBytes: @unchecked Sendable { var data = Data() }
 private struct CaptureStatus: Decodable { var running: Bool?; var runtime: CaptureRuntime; var enabled: Bool; var paused: Bool }
 
 struct CaptureAudioInspection: Decodable, Identifiable {
+    var duplicate: Bool?
+    var nameCollision: Bool?
+    enum CodingKeys: String, CodingKey { case path, name, size, duration, duplicate; case nameCollision = "name_collision" }
     var path: String
     var name: String
     var duration: Double?

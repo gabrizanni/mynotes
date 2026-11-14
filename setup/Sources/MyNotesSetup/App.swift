@@ -336,11 +336,11 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
             timer?.invalidate(); busy = false
         }
     }
-    func openChat() {
+    func openChat(message: String? = nil) {
         do {
             try savePreferences()
             let path = runtime.appendingPathComponent("Open MyNotes.command")
-            let script = "#!/bin/zsh\nexport MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + "\n"
+            let script = "#!/bin/zsh\nexport MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
             try ChatTerminal.open(script: path, directory: runtime)
