@@ -83,6 +83,37 @@ def test_agy_agent_is_self_contained_without_fragile_skill_dependency(tmp_path) 
     assert (Path(installed["path"]) / "skills" / "mynotes" / "SKILL.md").is_file()
 
 
+def test_codex_chat_scopes_writes_and_receives_shared_instructions(tmp_path, monkeypatch):
+    workspace, configuration = _setup(tmp_path)
+    configuration["providers"]["configured"]["codex"] = {
+        "model": "gpt-6.1-terra", "effort": "medium",
+    }
+    monkeypatch.setattr("mynotes.chat.shutil.which", lambda _: "/bin/codex")
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        # Codex rejects --add-dir under inherited read-only permissions.
+        assert "--add-dir" not in command
+        assert command[command.index("--sandbox") + 1] == "workspace-write"
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr("mynotes.chat.subprocess.run", run)
+    assert launch_chat(workspace, configuration, "codex", "Check my preferences") == 0
+    command, options = calls[0]
+    assert command[command.index("-C") + 1] == str(workspace.root)
+    assert command[command.index("--model") + 1] == "gpt-6.1-terra"
+    assert 'model_reasoning_effort="medium"' in command
+    assert not any("dangerously" in flag for flag in command)
+    assert CORE in command[-1]
+    assert "load the relevant activity context first" in command[-1]
+    assert options["env"]["MYNOTES_CHAT_ACTIVE"] == "1"
+    assert options["env"]["MYNOTES_WORKSPACE"] == str(workspace.root)
+    integration = install_integration("agy", tmp_path / "comparison")
+    agent = (Path(integration["path"]) / "agents/mynotes.md").read_text()
+    assert CORE in agent
+
+
 def test_prepare_reuses_transcript_without_recording_discovery(tmp_path, monkeypatch) -> None:
     transcript = tmp_path / "OPS-L03.json"
     transcript.write_text('{"segments": []}', encoding="utf-8")

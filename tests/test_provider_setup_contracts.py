@@ -110,7 +110,7 @@ def test_chat_launches_defaults_in_private_workspace_with_managed_instructions(t
     if provider == "claude":
         assert "--model" not in command and "--effort" not in command
     else:
-        expected_model = "gpt-5.6-terra" if provider == "codex" else "gemini-3.8-flash-high"
+        expected_model = "gpt-6.1-terra" if provider == "codex" else "gemini-3.8-flash-high"
         assert command[command.index("--model") + 1] == expected_model
         if provider == "codex":
             assert 'model_reasoning_effort="high"' in command

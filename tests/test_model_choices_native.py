@@ -36,11 +36,11 @@ def test_python_catalog_passes_through_future_model_and_effort(tmp_path,monkeypa
     native_value=native('json',source,effort='novel_effort')
     assert native_value['ids']==[c['id'] for c in value['choices']]
     assert native_value['supported'][0]==['novel_effort'] and native_value['valid'][0]
-    assert native_value['presets']==['GPT Terra High']
+    assert native_value['presets']==['GPT-6.1 Terra High']
     assert native_value['selectable'][-1] is False
 
 
-@pytest.mark.parametrize('provider,presets',[('codex',['GPT Terra High']),('agy',['Gemini Flash 3.8 High','Gemini Flash 3.8 Medium']),('claude',[])])
+@pytest.mark.parametrize('provider,presets',[('codex',['GPT-6.1 Terra High']),('agy',['Gemini Flash 3.8 High','Gemini Flash 3.8 Medium']),('claude',[])])
 def test_bundled_choices_are_selectable_without_discovery(native,provider,presets):
     source=Path(__file__).parents[1]/'src/mynotes/resources/model-presets.json'
     value=native(provider,source,'saved-model','high')

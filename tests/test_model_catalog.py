@@ -27,7 +27,7 @@ def report(entries=None):
 
 def test_presets_are_shortcuts_not_phantom_models(tmp_path, monkeypatch):
     monkeypatch.setattr(discovery,'discover',lambda *_:report())
-    for provider, labels in [('codex',['GPT Terra High']),('agy',['Gemini Flash 3.8 High','Gemini Flash 3.8 Medium']),('claude',[])]:
+    for provider, labels in [('codex',['GPT-6.1 Terra High']),('agy',['Gemini Flash 3.8 High','Gemini Flash 3.8 Medium']),('claude',[])]:
         result=models.catalog(provider,refresh=True)
         assert [p['label'] for p in result['presets']]==labels
         assert all(c['provider']==provider for c in result['choices'])
@@ -86,6 +86,7 @@ def test_codex_cache_is_explicitly_previous_and_preserves_real_capabilities(tmp_
     cache=tmp_path/'cache';cache.mkdir()
     (cache/'models_cache.json').write_text(json.dumps({'models':[
         {'slug':'gpt-5.6-terra','display_name':'GPT Terra','visibility':'list','default_reasoning_level':'medium','supported_reasoning_levels':[{'effort':'medium'},{'effort':'high'}]},
+        {'slug':'gpt-6.1-terra','display_name':'GPT-6.1 Terra','visibility':'list','default_reasoning_level':'medium','supported_reasoning_levels':[{'effort':'medium'},{'effort':'high'}]},
         {'slug':'new','visibility':'list','default_reasoning_level':'future_effort','supported_reasoning_levels':[{'effort':'future_effort'}]},
         {'slug':'hidden','visibility':'hide'},None]}))
     result=models.catalog('codex',codex_home=cache,saved='old')
@@ -102,7 +103,7 @@ def test_explicit_corrupt_legacy_cache_preserves_saved_choice(tmp_path,cache):
     result=models.catalog('codex',codex_home=tmp_path,saved='old-model')
     assert result['status']=='no_catalog'
     assert all(c['selectable'] for c in result['choices'])
-    assert result['presets'][0]['label']=='GPT Terra High'
+    assert result['presets'][0]['label']=='GPT-6.1 Terra High'
 
 
 def test_failed_refresh_retains_last_good_snapshot_and_choice(monkeypatch):
@@ -152,7 +153,7 @@ def test_non_installed_claude_does_not_invent_models(monkeypatch):
 def test_defaults_and_explicit_preferences_remain_compatible():
     settings={'providers':{'configured':{'codex':{},'agy':{},'claude':{}}}}
     before=json.dumps(settings)
-    assert models.resolve_provider_options(settings,'codex')==('gpt-5.6-terra','high')
+    assert models.resolve_provider_options(settings,'codex')==('gpt-6.1-terra','high')
     assert models.resolve_provider_options(settings,'agy')==('gemini-3.8-flash-high','high')
     assert models.resolve_provider_options(settings,'claude')==('','')
     assert json.dumps(settings)==before

@@ -288,3 +288,15 @@ External chat again opens its executable command file explicitly in macOS
 Terminal. This removes dependence on Warp deep-link handling and the default
 file association. Launch errors are displayed in MyNotes. Provider authentication
 and subscription use continue through the existing CLI launcher.
+
+### 0.3.9 — Codex chat startup and GPT-6.1 Terra
+
+Codex chats explicitly use workspace-write permissions for the private MyNotes
+workspace and no longer repeat that working root as an additional writable
+directory. This fixes the CLI startup failure when inherited permissions are
+read-only. Unrestricted access is not enabled.
+
+The Terra preset now selects GPT-6.1 Terra. Saved model and effort choices remain
+unchanged. Codex continues to receive the same common coordination instructions
+as the Agy agent, with operational instructions and preferences loaded on demand.
+Authentication and model use stay with the installed subscription CLI.
