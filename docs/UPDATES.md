@@ -300,3 +300,10 @@ The Terra preset now selects GPT-6.1 Terra. Saved model and effort choices remai
 unchanged. Codex continues to receive the same common coordination instructions
 as the Agy agent, with operational instructions and preferences loaded on demand.
 Authentication and model use stay with the installed subscription CLI.
+
+### 0.3.10 — Collection trash and recovery
+
+The Collection sends files to the system Trash using the same operation as
+Finder. If the move fails, MyNotes refreshes the Collection after restoring
+the source's previous exclusion state. A failed attempt to trash a single
+lesson file clears its pending removal while the file is still present.
