@@ -561,13 +561,23 @@ extension CaptureModel {
                 throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Impossibile preparare lo spostamento nel Cestino."])
             }
             restore = result["was_excluded"] as? Bool != true
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-            restore = false
+            try await recycleLibraryFile(at: path)
             notice = "Audio spostato nel Cestino. Trascrizioni e altri audio sono conservati."
+        } catch {
+            var message = error.localizedDescription
+            if restore {
+                do {
+                    _ = try await Task.detached { try Self.invoke(executable, workspace, "restore-audio", ["--recording", audio.id], nil, group: "transcription-queue") }.value
+                } catch {
+                    message += " Impossibile ripristinare lo stato della sorgente. Usa «Ripristina audio» per riattivarla."
+                }
+            }
+            self.error = message
+        }
+        do {
             try await reconcile(version: version, includeLibrary: true)
         } catch {
-            if restore { _ = try? await Task.detached { try Self.invoke(executable, workspace, "restore-audio", ["--recording", audio.id], nil, group: "transcription-queue") }.value }
-            self.error = error.localizedDescription
+            refreshWarning = "Impossibile aggiornare la Raccolta. Premi Aggiorna per riprovare."
         }
     }
 }

@@ -307,6 +307,15 @@ def action(ws, payload):
     if identifier not in rows: raise ValueError('Lezione non trovata')
     row = rows[identifier]
     if action == 'inventory': return {'status': 'OK', 'files': row.get('pending_trash') or inventory(ws, row)}
+    if action == 'cancel-file-trash':
+        requested = payload.get('path')
+        if (not isinstance(requested, str) or row.get('pending_trash_mode') != 'file'
+                or row.get('pending_trash') != [requested] or not Path(requested).is_file()):
+            raise ValueError('Verifica lo stato del file prima di annullare lo spostamento nel Cestino')
+        row.pop('pending_trash')
+        row.pop('pending_trash_mode')
+        save(ws, value)
+        return {'status': 'OK', 'message': 'Spostamento annullato. Il file è ancora nella raccolta.'}
     _idle(ws, [row])
     if action == 'not-recorded':
         from .recording_library import records

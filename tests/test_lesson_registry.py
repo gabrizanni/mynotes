@@ -134,6 +134,23 @@ def test_delete_inventory_does_not_include_originals_or_shared_word(setup,tmp_pa
     lessons.action(ws,{'id':row['id'],'action':'restore'})
 
 
+def test_failed_single_file_trash_releases_lesson_without_hiding_it(setup, tmp_path):
+    ws, _, _ = setup
+    external = audio(tmp_path / 'outside')
+    sources.import_audio(ws, [str(external)], course=course(ws), lesson=1)
+    row = lessons.listing(ws)[0]
+    managed = Path(lessons.inventory(ws, row)[0])
+    before = managed.read_bytes()
+    lessons.action(ws, {'id': row['id'], 'action': 'delete-file', 'path': str(managed)})
+    with pytest.raises(ValueError, match='annullare'):
+        lessons.action(ws, {'id': row['id'], 'action': 'cancel-file-trash', 'path': str(external)})
+    lessons.action(ws, {'id': row['id'], 'action': 'cancel-file-trash', 'path': str(managed)})
+    current = lessons.load(ws)['lessons'][row['id']]
+    assert not current['hidden']
+    assert 'pending_trash' not in current and 'pending_trash_mode' not in current
+    assert managed.read_bytes() == before
+
+
 def test_renumbered_artifacts_block_generation_and_keep_receipts(setup):
     ws,folder,_=setup;value,_=make(ws,folder);row=next(iter(value['lessons'].values()))
     run=ws.runs_dir/f"{row['course']}-L01";run.mkdir(parents=True);receipt=run/'receipt.json';receipt.write_text('{}')

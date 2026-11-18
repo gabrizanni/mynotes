@@ -1,4 +1,16 @@
+import AppKit
 import Foundation
+
+@MainActor
+func recycleLibraryFile(at path: String) async throws {
+    let source = URL(fileURLWithPath: path)
+    // Use macOS's Finder-style recycle operation, including for File Provider
+    // folders such as OneDrive. Require confirmation for this specific file.
+    let moved = try await NSWorkspace.shared.recycle([source])
+    guard moved[source] != nil else {
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
+    }
+}
 
 extension CaptureModel {
     func libraryRequest(_ payload: [String: Any]) async throws -> [String: Any] {
@@ -35,7 +47,7 @@ extension CaptureModel {
         do {
             let result = try await libraryRequest(["id": lesson.id, "action": "delete", "files": files])
             for path in result["files"] as? [String] ?? [] {
-                try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+                try await recycleLibraryFile(at: path)
                 completed.append(path)
                 _ = try await libraryRequest(["id": lesson.id, "action": "trash-completed", "completed": completed])
             }
@@ -47,12 +59,25 @@ extension CaptureModel {
     func trashLessonFile(_ lessonID: String, path: String) async {
         guard !queueBusy, !busy, !isPreview else { return }
         queueBusy = true; error = nil
+        var prepared = false
         do {
             _ = try await libraryRequest(["id": lessonID, "action": "delete-file", "path": path])
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+            prepared = true
+            try await recycleLibraryFile(at: path)
+            prepared = false
             _ = try await libraryRequest(["id": lessonID, "action": "trash-completed", "completed": [path]])
             notice = "File spostato nel Cestino; gli altri contenuti sono conservati."
-        } catch { self.error = "Operazione incompleta: \(error.localizedDescription). Verifica lo stato della lezione in Gestisci corsi." }
+        } catch {
+            var message = "Operazione incompleta: \(error.localizedDescription)"
+            if prepared {
+                do {
+                    _ = try await libraryRequest(["id": lessonID, "action": "cancel-file-trash", "path": path])
+                } catch {
+                    message += " Verifica lo stato della lezione in Gestisci corsi."
+                }
+            }
+            self.error = message
+        }
         queueBusy = false
         await refresh(includeLibrary: true)
     }
