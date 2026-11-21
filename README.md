@@ -17,6 +17,8 @@ English | [Italiano](README.it.md)
 2. Drag **MyNotes** into **Applications**.
 3. Open **MyNotes**, follow setup, and click **Open chat**.
 
+If Warp is installed, chat opens in a new Warp tab. Otherwise, the default terminal is used.
+
 The setup prepares Python, local transcription and the Word tools for you. You do not need Python, Homebrew or Xcode beforehand. Choose Codex, Agy or Claude Code; if it is missing, MyNotes opens its official installation guide and lets you retry. Provider access and any subscription are managed by that provider.
 
 Claude Code requires an eligible plan or API access with credits. Claude Free does not include the CLI, even with Haiku. [Claude plans](https://claude.com/pricing).
@@ -72,3 +74,7 @@ Build tools are required only on the packaging machine. The release builder comp
 The usual pipeline is `prepare → generate → update`; `build` and `publish` remain available separately for preview-first work. It retains source provenance, uses JSON contracts for candidates, writes editable Word equations, and guards publication against concurrent changes and duplicate lectures. [Models and coordinated generation](docs/GENERATION.md) · [Script reference](scripts/README.md) · [Validation evidence and pending acceptance](docs/VALIDATION.md) · [Updates and rollback](docs/UPDATES.md).
 
 [MIT license](LICENSE) · [Third-party notices](THIRD_PARTY_NOTICES.md) · [Gabriele Zanni](https://github.com/gabrizanni)
+
+## Development workflow
+
+[Contributing](CONTRIBUTING.md) · [Git and GitHub](docs/GIT_WORKFLOW.md)

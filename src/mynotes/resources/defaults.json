@@ -43,6 +43,7 @@
     "recap": true,
     "profile": {
       "writing_style": "clear_study",
+      "slide_scope": "lecture",
       "list_density": "balanced",
       "image_policy": "essential",
       "image_limit": null,

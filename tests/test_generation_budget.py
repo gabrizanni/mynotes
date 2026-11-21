@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import math
 import subprocess
 
 import pytest
@@ -17,18 +18,18 @@ def record(directory, name, phase_name, start, active, **changes):
     return path
 
 
-def test_writing_and_correction_have_independent_twenty_minutes(tmp_path, monkeypatch):
+def test_writing_and_correction_keep_accounting_without_elapsed_cutoff(tmp_path, monkeypatch):
     clock = [10.]
     monkeypatch.setattr(b.time, 'monotonic', lambda:clock[0])
     budget = b.PhaseBudget(tmp_path/'budget.json', ['RAI-L01'])
     with budget.track('writing') as allowance:
-        assert allowance == 1200
+        assert math.isinf(allowance)
         clock[0] += 480
     with budget.track('coverage_repair') as allowance:
-        assert allowance == 1200
+        assert math.isinf(allowance)
         clock[0] += 700
-    assert budget.remaining('writing') == 720
-    assert budget.remaining('coverage_repair') == 500
+    assert math.isinf(budget.remaining('writing'))
+    assert math.isinf(budget.remaining('coverage_repair'))
     assert budget.remaining('local_checks') == 120
     resumed = b.PhaseBudget(budget.path, ['RAI-L01'])
     assert resumed.snapshot()['phases'] == {'writing':480, 'coverage_repair':700}
@@ -42,11 +43,11 @@ def test_failed_invoke_is_charged_and_reorganization_cannot_reset(tmp_path, monk
             clock[0] += 1205
             raise RuntimeError('provider timeout')
     current = b.PhaseBudget(tmp_path/'new.json', ['RAI-L01','RAI-L02'], previous_paths=[old.path])
-    assert current.remaining('coverage_repair') == 0
-    assert current.remaining('writing') == 1200
-    with pytest.raises(b.GenerationBudgetError, match='exhausted'):
-        with current.track('coverage_repair'):
-            pytest.fail('A new correction must not start')
+    assert current.used['coverage_repair'] == 1205
+    assert math.isinf(current.remaining('coverage_repair'))
+    assert math.isinf(current.remaining('writing'))
+    with current.track('coverage_repair'):
+        pass  # The caller still enforces one managed correction; time is not a cap.
 
 
 def test_local_validation_cannot_report_success_after_its_own_deadline(tmp_path, monkeypatch):
@@ -55,7 +56,7 @@ def test_local_validation_cannot_report_success_after_its_own_deadline(tmp_path,
     with pytest.raises(b.GenerationBudgetError, match='Local generation checks exceeded'):
         with budget.track('local_checks'):
             clock[0] += 121
-    assert budget.remaining('writing') == 1200
+    assert math.isinf(budget.remaining('writing'))
     assert json.loads(budget.path.read_text())['phases']['local_checks'] == 121
 
 
@@ -74,8 +75,8 @@ def test_old_shared_allowance_reconstructed_from_immutable_attempts(tmp_path):
     second = record(checkpoint/'coverage-repair', 'repair', 'coverage_repair', '164603784752', 620.885)
     before = {p:p.read_bytes() for p in (first, second)}
     budget = b.PhaseBudget(tmp_path/'budget.json', ['RAI-L01'], receipt_directories=[checkpoint], legacy_used_seconds=1080.596)
-    assert budget.remaining('writing') == pytest.approx(740.625)
-    assert budget.remaining('coverage_repair') == pytest.approx(579.115)
+    assert budget.used['writing'] == pytest.approx(459.375)
+    assert budget.used['coverage_repair'] == pytest.approx(620.885)
     assert {p:p.read_bytes() for p in before} == before
     assert not budget.path.exists()  # diagnosis has no writes
 
@@ -117,7 +118,7 @@ def test_agy_supervisor_uses_phase_residual_and_cli_does_not_cut_it_short(tmp_pa
         providers.AgyAdapter().generate(request)
     command, kwargs = calls[0]
     assert kwargs['timeout'] == remaining
-    assert command[command.index('--print-timeout')+1] == '21m'
+    assert command[command.index('--print-timeout')+1] == '0'
     assert '--model' in command and 'high' in command
 
 
@@ -133,7 +134,7 @@ def test_zero_remaining_allowance_does_not_start_a_paid_worker(tmp_path, monkeyp
 
 def test_parts_keep_progress_watchdogs_but_have_full_phase_allowance():
     from mynotes import agy_parts
-    assert agy_parts.TOTAL_SECONDS == 1200
+    assert math.isinf(agy_parts.TOTAL_SECONDS)
     assert agy_parts.FIRST_TURN_SECONDS == agy_parts.NEXT_TURN_SECONDS == 300
 
 
@@ -148,10 +149,10 @@ def test_other_adapters_share_phase_limit_and_report_actual_residual(tmp_path, m
         calls.append(kwargs['timeout'])
         raise subprocess.TimeoutExpired(command,kwargs['timeout'])
     monkeypatch.setattr(providers.subprocess,'run',timeout)
-    expected = 1200 if remaining is None else remaining
+    expected = math.inf if remaining is None else remaining
     with pytest.raises(providers.ProviderTimeoutError,match=f'{provider} writing phase exceeded its remaining {expected:.1f}-second'):
         adapter_class().generate(request)
-    assert calls == [expected]
+    assert calls == [remaining]
 
 
 def test_estimated_historical_start_does_not_certify_phase_reconstruction(tmp_path):
@@ -178,7 +179,7 @@ def test_direct_candidate_keeps_phase_residual_after_failed_invoke(tmp_path, mon
     with pytest.raises(WorkflowError,match='simulated process failure'):
         generate_candidate(workspace,'OPS7-L01',provider_adapter=adapter)
     assert generate_candidate(workspace,'OPS7-L01',provider_adapter=adapter)['status'] == 'CANDIDATE_READY'
-    assert adapter.remaining == [1200, 300]
+    assert all(math.isinf(value) for value in adapter.remaining)
     ledger, = list((workspace.runs_dir/'OPS7-L01/generation-checkpoints').glob('*/phase-budget.json'))
     assert json.loads(ledger.read_text())['phases']['writing'] == 900
 

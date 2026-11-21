@@ -77,6 +77,12 @@ def scan(ws, *, persist=False):
             elif old.get('course_code') and old['course_code'] != code:
                 item.update(lecture_id=None, association_state='resolved')
             found[identifier] = item
+    from .lesson_registry import load as lesson_registry, lecture_key
+    owners = {key: row for row in lesson_registry(ws)['lessons'].values() for key in row['transcript_ids']}
+    for item in found.values():
+        owner = owners.get(item['id'])
+        if owner:
+            item.update(course_code=owner['course'], lecture_id=lecture_key(owner))
     if persist:
         atomic_json_write(directory(ws) / 'transcripts.json', found)
         for item in found.values():
@@ -86,6 +92,8 @@ def scan(ws, *, persist=False):
 
 def _references(ws, item):
     """Keep native/agent links current after Finder moves or renames."""
+    from .source_routes import remember_transcript_folder
+    remember_transcript_folder(ws, item)
     from .transcription_queue import database, root
     identifier = item.get('recording_id')
     if not identifier or not (root(ws) / 'queue.sqlite3').exists():

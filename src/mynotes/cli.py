@@ -172,22 +172,11 @@ def _apply_instruction(configuration: dict[str, Any], instruction: str, course_c
     lower = normalized.casefold()
     if "questa lezione" in lower or "this lesson" in lower:
         return configuration, "Saved nowhere: this is a lesson-scoped instruction for a future run."
+    from .memory import append_legacy
     requested_code = course_code.upper() if course_code else None
-    if requested_code is None:
-        matches = [course["code"] for course in configuration["courses"] if course["code"].casefold() in lower]
-        requested_code = matches[0] if len(matches) == 1 else None
-    if ("da ora in poi" in lower or "from now on" in lower) and requested_code:
-        for course in configuration["courses"]:
-            if course["code"] == requested_code:
-                instructions = course["preferences"]["persistent_instructions"]
-                if normalized not in instructions:
-                    instructions.append(normalized)
-                return configuration, f"Stored persistent preference for course {requested_code}."
-        raise ConfigurationError(f"Course not found: {requested_code}")
-    preferences = configuration["style"]["freeform_preferences"]
-    separator = "\n" if preferences else ""
-    configuration["style"]["freeform_preferences"] = preferences + separator + normalized
-    return configuration, "Stored a personal style preference; no folders, provider, or quota policy changed."
+    append_legacy(configuration, normalized, requested_code)
+    return configuration, (f"Stored persistent preference for course {requested_code}." if requested_code else
+                           "Stored a personal style preference; no folders, provider, or quota policy changed.")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -197,6 +186,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"mynotes {__version__}")
     subparsers = parser.add_subparsers(dest="command")
+    inventory = subparsers.add_parser("inventory", help="inspect one supplied course folder without setup or content extraction")
+    inventory.add_argument("path", help="course folder to inspect")
+    from .context import ACTIVITIES
+    context = subparsers.add_parser("context", help="read task instructions and fresh effective memory; no provider calls")
+    context.add_argument("--activity", choices=ACTIVITIES, required=True)
+    context.add_argument("--workspace")
+    context.add_argument("--course")
+    context.add_argument("--json", action="store_true")
+    context.add_argument("--include-core", action="store_true", help="bootstrap a direct provider session without the MyNotes launcher")
+    memory = subparsers.add_parser("memory", help="read or atomically edit persistent user preferences")
+    actions = memory.add_subparsers(dest="memory_command", required=True)
+    for action in ("show", "update", "reset"):
+        command = actions.add_parser(action)
+        command.add_argument("--workspace")
+        command.add_argument("--scope", choices=("global", "course"), required=True)
+        command.add_argument("--area", choices=("notes", "dialogue"), required=True)
+        command.add_argument("--course")
+        command.add_argument("--json", action="store_true")
+        if action != "show":
+            command.add_argument("--expected-revision", required=True)
+        if action == "update":
+            command.add_argument("--set", dest="set_rules", nargs=2, action="append", default=[], metavar=("KEY", "TEXT"))
+            command.add_argument("--remove", action="append", default=[], metavar="KEY")
+            command.add_argument("--style-json", help="JSON object with explicit structured note preferences")
+            command.add_argument("--inherit", action="append", default=[], metavar="FIELD")
     from .capture import add_parser
     add_parser(subparsers)
     init = subparsers.add_parser("init", help="initialize an empty private workspace")
@@ -378,6 +392,35 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--resume", metavar="BATCH_ID", help="resume a saved batch without repeating its lesson selection")
     batch.add_argument("--build-word", action="store_true", help="build each validated lesson as a Word candidate before advancing")
     batch.add_argument("--stop-after", type=int, help="pause for review after this lesson without changing the selected batch")
+    visual_review = subparsers.add_parser("visual-review", help="restore explicitly reviewed source figures on a stopped notes job without changing prose or model allowances")
+    visual_review.add_argument("batch_id")
+    visual_review.add_argument("--workspace")
+    visual_review.add_argument("--file", required=True, help="source-bound JSON with the saved prefix, image hashes and explicit figure choices")
+    notes = subparsers.add_parser("notes", help="complete one explicit notes request through verified Word delivery and course update")
+    notes.add_argument("course")
+    notes.add_argument("--workspace")
+    notes.add_argument("--lessons", help="ordered lesson numbers/ranges")
+    notes_mode = notes.add_mutually_exclusive_group()
+    notes_mode.add_argument("--regenerate", action="store_true", help="explicit new generation revision; retains old jobs and sources")
+    notes_mode.add_argument("--resume", metavar="BATCH_ID", help="reuse saved responses and finish the original selected range")
+    notes.add_argument("--provider", choices=("codex", "agy", "claude"))
+    notes.add_argument("--quality", help="saved quality or standard")
+    notes.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
+    notes.add_argument("--image-limit", type=int)
+    notes.add_argument("--selection", help="optional reviewed source-bound slide decisions")
+    notes.add_argument("--budgets", help="optional verified selected-model limits")
+    notes.add_argument("--speaker-focus", choices=("lecture", "professor"))
+    notes.add_argument("--context-lessons")
+    notes.add_argument("--contiguous-transcripts", action="store_true", help="stop before a missing or explicitly partial transcript; never skip a lesson")
+    notes.add_argument("--review-defects", help="JSON with base_notes_sha256 and source-bound block defects actually observed during review; uses the single retained correction allowance")
+    notes.add_argument("--review-references", help="Explicit JSON rectification of evidence IDs on a stopped --resume job; preserves text and original responses, invokes no model")
+    notes.add_argument("--plan-only", action="store_true", help="read existing sources without generation, writes or publication")
+    notes.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
+    baseline = subparsers.add_parser('import-generated-baseline', help='import the last journal-certified generated Word for safe historical-section updates')
+    baseline.add_argument('course')
+    baseline.add_argument('--workspace')
+    baseline.add_argument('--journal', required=True, help='consistent original publication journal snapshot')
+    baseline.add_argument('--document', required=True, help='generated DOCX certified by that publication journal')
     batch_status = subparsers.add_parser("batch-status", help="read saved batch progress without generation or state changes")
     batch_status.add_argument("batch_id")
     batch_status.add_argument("--workspace")
@@ -455,18 +498,21 @@ def _configure(arguments: argparse.Namespace) -> int:
     store = workspace.configuration_store()
     configuration = store.load()
     if arguments.instruction:
-        updated, message = _apply_instruction(configuration, arguments.instruction, arguments.course)
-        if not message.startswith("Saved nowhere"):
-            store.save(updated)
-        print(message)
+        messages = []
+        def edit(current):
+            updated, message = _apply_instruction(current, arguments.instruction, arguments.course)
+            messages.append(message)
+            return updated
+        store.update(edit)
+        print(messages[0])
         return 0
     group = arguments.group or configuration["onboarding"]["next_group"]
     if group is None:
         print("Onboarding is complete. Use mynotes config show or mynotes course edit.")
         return 0
     answers = _load_json(arguments.answers) if arguments.answers else _interactive_group(group, configuration)
-    updated = merge_group_answers(configuration, group, answers)
-    saved = store.save(updated)
+    saved = store.update(lambda current: merge_group_answers(current, group, answers),
+                         expected_configuration=configuration)
     if group == "providers" and saved["providers"]["default"]:
         availability = provider_availability(saved["providers"]["default"])
         print(f"Provider {availability['provider']}: {availability['detail']}")
@@ -518,15 +564,17 @@ def _course(arguments: argparse.Namespace) -> int:
     store = workspace.configuration_store()
     configuration = store.load()
     course = _load_json(arguments.file) if arguments.file else _interactive_course_entry(configuration)
-    if arguments.course_command == "add":
-        configuration["courses"].append(course)
-    else:
-        code = arguments.code.upper()
-        positions = [index for index, item in enumerate(configuration["courses"]) if item["code"] == code]
-        if not positions:
-            raise ConfigurationError(f"Course not found: {code}")
-        configuration["courses"][positions[0]] = merge_course(configuration["courses"][positions[0]], course)
-    saved = store.save(configuration)
+    def edit(current):
+        if arguments.course_command == "add":
+            current["courses"].append(course)
+        else:
+            code = arguments.code.upper()
+            positions = [i for i, item in enumerate(current["courses"]) if item["code"] == code]
+            if not positions:
+                raise ConfigurationError(f"Course not found: {code}")
+            current["courses"][positions[0]] = merge_course(current["courses"][positions[0]], course)
+        return current
+    saved = store.update(edit, expected_configuration=configuration)
     if arguments.create_missing_dirs:
         _write_directories(saved)
     print(f"Course configuration saved: {arguments.course_command}.")
@@ -558,13 +606,15 @@ def _interactive_course_entry(configuration: dict[str, Any]) -> dict[str, Any]:
 
 
 def _style(arguments: argparse.Namespace) -> int:
+    from .memory import edit, snapshot
     workspace = _workspace(arguments)
     store = workspace.configuration_store()
     configuration = store.load()
     code = arguments.course.upper() if arguments.course else None
     resolved = effective_style(configuration, code)
     if arguments.style_command == "show":
-        print(json.dumps({"scope": code or "global", "effective": resolved}, ensure_ascii=False, indent=2, sort_keys=True))
+        print(json.dumps({"scope": code or "global", "effective": resolved,
+                          "memory": snapshot(configuration, scope="course" if code else "global", area="notes", course=code)}, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     if arguments.style_command == "preview":
         from .publication import preview_style_document
@@ -582,24 +632,17 @@ def _style(arguments: argparse.Namespace) -> int:
         patch = normalize_style_profile(_load_json(arguments.file), partial=True)
     else:
         patch = _prompt_style_profile(resolved, changed_only=code is not None)
-    if code is None:
-        configuration["style"]["profile"] = (
-            normalize_style_profile({}) if arguments.reset else
-            normalize_style_profile({**configuration["style"].get("profile", {}), **patch})
-        )
-    else:
-        course = next(item for item in configuration["courses"] if item["code"] == code)
-        if arguments.reset:
-            for key in ("writing_style", "list_density", "image_policy", "question_count", "recap", "recap_language"):
-                course["style"].pop(key, None)
-        else:
-            global_profile = effective_style(configuration)
-            for key, value in patch.items():
-                if value == global_profile[key]:
-                    course["style"].pop(key, None)
-                else:
-                    course["style"][key] = value
-    saved = store.save(configuration)
+    scope = "course" if code else "global"
+    revision = snapshot(configuration, scope=scope, area="notes", course=code)["revision"]
+    inherited = []
+    if code:
+        global_profile = effective_style(configuration)
+        inherited = list(normalize_style_profile({})) if arguments.reset else [key for key, value in patch.items() if value == global_profile[key]]
+        patch = {key: value for key, value in patch.items() if key not in inherited}
+    elif arguments.reset:
+        patch = normalize_style_profile({})
+    saved = store.update(lambda current: edit(current, scope=scope, area="notes", course=code,
+                        expected_revision=revision, style=patch, inherit=inherited))
     print(json.dumps({"scope": code or "global", "effective": effective_style(saved, code)}, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
@@ -861,6 +904,99 @@ def _generate_batch(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _notes_preparation(workspace, lectures, *, contiguous=False):
+    """Prepare from existing text only. A notes request never implicitly starts ASR."""
+    from .utils import file_sha256
+    from .recording_library import options
+    from .ingestion import parse_recording_name
+    configuration = workspace.configuration_store().load()
+    transcripts = None
+    pending = []
+    for lecture in lectures:
+        path = workspace.runs_dir / lecture / 'source_pack.json'
+        prior = _load_json(str(path)) if path.is_file() else None
+        changed = not prior or any(not Path(s['path']).is_file() or file_sha256(Path(s['path'])) != s['sha256']
+                                   for s in prior.get('sources', []))
+        if prior and not changed:
+            continue
+        sources = prior.get('sources', []) if prior else []
+        transcript = next((Path(s['path']) for s in sources if s.get('role') == 'imported_transcript' and Path(s['path']).is_file()), None)
+        if transcript is None:
+            if transcripts is None:
+                from .transcript_library import scan
+                transcripts = scan(workspace, persist=False) if options(workspace).get('folder') else []
+            code, number = lecture.rsplit('-L', 1)
+            matches = [row for row in transcripts if row.get('lecture_id') == lecture or (
+                not row.get('lecture_id') and parse_recording_name(Path(row['path']), configuration) == (code, int(number))
+                and row.get('course_code') in {None, code})]
+            if len(matches) > 1:
+                pending.append({'lecture_id': lecture, 'reason': 'AMBIGUOUS_TRANSCRIPT', 'paths': [row['path'] for row in matches]})
+                if contiguous: break
+                continue
+            if matches: transcript = Path(matches[0]['path'])
+        bound_audio = None
+        cached = workspace.runs_dir / lecture / 'asr/transcript.json'
+        if transcript is None or transcript.resolve() == cached.resolve():
+            # A cached normalized transcript can be reused, without running an
+            # engine, only while its original audio identity is still proven.
+            # Prefer explicitly selected/user TXT sources above.
+            if cached.is_file():
+                payload = _load_json(str(cached))
+                recordings = [Path(s['path']) for s in sources if s.get('role') == 'recording']
+                candidate = recordings[0] if len(recordings) == 1 else Path(payload.get('audio_path') or '')
+                if (len(recordings) <= 1 and payload.get('status') == 'COMPLETED'
+                        and payload.get('lecture_id') == lecture and candidate.is_file()
+                        and payload.get('audio_sha256') == file_sha256(candidate)):
+                    transcript, bound_audio = cached, candidate
+                else:
+                    pending.append({'lecture_id': lecture, 'reason': 'UNBOUND_CACHED_TRANSCRIPT',
+                                    'provider_invoked': False, 'asr_started': False})
+                    if contiguous: break
+                    continue
+        if transcript is None:
+            pending.append({'lecture_id': lecture, 'reason': 'MISSING_TRANSCRIPT', 'provider_invoked': False, 'asr_started': False})
+            if contiguous: break
+            continue
+        by_role = {}
+        for source in sources:
+            by_role.setdefault(source.get('role', 'lecture_material'), []).append(Path(source['path']))
+        build_source_pack(workspace, lecture, audio=bound_audio, transcript_path=transcript,
+            materials=(by_role.get('lecture_material', []) + by_role.get('syllabus', [])) if prior else (),
+            personal_notes=next(iter(by_role.get('personal_notes', [])), None),
+            web_snapshots=by_role.get('web_snapshot', []))
+    return pending
+
+
+def _notes(arguments: argparse.Namespace) -> int:
+    import sys
+    from .notes_run import run_notes
+    from .batch import load_batch_manifest
+    workspace = Workspace.from_value(arguments.workspace)
+    saved = load_batch_manifest(workspace, arguments.resume) if arguments.resume else {}
+    numbers = _lesson_numbers(arguments.lessons) if arguments.lessons else [int(l.rsplit('-L', 1)[1]) for l in saved.get('lectures', [])]
+    if not numbers:
+        raise WorkflowError('Supply --lessons or --resume BATCH_ID')
+    lectures = [f'{arguments.course.upper()}-L{n:02d}' for n in numbers]
+    if not arguments.plan_only:
+        pending = _notes_preparation(workspace, lectures, contiguous=arguments.contiguous_transcripts)
+        if pending and not arguments.contiguous_transcripts:
+            print(json.dumps({'status': 'NEEDS_TRANSCRIPT', 'lessons_needing_preparation': pending,
+                              'provider_invoked': False, 'asr_started': False}, ensure_ascii=False, indent=2))
+            return 2
+    def progress(stage, detail):
+        print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
+    result = run_notes(workspace, arguments.course, numbers, resume=arguments.resume,
+                       review_defects=_load_json(arguments.review_defects) if arguments.review_defects else None, regenerate=arguments.regenerate,
+                       reference_review=_load_json(arguments.review_references) if arguments.review_references else None,
+        provider=arguments.provider, quality=arguments.quality, instructions=arguments.instructions,
+        image_limit=arguments.image_limit, selection=_load_json(arguments.selection) if arguments.selection else None,
+        budgets=_load_json(arguments.budgets) if arguments.budgets else None, speaker_focus=arguments.speaker_focus,
+        context_lessons=[f'{arguments.course.upper()}-L{n:02d}' for n in _lesson_numbers(arguments.context_lessons)] if arguments.context_lessons else None,
+        plan_only=arguments.plan_only, contiguous_transcripts=arguments.contiguous_transcripts, progress=progress)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if arguments.plan_only or result['status'] in {'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'AWAITING_APPROVAL'} else 2
+
+
 def _natural_request(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     from .onboarding import prepare_conversation
@@ -896,6 +1032,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     try:
+        if arguments.command == "inventory":
+            from .course_links import inspect_course_folder
+            result = inspect_course_folder(Path(arguments.path))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if arguments.command == "context":
+            from .context import render_context, task_context
+            workspace = Workspace.from_value(arguments.workspace)
+            settings = workspace.configuration_store().load()
+            result = task_context(settings, arguments.activity, arguments.course, include_core=arguments.include_core, workspace=workspace)
+            print(json.dumps(result, ensure_ascii=False, indent=2) if arguments.json else render_context(result))
+            return 0
+        if arguments.command == "memory":
+            from .memory import render_markdown, snapshot, update_memory
+            workspace = Workspace.from_value(arguments.workspace)
+            options = dict(scope=arguments.scope, area=arguments.area, course=arguments.course)
+            if arguments.memory_command == "show":
+                result = snapshot(workspace.configuration_store().load(), **options)
+            else:
+                if arguments.memory_command == "update":
+                    rules = {}
+                    for key, value in arguments.set_rules:
+                        if key in rules and rules[key] != value:
+                            raise ConfigurationError(f"Conflicting values for instruction: {key}")
+                        rules[key] = value
+                    style = normalize_style_profile(json.loads(arguments.style_json), partial=True) if arguments.style_json is not None else None
+                    options.update(set_rules=rules, remove=arguments.remove, inherit=arguments.inherit, style=style)
+                else:
+                    options["reset"] = True
+                result = update_memory(workspace, expected_revision=arguments.expected_revision, **options)
+            print(json.dumps(result, ensure_ascii=False, indent=2) if arguments.json else render_markdown(result))
+            return 0
         if arguments.command == "capture":
             from .capture import run_cli
             return run_cli(arguments)
@@ -968,6 +1136,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate(arguments)
         if arguments.command == "generate-batch":
             return _generate_batch(arguments)
+        if arguments.command == "notes":
+            return _notes(arguments)
+        if arguments.command == "visual-review":
+            from .visual_review import record_review
+            result=record_review(Workspace.from_value(arguments.workspace),arguments.batch_id,_load_json(arguments.file))
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0
+        if arguments.command == 'import-generated-baseline':
+            from .generated_baseline import import_generated_baseline
+            result=import_generated_baseline(Workspace.from_value(arguments.workspace),arguments.course,
+                journal=arguments.journal,document=arguments.document)
+            print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0
         if arguments.command == "recover-batch":
             from .local_recovery import recover_batch
             result=recover_batch(Workspace.from_value(arguments.workspace),arguments.batch_id,apply=arguments.apply)

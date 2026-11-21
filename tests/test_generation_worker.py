@@ -58,8 +58,8 @@ def test_writer_has_no_shell_and_has_bounded_runtime(tmp_path, monkeypatch):
     def run(command, **kw):
         assert command[command.index("--agent")+1] == "mynotes-note-writer"
         assert "--disable-slash-commands" in command
-        assert command[command.index("--print-timeout")+1] == "21m"
-        assert kw["timeout"] == 1200 and kw["env"]["MYNOTES_GENERATION_WORKER"] == "1"
+        assert command[command.index("--print-timeout")+1] == "0"
+        assert kw["timeout"] == float("inf") and kw["env"]["MYNOTES_GENERATION_WORKER"] == "1"
         agent = (tmp_path / ".agents/agents/mynotes-note-writer.md").read_text()
         assert "  - view_file" in agent and "  - run_command" not in agent
         assert "  - finish" in agent
@@ -71,6 +71,8 @@ def test_writer_has_no_shell_and_has_bounded_runtime(tmp_path, monkeypatch):
 
 def test_rejected_batch_retains_transport_without_a_second_paid_call(tmp_path):
     ws, _, selection = workspace_and_deck(tmp_path)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     def invalid(response, request):
         response["lessons"][0]["notes"]["blocks"][1]["coverage_role"] = "reference"
     adapter = Adapter(invalid)

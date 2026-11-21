@@ -99,6 +99,9 @@ final class CaptureEngine: NSObject {
     }
 
     func start() {
+        for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange, .NSCalendarDayChanged] {
+            NotificationCenter.default.addObserver(self, selector: #selector(clockChanged), name: name, object: nil)
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(willSleep), name: NSWorkspace.willSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(didWake), name: NSWorkspace.didWakeNotification, object: nil)
         for url in [configurationURL.deletingLastPathComponent(), directory.appendingPathComponent("requests")] {
@@ -546,6 +549,13 @@ final class CaptureEngine: NSObject {
         formatter.dateFormat = "dd MMM HH:mm z"
         return formatter.string(from: date)
     }
+    @objc nonisolated private func clockChanged() {
+        Task { @MainActor [weak self] in
+            guard let self, !self.sleeping else { return }
+            self.nextSyncCheck = .distantPast
+            self.evaluate(now: Date())
+        }
+    }
     @objc private func willSleep() { interrupt() }
     @objc private func didWake() {
         sleeping = false
@@ -560,6 +570,8 @@ final class CaptureEngine: NSObject {
         persistRuntime()
     }
     func shutdown() {
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         interrupt()
         syncProcess?.terminate(); configurationProcess?.terminate()
         for watcher in watchers { watcher.cancel() }

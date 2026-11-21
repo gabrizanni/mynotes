@@ -36,8 +36,8 @@ def test_portions_assemble_without_rewriting_or_duplicate_metadata(tmp_path):
     assert one['result']['blocks']==portion()['result']['blocks']
 
 
-@pytest.mark.parametrize('policy,incremental', [(None, False), ('0', False), ('1', True), ('auto', True)])
-def test_adapter_defaults_to_single_call_and_retains_explicit_parts(tmp_path, monkeypatch, policy, incremental):
+@pytest.mark.parametrize('policy,incremental', [(None, True), ('0', False), ('1', True), ('auto', True)])
+def test_adapter_defaults_to_durable_portions_for_large_inputs(tmp_path, monkeypatch, policy, incremental):
     from mynotes import providers
     req = request(tmp_path)
     if policy is None:
@@ -55,6 +55,14 @@ def test_adapter_defaults_to_single_call_and_retains_explicit_parts(tmp_path, mo
     else:
         with pytest.raises(RuntimeError, match='single-turn'): providers.AgyAdapter().generate(req)
     assert os.environ.get('MYNOTES_AGY_PARTS') == policy
+
+
+def test_small_inputs_and_review_keep_single_turn_without_changing_environment(tmp_path, monkeypatch):
+    from mynotes.providers import _agy_uses_parts
+    monkeypatch.delenv('MYNOTES_AGY_PARTS', raising=False)
+    assert not _agy_uses_parts(request(tmp_path))
+    assert not _agy_uses_parts(replace(request(tmp_path), phase='coverage_repair'))
+    assert 'MYNOTES_AGY_PARTS' not in os.environ
 
 
 @pytest.mark.parametrize('change',[
@@ -126,6 +134,55 @@ def test_checkpoint_reuse_makes_no_second_provider_call(tmp_path,monkeypatch):
     record=json.loads(Path(first.attempt_path).read_text())
     assert record['envelope']['transport']=='agy_parts_v1'
     assert len(json.loads(Path(record['envelope']['receipt']).read_text())['parts'])==2
+
+
+def test_reordered_configuration_keys_keep_the_same_partial_conversation(tmp_path, monkeypatch):
+    req=replace(request(tmp_path),style={'writing_style':'clear_study','recap':True})
+    commands=[];monkeypatch.setattr(a,'provider_executable',lambda _:sys.executable)
+    def interrupted(command,prompt,accept,**kwargs):
+        _fake_session([portion()],commands)(command,prompt,accept,**kwargs)
+        raise ProviderError('Synthetic interruption after an accepted portion')
+    monkeypatch.setattr(a,'run_session',interrupted)
+    with pytest.raises(ProviderError):a.generate_parts(req)
+    monkeypatch.setattr(a,'run_session',_fake_session([portion(1,True)],commands))
+    reordered=replace(req,style={'recap':True,'writing_style':'clear_study'})
+    result=a.generate_parts(reordered)
+    assert len(commands)==2 and 'Resume part_index 1' in commands[-1][1]
+    assert len(list((tmp_path/'writing-parts').glob('*/state.json')))==1
+    assert len(result.notes['blocks'])==2
+
+
+def test_retained_success_prefix_recovers_reference_refinement_without_rewriting(tmp_path, monkeypatch):
+    from mynotes.batch import batch_notes_schema
+    req=replace(request(tmp_path),source_pack={'evidence':[{'id':'S001'},{'id':'T001'},{'id':'T002'}]},
+        batch_context={'lessons':['TEST-L01']}, response_schema=batch_notes_schema(autonomous_organization=True))
+    def part(index, complete, ids):
+        item=portion(index,complete);notes=item['result'];notes['blocks'][0]['coverage_role']='full'
+        decision={'canonical_slide_id':'sha256:example:page:1','owner':'TEST-L01','status':'taught',
+                  'reason':'Same source-bound placement.','evidence_ids':ids}
+        item['result']={'lessons':[{'lecture_id':'TEST-L01','notes':notes}],'organization':[decision]}
+        return item
+    first,second,last=part(0,False,['T001']),part(1,False,['T002']),part(2,True,['T002'])
+    commands=[];monkeypatch.setattr(a,'provider_executable',lambda _:sys.executable)
+    original=a.assemble
+    def previous_strict_rule(request, parts):
+        if len(parts)>1:raise ProviderError('Writing portions contain conflicting slide organization')
+        return original(request,parts)
+    monkeypatch.setattr(a,'assemble',previous_strict_rule)
+    monkeypatch.setattr(a,'run_session',_fake_session([first,second],commands))
+    with pytest.raises(ProviderError,match='conflicting slide organization'):a.generate_parts(req)
+    root=next((tmp_path/'writing-parts').iterdir())
+    raw_first=(root/'part-000.json').read_bytes();raw_second=(root/'returned-001.json').read_bytes()
+    monkeypatch.setattr(a,'assemble',original)
+    monkeypatch.setattr(a,'run_session',_fake_session([last],commands))
+    response=a.generate_parts(req)
+    assert response.notes['organization'][0]['evidence_ids']==['T001','T002']
+    assert len(commands)==2 and 'Resume part_index 2' in commands[-1][1]
+    assert (root/'part-000.json').read_bytes()==raw_first
+    assert (root/'returned-001.json').read_bytes()==raw_second
+    assert len(response.notes['lessons'][0]['notes']['blocks'])==3
+    assert (root/'local-prefix-recovery-001.json').is_file()
+    a.verify_receipt(json.loads(Path(response.attempt_path).read_text()),tmp_path)
 
 
 def test_corrupt_checkpoint_stops_without_paid_call(tmp_path,monkeypatch):
@@ -225,6 +282,8 @@ def test_final_batch_coverage_stays_strict_without_another_paid_write(tmp_path,m
     from mynotes.workflow import WorkflowError
     from test_batch_generation import workspace_and_deck,notes_for
     ws,_,selection=workspace_and_deck(tmp_path,lessons=1,slides=3)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     config=ws.configuration_store().load();config['providers']['configured']['agy']={'model':'test-model','effort':'high'};ws.configuration_store().save(config)
     commands=[];monkeypatch.setenv('MYNOTES_AGY_PARTS','1')
     monkeypatch.setattr(providers,'provider_executable',lambda _:sys.executable)
@@ -255,3 +314,22 @@ print(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)
     assert result.returncode==0 and time.monotonic()-start<2
     status=subprocess.run(['ps','-p',pid.read_text(),'-o','stat='],capture_output=True,text=True).stdout.strip()
     assert not status or status.startswith('Z')
+
+
+
+def test_idle_reminder_does_not_queue_an_extra_model_turn(tmp_path):
+    code = "import json,sys,time,select\nsys.stdin.readline()\ntime.sleep(.5)\nassert not select.select([sys.stdin],[],[],0)[0], 'Reminder queued paid work'\nprint(json.dumps({'event':'result','result':{'status':'SUCCESS'}}),flush=True)\n"
+    events=[]
+    result=a.run_session([sys.executable,'-u','-c',code],'first',lambda value:None,
+        cwd=str(tmp_path),env=dict(os.environ),first_seconds=.1,on_event=events.append)
+    assert result.returncode == 0
+    assert len([event for event in events if event['event']=='progress_reminder']) == 1
+
+
+def test_explicit_total_deadline_still_cleans_up_and_preserves_reminder(tmp_path):
+    code = 'import sys,time;sys.stdin.readline();time.sleep(60)'
+    events=[]
+    with pytest.raises(subprocess.TimeoutExpired):
+        a.run_session([sys.executable,'-u','-c',code],'first',lambda value:None,
+            cwd=str(tmp_path),env=dict(os.environ),first_seconds=.1,total_seconds=.6,on_event=events.append)
+    assert any(event['event']=='progress_reminder' for event in events)

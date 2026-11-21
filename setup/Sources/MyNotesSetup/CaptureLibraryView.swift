@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Darwin
 
-private func captureStateLabel(_ status: String) -> String {
+func captureStateLabel(_ status: String) -> String {
     switch status {
     case "COMPLETED": return "Trascritta"
     case "QUEUED": return "In coda"
@@ -10,7 +10,7 @@ private func captureStateLabel(_ status: String) -> String {
     case "FAILED": return "Trascrizione non riuscita"
     case "INTERRUPTED": return "Trascrizione interrotta"
     case "NEEDS_REVIEW": return "Trascrizione non riuscita"
-    case "OUTDATED": return "Audio modificato: trascrizione da aggiornare"
+    case "OUTDATED": return "Audio da verificare rispetto alla trascrizione"
     case "WAITING": return "Audio non ancora disponibile"
     case "CANCELLED": return "Rimossa dalla coda"
     case "CANCELLING": return "Interruzione in corso"
@@ -18,7 +18,7 @@ private func captureStateLabel(_ status: String) -> String {
     }
 }
 
-private func capturePhaseLabel(_ phase: String) -> String {
+func capturePhaseLabel(_ phase: String) -> String {
     switch phase {
     case "waiting_model": return "In attesa del modello"
     case "finalizing": return "Salvataggio"
@@ -356,6 +356,7 @@ struct CaptureRecordingsView: View {
                     ForEach(model.queue?.activeJobs ?? []) { queueRow($0) }
                 }
                 Divider()
+                if model.queue?.failedJobs.isEmpty == false { Text("Da verificare").font(.headline) }
                 ForEach(model.queue?.failedJobs ?? []) { queueRow($0) }
                 DisclosureGroup("Cronologia (\(model.queue?.historyJobs.count ?? 0))", isExpanded: $showHistory) {
                     ForEach(model.queue?.historyJobs ?? []) { queueRow($0, historical: true) }
@@ -410,7 +411,7 @@ struct CaptureRecordingsView: View {
 
 }
 
-private struct FlowActions: View {
+struct FlowActions: View {
     var actions: [String]
     var archivePending = false
     var perform: (String) -> Void

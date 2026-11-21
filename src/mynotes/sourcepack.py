@@ -179,6 +179,21 @@ def validate_source_pack(pack: dict[str, Any]) -> None:
             raise SourcePackError("Transcript timestamps must be ordered and non-negative")
 
 
+def _recording_coverage(workspace, transcript_path):
+    """Read known coverage without altering transcripts or the catalogue."""
+    from .recording_library import records as audio_records, options as library_options
+    known_recordings = audio_records(workspace)
+    coverage_recording = next((row for row in known_recordings.values() if any(
+        value and Path(value).resolve() == transcript_path.resolve()
+        for value in (row.get('export_text'), row.get('transcript_json')))), None)
+    if coverage_recording is None and transcript_path.suffix.casefold() == '.txt' and library_options(workspace).get('folder'):
+        from .transcript_library import scan as scan_transcripts
+        match = next((row for row in scan_transcripts(workspace, persist=False)
+                      if Path(row['path']).resolve() == transcript_path.resolve()), None)
+        coverage_recording = known_recordings.get(match.get('recording_id')) if match else None
+    return coverage_recording
+
+
 def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str | None = None) -> dict[str, Any]:
     """Import a normalized transcript without running ASR or changing its source."""
     if not path.is_file():
@@ -241,7 +256,8 @@ def _import_transcript(path: Path, lecture_id: str, *, bound_recording_id: str |
         "source_path": str(path),
         "source_sha256": descriptor["sha256"],
         "segments": segments,
-        **{key: payload[key] for key in ('quality_summary', 'quality_warnings', 'completion_policy', 'human_verified', 'timestamp_quality') if key in payload},
+        **{key: payload[key] for key in ('quality_summary', 'quality_warnings', 'completion_policy', 'human_verified', 'timestamp_quality',
+                                        'partial', 'coverage_complete', 'coverage_warning', 'coverage_warnings') if key in payload},
     }
 
 
@@ -278,8 +294,12 @@ def _build_source_pack_locked(
 ) -> dict[str, Any]:
     """Extract sources, transcribe optional audio, label evidence, and validate."""
     code, lesson_number = parse_lecture_id(lecture_id)
+    from .lesson_registry import assert_generation_allowed
+    assert_generation_allowed(workspace, code, lesson_number)
     configuration = workspace.configuration_store().load()
     course = course_for(configuration, code)
+    from .lesson_registry import source_number
+    material_number = source_number(workspace, code, lesson_number)
     run_dir = workspace.runs_dir / lecture_id
     source_pack_path = run_dir / "source_pack.json"
     previous = _prior_hashes(source_pack_path)
@@ -287,11 +307,11 @@ def _build_source_pack_locked(
 
     material_paths = list(dict.fromkeys(Path(path) for path in materials))
     if not material_paths and personal_notes is None:
-        material_paths, discovered_notes = discover_materials(course, lesson_number)
+        material_paths, discovered_notes = discover_materials(course, material_number)
         personal_notes = discovered_notes
     if personal_notes is None:
         pinned = course.get('files', {}).get('personal_notes')
-        lesson_note = course.get('lesson_sources', {}).get(str(lesson_number), {}).get('personal_notes')
+        lesson_note = course.get('lesson_sources', {}).get(str(material_number), {}).get('personal_notes')
         remembered = lesson_note or pinned
         if remembered:
             personal_notes = Path(remembered)
@@ -336,6 +356,20 @@ def _build_source_pack_locked(
         from .recording_library import options as library_options
         if library_options(workspace).get('folder'):
             matches = [t for t in scan_transcripts(workspace) if t.get('lecture_id') == lecture_id]
+            from .lesson_registry import load as lesson_registry, lecture_key, selected_transcript
+            row = next((row for row in lesson_registry(workspace)['lessons'].values()
+                        if not row['hidden'] and lecture_key(row) == lecture_id), None)
+            chosen_text = selected_transcript(workspace, row) if row else None
+            if row and row.get('preferred_transcript') and chosen_text is None:
+                raise SourcePackError('Il TXT scelto per gli appunti non è disponibile')
+            if chosen_text:
+                matches = [chosen_text]
+            from .audio_sources import policy
+            from .transcription_queue import library as audio_library
+            preferred_ids = set(policy(workspace)['preferred'].values())
+            preferred = [r for r in audio_library(workspace) if r.get('lecture_id') == lecture_id and r['id'] in preferred_ids and r.get('source_selected')] if preferred_ids else []
+            if len(preferred) == 1 and not chosen_text:
+                matches = [t for t in matches if t.get('recording_id') == preferred[0]['id']]
             if len(matches) > 1:
                 raise SourcePackError('Più trascrizioni per questa lezione: seleziona il TXT da usare')
             if matches:
@@ -385,6 +419,12 @@ def _build_source_pack_locked(
         original = json.loads(transcript_path.read_text()) if bound_recording_id else None
         origin_id = original.get("lecture_id", "").removeprefix("_recordings/") if original else None
         transcript_manifest = _import_transcript(transcript_path, lecture_id, bound_recording_id=origin_id)
+        # TXT edits do not erase known recording coverage loss.
+        coverage_recording = _recording_coverage(workspace, transcript_path)
+        if coverage_recording and coverage_recording.get('partial') is True:
+            transcript_manifest.update(partial=True, coverage_complete=False,
+                coverage_warning=coverage_recording.get('capture_reason') or 'Recording has partial coverage',
+                coverage_recording_id=coverage_recording['id'])
         if bound_recording_id:
             transcript_manifest["capture_recording_id"] = bound_recording_id
             transcript_manifest['association'] = {key:recording.get(key) for key in
@@ -444,7 +484,9 @@ def _build_source_pack_locked(
                 }
             )
     _align_visuals(visuals, slide_evidence, transcript)
+    from .lesson_registry import source_revision
     pack = {
+        "lesson_sources_revision": source_revision(workspace, lecture_id),
         "schema_version": 1, "lecture_id": lecture_id,
         "course": {"code": code, "name": course["name"], "lesson_number": lesson_number},
         "availability": {
@@ -477,6 +519,9 @@ def _build_source_pack_locked(
         state.record_source_pack(lecture_id, source_pack_path, pack["availability"])
     finally:
         state.close()
+    if transcript_path is not None and transcript_manifest and transcript_manifest.get('imported'):
+        from .source_routes import remember_transcript_folder
+        remember_transcript_folder(workspace, {'course_code': code, 'path': str(transcript_path)})
     return pack
 
 

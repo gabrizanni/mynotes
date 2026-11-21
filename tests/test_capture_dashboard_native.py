@@ -72,6 +72,7 @@ def test_native_calendar_reasons_are_localized_and_actionable(store,native):
         ('NEEDS_REVIEW','INVALID_START','Orario da correggere','inizio valido'),
         ('NEEDS_REVIEW','INVALID_END','Orario da correggere','fine non è valido'),
         ('NEEDS_REVIEW','INVALID_DURATION','Orario da correggere','12 ore'),
+        ('NEEDS_REVIEW','INVALID_TIMEZONE','Fuso orario da verificare','ora locale è ambigua'),
         ('NEEDS_REVIEW','UNKNOWN_COURSE','Corso da associare','associazione'),
         ('NEEDS_REVIEW','ALL_DAY_EVENT','Programmazione da completare','giornata'),
         ('NEEDS_REVIEW','INVALID_RECURRENCE','Programmazione da completare','ricorrenza'),

@@ -170,16 +170,23 @@ def test_correction_attachments_need_real_narrative_and_preserve_text():
     {'event':'step_update','step_update':{'step_index':1,'step_type':'tool','state':'DONE'}},
     {'event':'init','conversation_id':'same-conversation'},
 ])
-def test_duplicate_activity_does_not_reset_idle_watchdog(tmp_path,event):
+def test_duplicate_activity_triggers_one_soft_reminder_without_hiding_bad_exit(tmp_path,event):
     code='''import sys,json,time
+from pathlib import Path
 sys.stdin.readline()
 for i in range(25):
  print(json.dumps(EVENT),flush=True)
  time.sleep(.02)
+Path('duplicate-stream-finished').write_text('done')
 '''.replace('EVENT',repr(event))
-    start=time.monotonic()
-    with pytest.raises(subprocess.TimeoutExpired):a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=2,first_seconds=.12)
-    assert time.monotonic()-start<1
+    events=[]
+    with pytest.raises(a.ProviderError,match='without a complete terminal result'):
+        a.run_session([sys.executable,'-u','-c',code],'start',lambda _:None,cwd=str(tmp_path),env=dict(os.environ),total_seconds=10,first_seconds=.12,on_event=events.append)
+    assert len([e for e in events if e['event']=='progress_reminder']) == 1
+    # The ten-second outer guard permits slow hosted Python startup.
+    # Completion proves the soft reminder did not kill the stream. A wall-clock
+    # bound also measures Python startup and scheduler load on hosted macOS.
+    assert (tmp_path / 'duplicate-stream-finished').read_text() == 'done'
 
 
 def test_sleep_detection_closes_only_its_transport(tmp_path,monkeypatch):
@@ -219,6 +226,8 @@ def test_batch_builds_each_word_before_advancing_and_pauses(tmp_path,monkeypatch
 def test_saved_correction_can_use_reserved_local_build_time_without_another_provider_call(tmp_path,monkeypatch):
     from mynotes import batch_recovery,publication
     ws,_,sel=workspace_and_deck(tmp_path,lessons=1,slides=2)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     class Writer:
         calls=[]
         def generate(self,req):
@@ -246,7 +255,9 @@ def test_saved_correction_can_use_reserved_local_build_time_without_another_prov
         value['phases']={'writing':1200.,'coverage_repair':1200.,'local_checks':95.}
         atomic_json_write(budget_path,value)
     def build(workspace,lecture,**kwargs):
-        assert 0<kwargs['timeout_seconds']<=25
+        # Word rendering has its own local deadline, independent of the
+        # remaining validation allowance and exhausted paid model phases.
+        assert kwargs['timeout_seconds']==300
         path=workspace.runs_dir/lecture/'word.docx';path.write_bytes(b'isolated fake Word');return {'candidate':str(path)}
     monkeypatch.setattr(publication,'build_word_candidate',build)
     result=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,repair_missing=True,build_word=True)
@@ -284,8 +295,8 @@ def test_resume_never_silently_rewrites_saved_candidate_after_real_context_chang
     first=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer)
     path=Path(first['candidates'][0]['candidate']);before=path.read_bytes()
     config=ws.configuration_store().load();config['courses'][0]['context']='A different requested teaching objective.';ws.configuration_store().save(config)
-    with pytest.raises(WorkflowError,match='Resume would rewrite an existing batch candidate'):
-        generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    resumed=generate_batch(ws,'OPS',[1],selection=sel,provider_adapter=writer,batch_id=first['batch_id'])
+    assert resumed['fingerprint']==first['fingerprint']
     assert len(writer.calls)==1 and path.read_bytes()==before
 
 

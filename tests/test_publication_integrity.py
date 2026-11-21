@@ -59,6 +59,28 @@ def test_publish_metadata_mutation_keeps_generated_candidate_reusable(tmp_path, 
     assert provider.calls==['writing']
 
 
+def test_memory_change_does_not_retroactively_block_saved_visual_candidate(tmp_path, monkeypatch):
+    from mynotes.memory import snapshot, update_memory
+    from PIL import Image
+    workspace=configured_workspace(tmp_path);pack_path=source_pack(workspace,visual=True)
+    image=pack_path.parent/'chart.png';Image.new('RGB',(100,50),'white').save(image)
+    pack=json.loads(pack_path.read_text());pack['visuals'][0]['image_path']=str(image)
+    atomic_json_write(pack_path,pack)
+    class InspectedProvider(CandidateProvider):
+        def generate(self,request):
+            response=super().generate(request)
+            response.notes['visual_decisions'][0]['inspected']=True
+            return response
+    provider=InspectedProvider(visual=True)
+    generate_candidate(workspace,'OPS7-L01',provider_adapter=provider)
+    revision=snapshot(workspace.configuration_store().load(),scope='course',area='notes',course='OPS7')['revision']
+    update_memory(workspace,scope='course',area='notes',course='OPS7',expected_revision=revision,
+                  style={'image_policy':'none','image_limit':0})
+    monkeypatch.setattr('mynotes.publication._render_and_validate',fake_render)
+    built=build_word_candidate(workspace,'OPS7-L01',mode='standalone')
+    assert Path(built['candidate']).is_file() and provider.calls==['writing']
+
+
 @pytest.mark.parametrize('accept',[False,True])
 def test_wrong_lecture_candidate_rejected_even_with_accept_current(tmp_path, monkeypatch, accept):
     workspace,target=prepared(tmp_path)

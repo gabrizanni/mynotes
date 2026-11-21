@@ -15,10 +15,12 @@ from pathlib import Path
 import re
 import selectors
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
+from uuid import UUID
 from typing import Callable
 
 from .providers import (ProviderError, ProviderCancelledError, ProviderQuotaError,
@@ -31,7 +33,7 @@ from .providers import (ProviderError, ProviderCancelledError, ProviderQuotaErro
 from .utils import atomic_json_write, file_sha256
 from .provider_limits import validate_command_size
 from .execution import AttemptStart, SleepMonitor, prevent_idle_sleep
-from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout
+from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout, SOFT_PROGRESS_MESSAGE
 
 PROTOCOL = 1
 BLOCKS_PER_PART = 12
@@ -55,10 +57,11 @@ def fingerprint(value) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
 
 
-def part_schema(request: ProviderRequest) -> dict:
+def part_schema(request: ProviderRequest, *, block_limit=BLOCKS_PER_PART) -> dict:
     result = deepcopy(request.response_schema or notes_schema(compact=True))
     note = result['properties']['lessons']['items']['properties']['notes'] if request.batch_context is not None else result
-    note['properties']['blocks']['maxItems'] = BLOCKS_PER_PART
+    if block_limit is not None:
+        note['properties']['blocks']['maxItems'] = block_limit
     return {'type': 'object', 'additionalProperties': False,
             'properties': {'part_index': {'type': 'integer'}, 'complete': {'type': 'boolean'},
                            'next_topic': {'type': 'string'}, 'result': result},
@@ -78,10 +81,12 @@ def _entries(request: ProviderRequest, value: dict) -> list[tuple[str, dict]]:
     return [(r['lecture_id'], r.get('notes')) for r in rows]
 
 
-def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
+def assemble(request: ProviderRequest, parts: list[dict], *, block_limit=BLOCKS_PER_PART) -> dict:
     """Lossless assembly; no inferred coverage, role, inspection or missing text."""
     expected = request.batch_context['lessons'] if request.batch_context else [request.lecture_id]
     merged, seen, last_lesson = {}, {}, 0
+    organization = {}
+    has_organization = False
     valid_ids = {r['id'] for r in request.source_pack.get('evidence', [])}
     for number, part in enumerate(parts):
         from .evidence_refs import normalize_references, EvidenceReferenceError
@@ -99,6 +104,24 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
             raise ProviderError('Incomplete writing portion has no continuation')
         if part['complete'] and part['next_topic'].strip():
             raise ProviderError('Completed writing portion still declares unfinished content')
+        if 'organization' in part['result']:
+            has_organization = True
+            decisions = part['result']['organization']
+            if not isinstance(decisions, list):
+                raise ProviderError('Writing organization must be an array')
+            for decision in decisions:
+                if not isinstance(decision, dict) or not isinstance(decision.get('canonical_slide_id'), str):
+                    raise ProviderError('Writing organization needs canonical source identity')
+                key = decision['canonical_slide_id']
+                if key in organization:
+                    old = organization[key]
+                    if ({k:v for k,v in old.items() if k != 'evidence_ids'} !=
+                            {k:v for k,v in decision.items() if k != 'evidence_ids'}):
+                        raise ProviderError('Writing portions contain conflicting slide organization')
+                    # References can grow without changing the placement.
+                    old['evidence_ids'] = list(dict.fromkeys([*old.get('evidence_ids', []), *decision.get('evidence_ids', [])]))
+                else:
+                    organization[key] = deepcopy(decision)
         count = 0
         for lecture, note in _entries(request, part['result']):
             position = expected.index(lecture)
@@ -145,21 +168,90 @@ def assemble(request: ProviderRequest, parts: list[dict]) -> dict:
                     if item not in target[key]: target[key].append(deepcopy(item))
             if any(note.get(k) for k in ('sections','bullets','table','formulas')) or note.get('formula'):
                 raise ProviderError('Writing portions must keep legacy parallel narrative empty')
-        if not 1 <= count <= BLOCKS_PER_PART:
+        if count < 1 or (block_limit is not None and count > block_limit):
             raise ProviderError('Writing portion exceeds its block budget; retained, not retried')
     if parts and parts[-1]['complete'] and list(merged) != expected:
         raise ProviderError('Writing declared completion before all selected lessons')
-    return {'lessons':[{'lecture_id':k,'notes':v} for k,v in merged.items()]} if request.batch_context else merged.get(request.lecture_id,{})
+    if request.batch_context:
+        result = {'lessons': [{'lecture_id': k, 'notes': v} for k, v in merged.items()]}
+        if has_organization: result['organization'] = list(organization.values())
+        return result
+    return merged.get(request.lecture_id, {})
+
+
+def _recover_metadata_prefix(request, root, state, parts, refs, schema):
+    """Accept a retained SUCCESS rejected only for repeated source metadata.
+
+    Original returns/accepted files remain immutable. A separate journal binds
+    the old state and raw return; final notes still need complete validation.
+    """
+    if state.get('problem', {}).get('message') != 'Writing portions contain conflicting slide organization':
+        raise ProviderError('Saved writing portion needs local review; no automatic paid retry')
+    index = len(parts); source = root / f'returned-{index:03d}.json'
+    saved = json.loads(source.read_text()); envelope = saved['envelope']; part = saved['part']
+    if (envelope.get('status') != 'SUCCESS' or envelope.get('conversation_id') != state.get('conversation_id')
+            or _normalize_transport_notes(_decode_agy(envelope), schema, provider='agy') != part):
+        raise ProviderError('Local prefix recovery requires an intact same-conversation SUCCESS')
+    if part.get('complete'):
+        raise ProviderError('Complete retained writing requires local full-result recovery, not another paid turn')
+    assembled = assemble(request, [*parts, part])
+    target = root / f'part-{index:03d}.json'
+    if target.exists() and json.loads(target.read_text()) != saved:
+        raise ProviderError('Prefix recovery cannot overwrite an existing accepted portion')
+    snapshot = root/f'state-before-local-prefix-recovery-{index:03d}.json'
+    if not snapshot.exists():
+        snapshot.write_bytes((root/'state.json').read_bytes())
+    proof = {'kind': 'compatible_organization_references', 'prior_state_sha256': file_sha256(root/'state.json'),
+             'prior_state': snapshot.name, 'original_problem': deepcopy(state.get('problem')),
+             'returned': source.name, 'returned_sha256': file_sha256(source),
+             'prior_parts': deepcopy(refs), 'assembled_prefix_sha256': fingerprint(assembled),
+             'provider_invoked': False}
+    atomic_json_write(root/f'local-prefix-recovery-{index:03d}.json', proof)
+    atomic_json_write(target, saved)
+    parts.append(part); refs.append({'file': target.name, 'sha256': file_sha256(target)})
+    state.update(local_rejection=False, parts=refs, status='LOCALLY_RECOVERED')
+    state.pop('problem', None)
+    state.setdefault('local_recoveries', []).append(proof)
+    atomic_json_write(root/'state.json', state)
+    print(f'MyNotes: retained successful portion {index + 1} recovered locally; no provider call.', file=sys.stderr, flush=True)
 
 
 def _wire(prompt: str) -> bytes:
     return (json.dumps({'event':'user','message':{'content':prompt}}, ensure_ascii=True)+'\n').encode()
 
 
+def native_error_message(step: dict) -> str:
+    """Classify one native error record when the stream omits its message.
+
+    Read only the exact error step, never conversation reasoning or other chats.
+    Unknown/missing diagnostics fail closed instead of permitting hidden retries.
+    """
+    try:
+        identifier = str(UUID(step['conversation_id']))
+        index = step['step_index']
+        if identifier != step['conversation_id'] or type(index) is not int or index < 0:
+            return 'Unclassified native provider error'
+        path = Path.home()/'.gemini/antigravity-cli/conversations'/f'{identifier}.db'
+        with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True, timeout=.2) as db:
+            row = db.execute('SELECT step_type, step_payload FROM steps WHERE idx=?', (index,)).fetchone()
+        if row and row[0] == 17:
+            payload = bytes(row[1])
+            for phrase in (b'Your previous response was cut off because it exceeded the output token limit',
+                           b'The stream was interrupted. Please continue the task you were working on.'):
+                if phrase in payload:
+                    return phrase.decode()
+    except (KeyError, ValueError, TypeError, sqlite3.Error, OSError):
+        pass
+    return 'Unclassified native provider error'
+
+
 def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | None], *, cwd: str, env: dict,
                 total_seconds: float = TOTAL_SECONDS, first_seconds: float = FIRST_TURN_SECONDS,
-                next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None) -> subprocess.CompletedProcess:
+                next_seconds: float = NEXT_TURN_SECONDS, on_event: Callable[[dict], None] | None = None,
+                abort_errors: bool = False, log_file: Path | None = None,
+                stream_recovery: bool = False) -> subprocess.CompletedProcess:
     """One process/conversation; separate stderr, bounded turns, group cleanup."""
+    from .review_dispatch import cancel_event
     outputs = [bytearray(), bytearray()]
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                cwd=cwd, env=env, start_new_session=True)
@@ -168,20 +260,52 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         def interrupted(_sig, _frame): raise ProviderCancelledError('Note generation interrupted by user')
         previous = signal.signal(signal.SIGTERM, interrupted)
     started = turn_started = time.monotonic(); turn_limit = first_seconds
-    pending = b''; finished = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
+    pending = b''; finished = False; nudged = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
+    log_position = 0; failure_tail = ''; transport_steps = set(); error_steps = set()
+    def provider_failure(message):
+        nonlocal failure_tail
+        # Native telemetry is independent of the generation transport. Keep its
+        # diagnostics in the logs without cancelling an otherwise active task.
+        message = '\n'.join(line for line in message.splitlines()
+                            if not re.search(r'Post "https://play\.googleapis\.com/log(?:[?/"]|$)', line))
+        if not message.strip():
+            return
+        failure_tail=(failure_tail+message)[-4096:]
+        if stream_recovery and re.search(r'stream idle timeout|The stream was interrupted',message,re.I) and not re.search(r'output token limit|response was cut off',message,re.I):
+            attempts=[int(n) for n in re.findall(r'attempt (\d+) failed',failure_tail,re.I)]
+            if max([len(transport_steps), *attempts],default=1)<=1:
+                if on_event is not None:
+                    on_event({'event':'transport_recovery','kind':'stream_interruption','maximum_internal_retries':1})
+                return
+        if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|The stream was interrupted|Unclassified native provider error|attempt \d+ failed.*retrying', message, re.I):
+            raise ProviderError('Provider interrupted or truncated this unit; no internal restart permitted: ' + message[:500])
     try:
         process.stdin.write(_wire(prompt)); process.stdin.flush()
         with selectors.DefaultSelector() as selector:
             selector.register(process.stdout, selectors.EVENT_READ, 0)
             selector.register(process.stderr, selectors.EVENT_READ, 1)
             while selector.get_map():
+                cancellation = cancel_event.get()
+                if cancellation is not None and cancellation.is_set():
+                    raise ProviderCancelledError('Review stopped after another blocking packet')
                 now = time.monotonic()
+                if abort_errors and log_file is not None and log_file.is_file():
+                    with log_file.open() as native_log:
+                        native_log.seek(log_position); recent = native_log.read(); log_position = native_log.tell()
+                    provider_failure(recent)
                 slept = sleep.poll()
                 if slept:
                     error = ProviderSuspendedError(f'System suspended for {slept:.0f}s; old transport closed')
                     error.suspended_seconds = slept
                     raise error
-                if now-started > total_seconds or now-turn_started > turn_limit:
+                if (not finished and not nudged and now-turn_started > turn_limit
+                        and now-started <= total_seconds):
+                    # stream-json queues another model turn; it cannot steer a
+                    # running one. Report the reminder without starting paid work.
+                    if on_event is not None:
+                        on_event({'event':'progress_reminder', 'message':SOFT_PROGRESS_MESSAGE})
+                    nudged = True
+                if now-started > total_seconds or (finished and now-turn_started > turn_limit):
                     total_expired = now-started > total_seconds
                     error = subprocess.TimeoutExpired(command, total_seconds if total_expired else turn_limit)
                     error.budget_kind = "phase" if total_expired else "useful-progress"
@@ -197,7 +321,8 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                     if not data:
                         selector.unregister(key.fileobj); continue
                     outputs[key.data].extend(data)
-                    if key.data: continue
+                    if key.data:
+                        provider_failure(data.decode(errors='replace')); continue
                     pending += data
                     while b'\n' in pending:
                         line, pending = pending.split(b'\n',1)
@@ -206,17 +331,27 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                         except (ValueError, UnicodeError) as error: raise ProviderError('Invalid Agy streaming event') from error
                         if on_event is not None: on_event(event)
                         step = event.get('step_update', {})
+                        if abort_errors and step.get('step_type') == 'error_message' and step.get('state') == 'DONE':
+                            identity = (step.get('conversation_id'), step.get('step_index'))
+                            if identity not in error_steps:
+                                error_steps.add(identity)
+                                diagnostic = native_error_message(step)
+                                if 'The stream was interrupted' in diagnostic:
+                                    transport_steps.add(identity)
+                                provider_failure(diagnostic)
+                        if event.get('event') == 'error' or step.get('step_type') == 'error':
+                            provider_failure(json.dumps(event))
                         progress = (step.get('step_index'), step.get('step_type'))
                         initialization = ('init', event.get('conversation_id'))
                         useful_step = (event.get('event') == 'step_update' and step.get('state') == 'DONE'
                                        and step.get('step_type') in {'tool','agent_response'} and progress not in useful)
-                        if useful_step and step.get('tool_name') == 'view_file':
+                        if useful_step and step.get('tool_name') in {'view_file', 'read_file'}:
                             read_key=json.dumps(step.get('tool_info',{}).get('parameters',{}),sort_keys=True)
                             useful_step=read_key not in read_requests
                             read_requests.add(read_key)
                         if ((event.get('event') == 'init' and initialization not in useful) or useful_step):
                             useful.add(initialization if event.get('event') == 'init' else progress)
-                            turn_started = time.monotonic()
+                            turn_started = time.monotonic(); nudged = False
                         if event.get('event') != 'result': continue
                         if finished: raise ProviderError('Agy emitted another result after final completion')
                         result = event.get('result')
@@ -227,7 +362,7 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                             turn_limit = 5; turn_started = time.monotonic()
                         else:
                             process.stdin.write(_wire(next_prompt)); process.stdin.flush()
-                            turn_started = time.monotonic(); turn_limit = next_seconds
+                            turn_started = time.monotonic(); turn_limit = next_seconds; nudged = False
             code = process.wait(timeout=3)
             try: os.killpg(process.pid,signal.SIGTERM)
             except ProcessLookupError: pass
@@ -252,19 +387,75 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
         for pipe in (process.stdout,process.stderr): pipe.close()
 
 
-def _generate_parts(request: ProviderRequest) -> ProviderResponse:
+def _writing_identity(request, schema):
+    lines = _context(request).splitlines()
+    return fingerprint({'identity_version': 2, 'protocol': PROTOCOL,
+        'instructions': _prompt(request, context='<BOUND_SOURCE_CONTEXT>'),
+        'configuration': json.loads(lines[1]), 'evidence': json.loads(lines[-1]),
+        'source_pack': request.source_pack, 'requested': asdict(request.requested), 'schema': schema})
+
+
+def _checkpoint_root(request, schema, identity):
+    """Match semantic inputs; preserve exact-byte proofs for older checkpoints."""
+    directory = request.run_dir.resolve(); parent = directory/'writing-parts'
+    target = parent/identity
+    if (target/'state.json').exists(): return target, identity
+    current = _context(request).splitlines()
+    expected_config, expected_data = json.loads(current[1]), json.loads(current[-1])
+    contexts = [ '\n'.join(current) ]
+    for folder in (directory/'request-inputs').glob('*'):
+        if not folder.is_dir(): continue
+        config_path, metadata_path = folder/'configuration.json', folder/'source-metadata.json'
+        if not config_path.is_file() or not metadata_path.is_file(): continue
+        config, metadata = json.loads(config_path.read_text()), json.loads(metadata_path.read_text())
+        evidence = [json.loads(line) for file in sorted(folder.glob('evidence-*.jsonl'))
+                    for line in file.read_text().splitlines() if line.strip()]
+        data = {key: evidence if key == 'evidence' else metadata.get(key) for key in expected_data}
+        if config != expected_config or data != expected_data: continue
+        lines = list(current)
+        lines[1] = json.dumps(config,ensure_ascii=False,separators=(',',':'))
+        lines[-1] = json.dumps(data,ensure_ascii=True,separators=(',',':'))
+        context = '\n'.join(lines)
+        if hashlib.sha256(context.encode()).hexdigest() == folder.name: contexts.append(context)
+    compatible = {}
+    for context in contexts:
+        legacy = fingerprint({'protocol':PROTOCOL,'prompt':_prompt(request,context=context),
+            'source_pack':request.source_pack,'requested':asdict(request.requested),'schema':schema})
+        state_path = parent/legacy/'state.json'
+        if state_path.is_file():
+            state=json.loads(state_path.read_text())
+            if state.get('fingerprint') != legacy: raise ProviderError('Legacy checkpoint identity changed')
+            compatible[legacy] = (len(state.get('parts',[])), state_path.stat().st_mtime, parent/legacy)
+    if compatible:
+        accepted = [value for value in compatible.values() if value[0] > 0]
+        if len(accepted) > 1: raise ProviderError('Multiple accepted writing prefixes require explicit selection; no cold restart')
+        chosen = accepted[0] if accepted else max(compatible.values(),key=lambda value:value[:2])
+        return chosen[2], chosen[2].name
+    # A partial conversation must never silently turn into a fresh one because
+    # serialization order or implementation details changed.
+    for path in parent.glob('*/state.json'):
+        state=json.loads(path.read_text())
+        if state.get('source_pack_fingerprint') != fingerprint(request.source_pack) and state.get('source_pack_fingerprint'):
+            continue  # Explicitly changed sources may start a distinct context.
+        raise ProviderError('Saved writing inputs/instructions changed or could not be proven equivalent; no automatic cold restart')
+    return target, identity
+
+
+def _generate_parts(request: ProviderRequest, *, joint=None) -> ProviderResponse:
     directory = request.run_dir.resolve()
-    schema = part_schema(request)
-    identity = fingerprint({
-        'protocol':PROTOCOL,'prompt':_prompt(request),'source_pack':request.source_pack,'requested':asdict(request.requested),'schema':schema})
-    root = directory/'writing-parts'/identity
+    schema = joint['schema'] if joint else part_schema(request)
+    def combine(parts):
+        return assemble(request, parts, block_limit=None) if joint else assemble(request, parts)
+    identity = _writing_identity(request, schema)
+    if joint:
+        identity = fingerprint({'inputs':identity,'protocol':joint['protocol']})
+    root, identity = _checkpoint_root(request, schema, identity)
     if not root.resolve().is_relative_to(directory):raise ProviderError('Writing checkpoint directory is outside the private run')
     root.mkdir(parents=True,exist_ok=True)
     state_path = root/'state.json'; parts=[]; refs=[]; state={}
     if state_path.exists():
         state = json.loads(state_path.read_text())
         if state.get('fingerprint') != identity: raise ProviderError('Writing checkpoint identity changed')
-        if state.get('local_rejection'): raise ProviderError('Saved writing portion needs local review; no automatic paid retry')
         for ref in state.get('parts',[]):
             path = root/ref['file']
             if path.parent != root or path.is_symlink() or file_sha256(path) != ref['sha256']:
@@ -272,26 +463,35 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
             payload=json.loads(path.read_text())
             if payload['envelope'].get('status') != 'SUCCESS': raise ProviderError('Checkpoint came from a failed turn')
             if payload['envelope'].get('conversation_id') != state.get('conversation_id'):raise ProviderError('Writing checkpoint conversation changed')
-            if _normalize_transport_notes(_decode_agy(payload['envelope']),schema) != payload['part']:raise ProviderError('Writing checkpoint differs from its returned portion')
+            if _normalize_transport_notes(_decode_agy(payload['envelope']),schema,provider='agy') != payload['part']:raise ProviderError('Writing checkpoint differs from its returned portion')
             parts.append(payload['part']); refs.append(ref)
-        assemble(request,parts)
+        combine(parts)
+        if state.get('local_rejection'):
+            if joint:
+                raise ProviderError('Saved topic needs local review; no automatic paid retry')
+            _recover_metadata_prefix(request, root, state, parts, refs, schema)
         if state.get('finalized'):
             attempt=Path(state['attempt_path']); saved=json.loads(attempt.read_text())
             verify_receipt(saved,directory)
-            return ProviderResponse(assemble(request,parts),'agy','','',saved['envelope']['usage'],str(attempt))
+            return ProviderResponse(combine(parts),'agy','','',saved['envelope']['usage'],str(attempt))
         if parts and parts[-1]['complete']: raise ProviderError('Complete portions lack a clean final process exit; review retained transport')
+        if joint and state.get('problem') and state['problem'].get('kind') not in {'ProviderCancelledError','ProviderSuspendedError'}:
+            raise ProviderError('Previous topic writing failed; accepted topics retained without an automatic model retry')
+    if joint:
+        joint['access'].extend(state.get('source_access',[]))
     used_seconds=state.get('used_seconds',0)
     if type(used_seconds) not in (int,float) or not math.isfinite(used_seconds) or used_seconds<0:raise ProviderError('Writing checkpoint has an invalid time budget')
     remaining=min(TOTAL_SECONDS-used_seconds, invocation_timeout(request.timeout_seconds))
     if remaining <= 1: raise ProviderError('The lesson writing budget is exhausted; retained portions require review')
-    _stage_agy_writer(directory)
-    context = _stage_agy_context(request,directory)
+    if not joint: _stage_agy_writer(directory)
+    context = joint['context'] if joint else _stage_agy_context(request,directory)
     protocol = (
         f'INCREMENTAL WRITING PROTOCOL: this is one writing phase delivered in portions, NOT an additional review. '
         f'Return only the NEXT contiguous portion, at most {BLOCKS_PER_PART} blocks TOTAL, via finish. '
         'The response schema wraps result inside part_index, complete and next_topic. Ordinary lesson requirements apply across the ASSEMBLED result, not independently to each portion. '
         'Begin the first portion of a lesson with its one overview. Continue the teaching sequence without restarting. Do not compress explanations to make the whole lesson fit one response. '
         'Return only NEW blocks, NEW final source decisions and new questions. Empty legacy fields; formula=null. '
+        'Use organization=[] when the saved page assignments have not changed; never repeat the full ledger. Cite the smallest sufficient set of relevant T turns per claim, not an exhaustive list of utterances. '
         'Coverage decisions need inventory for S/H only, not every transcript utterance. Cite relevant T IDs in narrative blocks. '
         'Finish promptly after a coherent portion instead of drafting the entire lesson in thoughts first. '
         'complete=false means more explanations remain; next_topic identifies the exact next topic. '
@@ -300,6 +500,8 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         'Do not inspect future-owned slides merely to exclude them; ownership supplies that reason. '
         'Across portions, the selected lesson order and full coverage rules stay mandatory.'
     )
+    if joint:
+        protocol = joint['protocol']
     active=replace(request,response_schema=schema)
     initial=_prompt(active,context=context)+'\n'+protocol+'\nRequired part_index: '+str(len(parts))
     if parts:
@@ -308,16 +510,24 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
              '--input-format','stream-json','--output-format','stream-json','--print-timeout',CLI_PHASE_TIMEOUT,
              *provider_override_flags(request.requested),'--json-schema',json.dumps(_agy_schema(schema),separators=(',',':')),'--add-dir',str(directory)]
     if state.get('conversation_id'): command += ['--conversation',state['conversation_id']]
+    if joint: command += ['--log-file',str(root/'provider.log')]
     env={**provider_environment(),'MYNOTES_GENERATION_WORKER':'1'};validate_command_size(command,env)
     started=AttemptStart(); last={}
     def save_state(**changes):
-        state.update({'fingerprint':identity,'parts':refs,'used_seconds':used_seconds+time.monotonic()-started,**changes})
+        state.update({'fingerprint':identity,'source_pack_fingerprint':fingerprint(request.source_pack),
+                      **({'source_access':joint['access'],'writing_contract':'joint_topics_v1'} if joint else {}),
+                      'parts':refs,'used_seconds':used_seconds+time.monotonic()-started,**changes})
         atomic_json_write(state_path,state)
     def observe(event):
+        if joint:
+            joint['observe'](event)
         if used_seconds+time.monotonic()-started >= 600 and not state.get('ten_minute_warning'):
             print('MyNotes: writing active for more than ten minutes; saved portions retained, no completion estimate.',file=sys.stderr,flush=True)
             save_state(ten_minute_warning=True)
-        if event.get('event') == 'init':
+        if event.get('event') == 'progress_reminder':
+            print('MyNotes: no new progress observed; keep completed work and break repeated actions. The worker is not stopped.', file=sys.stderr, flush=True)
+            save_state(progress_reminder=SOFT_PROGRESS_MESSAGE)
+        elif event.get('event') == 'init':
             cid = event.get('conversation_id')
             if not isinstance(cid, str) or not cid or (state.get('conversation_id') and state['conversation_id'] != cid):
                 raise ProviderError('Agy changed its writing conversation at initialization')
@@ -336,7 +546,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
         cid=envelope.get('conversation_id')
         if not isinstance(cid,str) or not cid or (state.get('conversation_id') and cid != state['conversation_id']):
             raise ProviderError('Agy did not preserve the writing conversation')
-        part=_normalize_transport_notes(_decode_agy(envelope),schema)
+        part=_normalize_transport_notes(_decode_agy(envelope),schema,provider='agy')
         index=len(parts); path=root/f'part-{index:03d}.json'
         raw={'envelope':envelope,'part':part}
         atomic_json_write(root/f'returned-{index:03d}.json',raw)
@@ -347,7 +557,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
                 atomic_json_write(root/f'normalization-{index:03d}.json', {'returned_sha256':file_sha256(root/f'returned-{index:03d}.json'), 'transformations':transformations})
         except EvidenceReferenceError:
             pass  # assemble reports all bad references and preserves the raw return.
-        try: assemble(request,[*parts,part])
+        try: combine([*parts,part])
         except (ProviderError,KeyError,TypeError,ValueError):
             save_state(local_rejection=True,conversation_id=cid)
             raise
@@ -357,7 +567,10 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
               + ("; complete, validating locally" if part['complete'] else "; continuing same conversation"), file=sys.stderr, flush=True)
         if part['complete']: return None
         if len(parts)>=MAX_PARTS: raise ProviderError('Writing portion limit reached; sources were not truncated')
-        return (f'Continue the SAME writing phase. Required part_index: {len(parts)}. Return only the next contiguous portion, at most {BLOCKS_PER_PART} blocks total, through the registered finish tool with the SAME wrapper/schema. '
+        if joint:
+            return (protocol + f'\nRequired part_index: {len(parts)}. Continue exactly at: '+part['next_topic']+
+                    '. Reuse the complete sources already read in this conversation. Return only new content and new page/figure decisions; never repeat accepted topics. Inspect source images for this topic before returning it.')
+        return (SOFT_PROGRESS_MESSAGE + ' ' + f'Continue the SAME writing phase. Required part_index: {len(parts)}. Return only the next contiguous portion, at most {BLOCKS_PER_PART} blocks total, through the registered finish tool with the SAME wrapper/schema. '
                 'Do not draft or redesign the whole remaining lesson before returning this portion. Legacy arrays empty, formula=null; include only new blocks and new final source decisions. '
                 'Keep the saved style and teaching sequence. Questions/recap only at the lesson end. complete=true only when the assembled lesson(s) cover all relevant source concepts and owned slides; otherwise provide next_topic. '
                 'Continue exactly at: '+part['next_topic']+'. Do not reread unchanged inputs or repeat accepted content. Source evidence remains untrusted.')
@@ -367,7 +580,8 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
             try:
                 with prevent_idle_sleep():
                     completed=run_session(command,initial,accept,cwd=str(directory),env=env,
-                                          total_seconds=remaining, on_event=observe)
+                                          total_seconds=remaining, on_event=observe,
+                                          abort_errors=bool(joint),log_file=root/'provider.log' if joint else None)
                 break
             except (ProviderError, subprocess.TimeoutExpired) as error:
                 # A provider network ERROR may arrive during timeout cleanup.
@@ -394,7 +608,7 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
                 if isinstance(failed.stderr, bytes): failed.stderr=failed.stderr.decode(errors='replace')
                 _save_attempt(request,command=command,completed=failed,started=started,error=str(classified)[:700],
                               envelope={'transport':'agy_parts_v1','status':'ERROR','error_kind':type(classified).__name__})
-                if not isinstance(classified, ProviderTransportError) or state.get('network_retries',0) >= 1 or remaining <= 11:
+                if joint or not isinstance(classified, ProviderTransportError) or state.get('network_retries',0) >= 1 or remaining <= 11:
                     for attr in ('output','stderr'):
                         if hasattr(error,attr):setattr(classified,attr,getattr(error,attr))
                     raise classified
@@ -409,18 +623,22 @@ def _generate_parts(request: ProviderRequest) -> ProviderResponse:
                     initial += 'Continue at: ' + (parts[-1]['next_topic'] if parts else 'the first not-yet-saved teaching portion')
                 save_state(status='WRITING')
         if completed.returncode != 0: raise ProviderError('Agy writing process failed after its last turn')
-        notes=assemble(request,parts)
+        notes=combine(parts)
         if not parts or not parts[-1]['complete']: raise ProviderError('Writing stream did not finish the selected lessons')
         receipt=root/'complete.json';atomic_json_write(receipt,{'protocol':PROTOCOL,'fingerprint':identity,'parts':refs,'assembled_sha256':fingerprint(notes),'schema':schema,
+            **({'block_limit':None,'writing_contract':'joint_topics_v1'} if joint else {}),
+            'local_recoveries':state.get('local_recoveries', []),
             'lecture_id':request.lecture_id,'lessons':request.batch_context['lessons'] if request.batch_context else None,
             'source_ids':[row['id'] for row in request.source_pack['evidence']]})
         usage={'session_cumulative':last.get('usage',{}),'scope':'Raw cumulative session counters, not additive across resumed processes'}
         attempt=_save_attempt(request,command=command,completed=completed,started=started,envelope={
+            **({'source_access':joint['access'],'preview_sheets':joint['sheets'],'writing_contract':'joint_topics_v1'} if joint else {}),
             'transport':'agy_parts_v1','status':'SUCCESS','usage':usage,'receipt':str(receipt),'receipt_sha256':file_sha256(receipt)})
         save_state(finalized=True,attempt_path=str(attempt),status='CONTENT_RETURNED',problem=None)
         return ProviderResponse(notes,'agy','','',usage,str(attempt))
     except BaseException as error:
-        save_state()
+        save_state(**({'status':'FAILED','problem':{'kind':'ProviderCancelledError' if isinstance(error,KeyboardInterrupt) else type(error).__name__,
+                   'message':str(error)[:700]}} if joint else {}))
         if completed is None and hasattr(error,'output'):
             def text(v):return v.decode(errors='replace') if isinstance(v,bytes) else v or ''
             completed=subprocess.CompletedProcess(command,None,text(error.output),text(error.stderr))
@@ -441,6 +659,10 @@ def verify_receipt(record: dict, workspace_root: Path) -> dict:
     if not receipt.is_absolute() or receipt.is_symlink() or not receipt.resolve().is_relative_to(workspace_root.resolve()) or file_sha256(receipt) != envelope['receipt_sha256']:
         raise ProviderError('Incremental receipt was modified or moved outside the workspace')
     saved=json.loads(receipt.read_text());refs=saved['parts'];parts=[]
+    broad=saved.get('writing_contract')=='joint_topics_v1'
+    if broad and saved.get('block_limit','missing') is not None:
+        raise ProviderError('Topic receipt changed its assembly contract')
+    def combine(parts):return assemble(req,parts,block_limit=None) if broad else assemble(req,parts)
     if saved.get('protocol') != PROTOCOL or not refs or len(refs)>MAX_PARTS:
         raise ProviderError('Incomplete writing receipt')
     for index,ref in enumerate(refs):
@@ -449,25 +671,25 @@ def verify_receipt(record: dict, workspace_root: Path) -> dict:
         if path.is_symlink() or file_sha256(path) != ref['sha256']:raise ProviderError('Writing portion was modified')
         value=json.loads(path.read_text());raw=value['envelope']
         if parts and raw.get('conversation_id') != json.loads((receipt.parent/refs[0]['file']).read_text())['envelope'].get('conversation_id'):raise ProviderError('Writing portions changed conversation')
-        if raw.get('status') != 'SUCCESS' or _normalize_transport_notes(_decode_agy(raw),saved['schema']) != value['part']:
+        if raw.get('status') != 'SUCCESS' or _normalize_transport_notes(_decode_agy(raw),saved['schema'],provider='agy') != value['part']:
             raise ProviderError('Writing portion lacks an intact SUCCESS response')
         parts.append(value['part'])
     selected=saved.get('lessons')
     req=ProviderRequest(saved['lecture_id'],{}, {}, RequestedModel('agy','','','standard'),
                         source_pack={'evidence':[{'id':i} for i in saved['source_ids']]},
                         batch_context={'lessons':selected} if selected else None)
-    if not parts[-1]['complete'] or fingerprint(assemble(req,parts)) != saved['assembled_sha256']:
+    if not parts[-1]['complete'] or fingerprint(combine(parts)) != saved['assembled_sha256']:
         raise ProviderError('Writing portions do not form the complete recorded result')
     results=[event.get('result') for event in (json.loads(line) for line in record['stdout'].splitlines() if line.strip()) if event.get('event')=='result']
     if not results or any(not isinstance(r,dict) or r.get('status') != 'SUCCESS' for r in results):
         raise ProviderError('Writing stream includes a failed terminal response')
-    if _normalize_transport_notes(_decode_agy(results[-1]),saved['schema']) != parts[-1]:
+    if _normalize_transport_notes(_decode_agy(results[-1]),saved['schema'],provider='agy') != parts[-1]:
         raise ProviderError('Final writing portion differs from its terminal result')
-    return assemble(req,parts)
+    return combine(parts)
 
 
-def generate_parts(request: ProviderRequest) -> ProviderResponse:
+def generate_parts(request: ProviderRequest, *, joint=None) -> ProviderResponse:
     try:
-        return _generate_parts(request)
+        return _generate_parts(request, joint=joint) if joint else _generate_parts(request)
     except (OSError,ValueError,KeyError,TypeError) as error:
         raise ProviderError('Invalid writing checkpoint or local input; no automatic paid retry: '+str(error)[:300]) from error

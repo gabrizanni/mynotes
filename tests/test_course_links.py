@@ -89,6 +89,20 @@ def test_inventory_is_bounded_and_does_not_recurse_deeply(tmp_path):
     assert str(deeper / 'hidden slide.pdf') not in report['files']['materials']
 
 
+def test_inventory_cli_finds_sources_without_creating_workspace_or_reading_contents(tmp_path, monkeypatch, capsys):
+    root = tmp_path / 'course'; root.mkdir()
+    (root / 'Slides').mkdir(); (root / 'Slides' / 'lecture.pdf').write_bytes(b'not read')
+    (root / 'Audio').mkdir(); (root / 'Audio' / 'lesson.m4a').write_bytes(b'not read')
+    (root / 'Trascrizioni').mkdir(); (root / 'Trascrizioni' / 'lesson.txt').write_bytes(b'not read')
+    monkeypatch.setenv('MYNOTES_WORKSPACE', str(tmp_path / 'must-not-exist'))
+    monkeypatch.setattr(Path, 'read_bytes', lambda *a, **k: pytest.fail('Inventory must not read file contents'))
+    assert main(['inventory', str(root)]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['file_counts'] == {'materials': 1, 'personal_notes': 0, 'recordings': 1, 'transcripts': 1}
+    assert report['inventory_truncated'] is False
+    assert not (tmp_path / 'must-not-exist').exists()
+
+
 def test_read_only_link_on_missing_workspace_does_not_initialize(tmp_path, capsys):
     root = tmp_path / 'missing'; folder = tmp_path / 'folder'; folder.mkdir()
     assert main(['course', 'link', 'HIST', str(folder), '--workspace', str(root), '--dry-run']) == 2

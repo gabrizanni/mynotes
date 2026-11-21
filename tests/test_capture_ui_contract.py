@@ -81,7 +81,7 @@ print(json.dumps(out))
 }
 ''')
     source=Path(__file__).parents[1]/'setup/Sources/MyNotesSetup';binary=tmp_path/'bulk-test'
-    built=subprocess.run(['swiftc','-parse-as-library','-swift-version','5','-target','arm64-apple-macosx14.0','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'CaptureModel.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
+    built=subprocess.run(['swiftc','-parse-as-library','-swift-version','5','-target','arm64-apple-macosx14.0','-module-cache-path',str(tmp_path/'cache'),str(source/'CaptureDashboard.swift'),str(source/'WorkspaceModels.swift'),str(source/'CaptureModel.swift'),str(driver),'-o',str(binary)],capture_output=True,text=True)
     assert built.returncode==0,built.stderr
     env={**os.environ,'MYNOTES_PREFIX':str(prefix),'MYNOTES_WORKSPACE':str(tmp_path/'workspace'),'MYNOTES_HOME':str(tmp_path/'home'),'UI_TEST_ROOT':str(tmp_path), 'UI_FAIL_FIRST':'1' if fail_first else '0'}
     env.pop('MYNOTES_CAPTURE_PREVIEW',None)

@@ -152,14 +152,16 @@ def library(workspace, *, query=None, date=None, course=None):
                     if item["audio_available"] and item["id"] not in active_ids and item.get("event_id") not in active_ids:
                         audio_stat = Path(item['path']).stat()
                         verified = item.get('verified_audio') == [audio_stat.st_mtime_ns, audio_stat.st_size] and item.get('audio_sha256') == saved.get('audio_sha256')
-                        state = "COMPLETED" if verified or file_sha256(Path(item["path"])) == saved.get("audio_sha256") else "OUTDATED"
+                        # Polling only reads metadata. Full audio validation belongs to
+                        # explicit sync, import and transcription preparation.
+                        state = "COMPLETED" if verified else "OUTDATED"
                         if state == "COMPLETED":
                             if path.with_suffix(".txt").is_file():
                                 item["transcript_text"] = str(path.with_suffix(".txt"))
                             item["transcript_json"] = str(path)
                             item['quality_summary'] = saved.get('quality_summary')
                         else:
-                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio è cambiato dopo la trascrizione. Verifica la sorgente prima di ritrascrivere."})
+                            item["blocking_reasons"].append({"code": "AUDIO_CHANGED", "message": "L’audio richiede una verifica rispetto alla trascrizione salvata. Verifica la sorgente prima di riutilizzarla."})
                 else:
                     state = "NEEDS_REVIEW"
                     item["blocking_reasons"].append({"code": "TRANSCRIPT_INVALID", "message": "La trascrizione salvata non supera i controlli di integrità. Controlla il risultato prima di riutilizzarlo."})
@@ -284,6 +286,8 @@ def library(workspace, *, query=None, date=None, course=None):
         if state in {'QUEUED', 'RUNNING'}:
             item['can_transcribe'] = False
     values = items.values()
+    from .audio_sources import project
+    project(workspace, list(items.values()))
     if query:
         from .capture_calendar import contains
         values = [r for r in values if contains(r["title"], query)]
@@ -405,7 +409,7 @@ def status(workspace):
     return {'status': 'OK', **current_settings, 'ui_open': ui_open, 'jobs': jobs, 'wait_reason': reason, 'activity_counts': counts, 'history_events': history_events}
 
 
-def enqueue(workspace, parallel=None, *, recording_id=None):
+def enqueue(workspace, parallel=None, *, recording_id=None, ready_recording_ids=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
     if parallel is not None and (type(parallel) is not int or not 1 <= parallel <= 4):
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
@@ -414,16 +418,31 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         raise ValueError("Registrazione non trovata")
     sync(workspace)
     recordings = library(workspace)
+    added, skipped, reuse_archives, notices = 0, [], [], []
     if recording_id is not None:
         recordings = [item for item in recordings if item["id"] == recording_id]
         if not recordings:
             raise ValueError("Registrazione non trovata")
+    if ready_recording_ids is not None:
+        by_id = {item["id"]: item for item in recordings}
+        recordings = []
+        for identifier in dict.fromkeys(ready_recording_ids):
+            if identifier in by_id:
+                recordings.append(by_id[identifier])
+            else:
+                skipped.append({"recording_id": identifier, "reason": "SOURCE_MISSING",
+                                "blocking_reasons": [{"message": "Una sorgente audio non è più disponibile."}]})
     if parallel is not None:
         configure(workspace, parallel=parallel)
-    added, skipped, reuse_archives, notices = 0, [], [], []
     for item in recordings:
         state = item["transcription_status"]
-        if recording_id is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
+        if not item.get('source_selected', True):
+            skipped.append({"recording_id": item["id"], "reason": "SOURCE_SELECTION", "blocking_reasons": item["blocking_reasons"]})
+            continue
+        if ready_recording_ids is not None and (state != "NOT_STARTED" or "enqueue" not in item["actions"]):
+            skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]})
+            continue
+        if recording_id is None and ready_recording_ids is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
             continue
         if state != "COMPLETED" and not item["can_transcribe"]:
             skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]}); continue
@@ -443,7 +462,14 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         course = profile(workspace, item)
         if item.get('context_warning'):
             notices.append({'recording_id': item['id'], 'message': item['context_warning']})
-        sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
+        try:
+            sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
+        except FileNotFoundError:
+            if ready_recording_ids is None:
+                raise
+            skipped.append({"recording_id": item["id"], "reason": "SOURCE_MISSING",
+                            "blocking_reasons": [{"message": "Una sorgente audio non è più disponibile."}]})
+            continue
         transcript = asr_directory(workspace, item) / "transcript.json"
         if transcript.is_file():
             saved = _read(transcript, {})
@@ -460,6 +486,11 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         now = time.time()
         with database(workspace) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if ready_recording_ids is not None and conn.execute(
+                "SELECT 1 FROM jobs WHERE recording_id=? AND status IN ('QUEUED','RUNNING','CANCELLING')",
+                (item["id"],),
+            ).fetchone():
+                continue
             # Identical input/settings at another path are aliases, not two ASR runs.
             duplicate = conn.execute("SELECT id,status,result FROM jobs WHERE cache_key=?", (key,)).fetchone()
             if duplicate:
@@ -750,6 +781,12 @@ def change_job(workspace, identifier, action):
     """Serialize user transitions with runner claims; keep attempt files intact."""
     import signal
     from .recording_library import resolve_path
+    if action in {'retry', 'restart', 'recover'}:
+        target = next((j for j in status(workspace)['jobs'] if j['id'] == identifier), None)
+        if target:
+            source = next((i for i in library(workspace) if i['id'] == target['recording_id']), None)
+            if source and not source.get('source_selected', True):
+                raise ValueError('Scegli questa sorgente audio prima di avviare un nuovo tentativo.')
     pid = None
     if action not in {'retry', 'restart', 'recover', 'remove', 'cancel'}:
         raise ValueError('Azione di coda non riconosciuta')
@@ -817,10 +854,21 @@ def change_job(workspace, identifier, action):
 def add_parser(subparsers):
     parser = subparsers.add_parser("transcription-queue", help="local recording transcription queue")
     commands = parser.add_subparsers(dest="queue_command", required=True)
-    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "run", "worker"):
+    for action in ("library", "transcripts", "rename-transcript", "enqueue", "status", "pause", "resume", "clear", "configure", "heartbeat", "close", "retry", "restart", "recover", "remove", "cancel", "finish", "folder", "relink", "download", "associate", "rename", "inspect-audio", "import-audio", "prefer-audio", "exclude-audio", "restore-audio", "prepare-trash", "associate-audio", "verify-library", "lessons", "lesson-edit", "course-profile", "run", "worker"):
         command = commands.add_parser(action)
         command.add_argument("--workspace")
         command.add_argument("--json", action="store_true")
+        if action == 'course-profile':
+            command.add_argument('--course', required=True)
+        if action == 'lesson-edit':
+            command.add_argument('--file', required=True)
+        if action == 'associate-audio':
+            command.add_argument('--recording', required=True)
+            command.add_argument('--file', required=True)
+        if action in {'inspect-audio', 'import-audio'}:
+            command.add_argument('--file', required=True)
+        if action in {'prefer-audio', 'exclude-audio', 'restore-audio', 'prepare-trash'}:
+            command.add_argument('--recording', required=True)
         if action == "rename-transcript":
             command.add_argument("--transcript", required=True)
             command.add_argument("--name", required=True)
@@ -835,6 +883,7 @@ def add_parser(subparsers):
             target = command.add_mutually_exclusive_group(required=True)
             target.add_argument("--all-untranscribed", action="store_true")
             target.add_argument("--recording", help="enqueue only this recording ID")
+            target.add_argument("--ready-recording", action="append", help="enqueue only these ready recording IDs")
         if action in {"heartbeat", "close"}:
             command.add_argument("--session", required=True)
         if action in {"worker", "retry", "restart", "recover", "remove", "cancel"}:
@@ -856,7 +905,49 @@ def run_cli(args):
     ws, action = Workspace.from_value(args.workspace), args.queue_command
     if not ws.is_initialized():
         raise ValueError("Initialize MyNotes first")
-    if action == "rename-transcript":
+    if action == 'lessons':
+        from .lesson_registry import listing
+        value = {'status': 'OK', 'lessons': listing(ws)}
+    elif action == 'course-profile':
+        from .lesson_registry import profile
+        value = profile(ws, args.course)
+    elif action == 'lesson-edit':
+        from .lesson_registry import action as edit, renumber, move_audio, trash_completed, update_lesson, resume_renames
+        payload = json.loads(Path(args.file).read_text())
+        if payload.get('action') == 'resume-renames':
+            value = resume_renames(ws, payload['id'])
+        elif payload.get('action') in {'update', 'create'}:
+            value = update_lesson(ws, payload)
+        elif payload.get('action') == 'renumber':
+            value = renumber(ws, payload.get('changes'), preview=payload.get('preview') is True, expected=payload.get('token'))
+        elif payload.get('action') == 'move-audio':
+            value = move_audio(ws, payload.get('recording'), payload.get('target'), preview=payload.get('preview') is True, expected=payload.get('token'))
+        elif payload.get('action') == 'trash-completed':
+            value = trash_completed(ws, payload['id'], payload.get('completed', []))
+        else: value = edit(ws, payload)
+    elif action in {'inspect-audio', 'import-audio'}:
+        from .audio_sources import import_audio
+        from .lesson_registry import inspect_imports
+        payload = json.loads(Path(args.file).read_text())
+        if action == 'import-audio' and 'items' in payload:
+            from .lesson_registry import import_items
+            value = import_items(ws, payload['items'])
+        else:
+            value = ({'status': 'OK', 'files': inspect_imports(ws, payload['paths'])}
+                 if action == 'inspect-audio' else import_audio(ws, payload['paths'], event_id=payload.get('event_id'), course=payload.get('course'), lesson=payload.get('lesson')))
+
+    elif action == 'associate-audio':
+        from .audio_sources import associate
+        payload = json.loads(Path(args.file).read_text())
+        value = associate(ws, args.recording, event_id=payload.get('event_id'), course=payload.get('course'), lesson=payload.get('lesson'))
+    elif action in {'prefer-audio', 'exclude-audio', 'restore-audio', 'prepare-trash'}:
+        from .audio_sources import choose
+        value = choose(ws, args.recording, action)
+    elif action == "verify-library":
+        from .recording_library import sync
+        sync(ws)
+        value = {"status": "OK", "message": "File della raccolta verificati. Nessuna nuova trascrizione avviata."}
+    elif action == "rename-transcript":
         from .transcript_library import rename
         value = rename(ws, args.transcript, args.name)
     elif action == "transcripts":
@@ -865,9 +956,10 @@ def run_cli(args):
     elif action == "library":
         from .recording_library import sync, folder, options
         if getattr(args, 'sync', False): sync(ws)
-        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
+        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "lessons": __import__("mynotes.lesson_registry", fromlist=["listing"]).listing(ws), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
     elif action == "enqueue":
-        value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
+        value = enqueue(ws, args.parallel, recording_id=args.recording, ready_recording_ids=args.ready_recording)
+        launch_runner(ws)
     elif action == "status":
         value = status(ws)
     elif action == "clear":

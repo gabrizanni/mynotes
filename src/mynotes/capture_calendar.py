@@ -7,8 +7,41 @@ import json
 import re
 import unicodedata
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from .capture import CaptureError, iso, normalize_event, timestamp
+
+
+
+def prepare_event_timezones(component, fallback):
+    """Localize before recurrence/window filtering and reject silent TZID fallback."""
+    start = component.get("DTSTART")
+    for name in ("DTSTART", "DTEND", "RECURRENCE-ID", "RDATE", "EXDATE"):
+        properties = component.get(name)
+        if properties is None:
+            continue
+        for prop in properties if isinstance(properties, list) else [properties]:
+            explicit = prop.params.get("TZID")
+            zone_name = str(explicit) if explicit else fallback
+            try:
+                zone = ZoneInfo(zone_name)
+            except (KeyError, ValueError) as error:
+                raise CaptureError("Unknown event timezone: " + zone_name) from error
+            for item in getattr(prop, "dts", [prop]):
+                value = getattr(item, "dt", None)
+                if not isinstance(value, datetime):
+                    continue
+                if value.tzinfo is None or explicit:
+                    # An unqualified repeated/skipped local hour is unsafe for
+                    # recording. A UTC instant remains an unambiguous input.
+                    timestamp(value.replace(tzinfo=None), zone_name)
+                if value.tzinfo is None:
+                    item.dt = value.replace(tzinfo=zone)
+                    prop.params["TZID"] = zone_name
+    if start is not None and start.params.get("TZID"):
+        return str(start.params["TZID"])
+    value = component.decoded("DTSTART", None)
+    return "UTC" if isinstance(value, datetime) and value.tzinfo is not None else fallback
 
 
 def title_key(value):
@@ -86,6 +119,11 @@ def all_timed_events(data, source, old, courses, *, course_details=None, report=
         if not uid or dtstart is None:
             issue(uid, title, "INVALID_START" if uid else "INVALID_EVENT", "UID o inizio non valido", component)
             continue
+        try:
+            prepare_event_timezones(component, source["timezone"])
+        except (ValueError, TypeError, KeyError) as error:
+            issue(uid, title, "INVALID_TIMEZONE", str(error), component)
+            continue
         if component.errors:
             code = "INVALID_RECURRENCE" if any(key in component for key in ("RRULE", "RDATE", "RECURRENCE-ID")) else "INVALID_EVENT"
             issue(uid, title, code, "Proprietà dell’evento non valide", component)
@@ -155,6 +193,9 @@ def all_timed_events(data, source, old, courses, *, course_details=None, report=
             code, reason = "INVALID_END", "Orario di fine non valido"
             if not isinstance(dtend, datetime):
                 raise CaptureError(reason)
+            code, reason = "INVALID_TIMEZONE", "Fuso o orario locale non valido"
+            event_zone = prepare_event_timezones(component, source["timezone"])
+            code, reason = "INVALID_END", "Orario di fine non valido"
             window_start, window_end = timestamp(dtstart, source["timezone"]), timestamp(dtend, source["timezone"])
             if window_end <= window_start:
                 raise CaptureError(reason)
@@ -174,7 +215,7 @@ def all_timed_events(data, source, old, courses, *, course_details=None, report=
                 elif prior["courseCode"] == course and prior.get("lessonNumber") is not None:
                     number = prior["lessonNumber"]
             raw = {"id": identity, "sourceID": source["sourceID"], "courseCode": course, "lessonNumber": number,
-                   "title": title or "Lezione senza titolo", "startsAt": dtstart, "endsAt": dtend, "timezone": source["timezone"],
+                   "title": title or "Lezione senza titolo", "startsAt": dtstart, "endsAt": dtend, "timezone": event_zone,
                    "associationState": "resolved" if course else "ambiguous" if candidates else "pending", "candidateCourses": candidates,
                    "calendarUID": uid, "originalOccurrence": iso(timestamp(original, source["timezone"]))}
             if not prior or prior.get("recordingID"):

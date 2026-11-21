@@ -127,6 +127,23 @@ def merge_section(base, current, generated, base_doc, current_doc, generated_doc
     for i, j, k, l in user:
         overlaps = [(x, y, z, w) for x, y, z, w in writer if _overlap(i, j, x, y)]
         if overlaps:
+            # A historical renderer may replace an entire XML section while
+            # retaining a paragraph's exact words. That uniquely unchanged
+            # paragraph is a deterministic anchor for the user's text/format
+            # additions, even though old/new paragraph styles differ. Never
+            # guess a corresponding paragraph from fuzzy topic similarity.
+            if len(overlaps) == 1 and j-i == l-k == 1:
+                x, y, z, w = overlaps[0]
+                original_text = _plain_text(base[i])
+                personal_text = _plain_text(current[k])
+                matches = [offset for offset, node in enumerate(generated[z:w])
+                           if original_text and _plain_text(node) == original_text]
+                if personal_text is not None and len(matches) == 1:
+                    replacement = next((nodes for left, right, nodes in operations if (left, right) == (x, y)), None)
+                    if replacement is not None:
+                        replacement[matches[0]] = deepcopy(current[k])
+                        preserved.append({'from': i, 'to': j, 'reason': 'Unique unchanged paragraph across renderer styles'})
+                        continue
             if len(overlaps) == 1 and j-i == l-k == 1:
                 x, y, z, w = overlaps[0]
                 if (i, j) == (x, y) and w-z == 1:
@@ -162,6 +179,17 @@ def _baseline(workspace, code, lecture, expected):
         path = Path(record['path'])
         if not path.is_file() or file_sha256(path) != record['sha256']:
             raise PublicationError('Generated Word baseline is missing or changed; personal edits cannot be compared safely')
+        if record.get('import_receipt'):
+            receipt_path=Path(record['import_receipt'])
+            if (not receipt_path.resolve().is_relative_to(workspace.archives_dir.resolve())
+                    or file_sha256(receipt_path)!=record.get('import_receipt_sha256')):
+                raise PublicationError('Generated baseline import receipt changed')
+            receipt=json.loads(receipt_path.read_text());journal=Path(receipt['journal'])
+            if (receipt.get('kind')!='verified_generated_baseline_import' or receipt.get('course_code')!=code
+                    or lecture not in receipt.get('lectures',[]) or receipt.get('document_sha256')!=record['sha256']
+                    or not journal.resolve().is_relative_to(workspace.archives_dir.resolve())
+                    or file_sha256(journal)!=receipt['journal_sha256']):
+                raise PublicationError('Generated baseline import provenance changed')
         return Document(path)
     target = _target(_course(workspace.configuration_store().load(), code), workspace)
     for transaction in _transactions(workspace, target):
@@ -173,11 +201,15 @@ def _baseline(workspace, code, lecture, expected):
     return None
 
 
-def build_course_revision(workspace, lectures):
+def build_course_revision(workspace, lectures, *, timeout_seconds=None):
     from . import publication as pub
     lectures = sorted(set(lecture.upper() for lecture in lectures), key=lambda value: parse_lecture_id(value)[1])
     if not lectures or len({parse_lecture_id(value)[0] for value in lectures}) != 1:
         raise pub.PublicationError('A cumulative update requires lessons from one course')
+    from .lesson_registry import assert_generation_allowed
+    for lecture in lectures:
+        course_code, number = parse_lecture_id(lecture)
+        assert_generation_allowed(workspace, course_code, number)
     code = parse_lecture_id(lectures[0])[0]
     course = pub._course(workspace.configuration_store().load(), code)
     target = pub._target(course, workspace)
@@ -189,6 +221,9 @@ def build_course_revision(workspace, lectures):
     baseline_hash = file_sha256(target) if target.is_file() else None
     current = Document(target) if target.is_file() else pub._new_document(course, pub.effective_style(workspace.configuration_store().load(), code))
     generated = Document(target) if target.is_file() else pub._new_document(course, pub.effective_style(workspace.configuration_store().load(), code))
+    # Existing handouts may predate the shared MyNotes style names. Configure
+    # the private generated copy exactly as the ordinary Word builder does.
+    pub._configure_document(generated, pub.effective_style(workspace.configuration_store().load(), code))
     sources, conflicts, preserved, applied = {}, {}, {}, []
     payloads = {}
     for lecture in lectures:
@@ -197,7 +232,8 @@ def build_course_revision(workspace, lectures):
         related = set(payload.get('related_lessons', [])) - set(lectures)
         if related:
             raise pub.PublicationError('Related published lessons require the same coordinated revision: ' + ', '.join(sorted(related)))
-        profile = pub.effective_style(workspace.configuration_store().load(), code)
+        from .memory import candidate_style
+        profile = candidate_style(workspace.configuration_store().load(), code, payload)
         limit = payload.get('request_options', {}).get('image_limit')
         if limit is None: limit = profile.get('image_limit')
         count = sum(v.get('decision') == 'include' for v in payload['notes'].get('visual_decisions', []))
@@ -205,7 +241,7 @@ def build_course_revision(workspace, lectures):
             raise pub.PublicationError('Candidate exceeds the effective image policy; review it before cumulative update')
         payloads[lecture] = (payload, pack)
         sources[lecture] = file_sha256(path)
-        pub._replace_or_append(generated, payload['notes'], pack, language=course.get('languages', {}).get('notes', 'en'), recap_language=pub.effective_style(workspace.configuration_store().load(), code).get('recap_language', 'it'))
+        pub._replace_or_append(generated, payload['notes'], pack, language=profile.get('notes_language') or course.get('languages', {}).get('notes', 'en'), recap_language=profile.get('recap_language', 'it'))
     directory = workspace.runs_dir / '_course_updates' / code / uuid.uuid4().hex
     directory.mkdir(parents=True, exist_ok=True)
     raw = directory / 'generated.docx'; generated.save(raw)
@@ -237,14 +273,16 @@ def build_course_revision(workspace, lectures):
         formula = bool(notes.get('formula') or notes.get('formulas') or any(b.get('kind') == 'formula' for b in notes.get('blocks', [])))
         tables = [b['rows'] for b in notes.get('blocks', []) if b.get('kind') == 'table'] or ([notes['table']] if notes.get('table') else [])
         structure[lecture] = pub._docx_structure(output, lecture, visuals, formula, tables)
-    render = pub._render_and_validate(output, directory/'render')
+    render = (pub._render_and_validate(output, directory/'render', timeout_seconds=timeout_seconds)
+              if timeout_seconds is not None else pub._render_and_validate(output, directory/'render'))
     if (file_sha256(target) if target.is_file() else None) != baseline_hash or any(file_sha256(workspace.runs_dir/l/'lecture_notes.candidate.json') != digest for l, digest in sources.items()):
         raise pub.PublicationError('Word or notes changed during the cumulative build; no file was overwritten')
     validation = {'lecture_id': lectures[0], 'lecture_ids': applied, 'requested_lectures': lectures, 'mode': 'course_update', 'target': str(target),
         'candidate': str(output), 'candidate_hash': file_sha256(output), 'baseline_hash': baseline_hash,
         'source_candidate_hashes': sources, 'generated_baseline': str(raw), 'generated_baseline_sha256': file_sha256(raw),
         'structure': structure, 'render': render, 'conflicts': conflicts, 'preserved_edits': preserved,
-        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied}, 'validated_at': now_compact_utc()}
+        'content_hashes': {l: pub._content_fingerprint(payloads[l][0]) for l in applied},
+        'renderer_hash': pub.word_renderer_hash(), 'validated_at': now_compact_utc()}
     atomic_json_write(output.with_suffix('.validation.json'), validation)
     return {'status': 'WORD_CANDIDATE_VALIDATED', **validation}
 
@@ -273,6 +311,7 @@ def publish_course_revision(workspace, candidate_path):
             'baseline_hash': validation['baseline_hash'], 'status': 'PREPARED', 'created_at': now_compact_utc(),
             'content_hashes': validation['content_hashes'], 'content_hash': validation['content_hashes'][lectures[0]],
             'publication_state': pub._publication_state(workspace, target)}
+        transaction['renderer_hash'] = validation.get('renderer_hash')
         originals_dir = candidate_path.parent / 'original-candidates'
         originals_dir.mkdir(exist_ok=True)
         transaction['original_candidates'] = {}
@@ -379,10 +418,14 @@ def recover_course_revision(workspace, transaction):
     return transaction
 
 
-def update_course(workspace, lectures):
+def update_course(workspace, lectures, *, timeout_seconds=None, before_publish=None):
     from . import publication as pub
     if isinstance(lectures, str): lectures = [lectures]
     lectures = [value.upper() for value in lectures]
+    from .lesson_registry import assert_generation_allowed
+    for lecture in lectures:
+        course_code, number = parse_lecture_id(lecture)
+        assert_generation_allowed(workspace, course_code, number)
     code = parse_lecture_id(lectures[0])[0]
     course = pub._course(workspace.configuration_store().load(), code); target = pub._target(course, workspace)
     transactions = pub._transactions(workspace, target)
@@ -395,13 +438,17 @@ def update_course(workspace, lectures):
         unchanged = True
         for lecture in lectures:
             payload, _ = pub._load_candidate(workspace, lecture)
-            previous = next((t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')}).get(lecture)
-                             for t in transactions if t.get('status') == 'COMPLETED' and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), None)
-            unchanged &= bool(payload.get('published_to_word')) and previous == pub._content_fingerprint(payload)
+            previous = next((t for t in transactions if t.get('status') == 'COMPLETED'
+                             and lecture in t.get('content_hashes', {t.get('lecture_id'): t.get('content_hash')})), {})
+            content = previous.get('content_hashes', {previous.get('lecture_id'): previous.get('content_hash')}).get(lecture)
+            unchanged &= (bool(payload.get('published_to_word')) and content == pub._content_fingerprint(payload)
+                          and previous.get('renderer_hash') == pub.word_renderer_hash())
         if unchanged:
             return {'status': 'SKIPPED', 'lecture_id': lectures[0], 'lectures': lectures, 'output': str(target), 'reason': 'already_published'}
-    built = build_course_revision(workspace, lectures)
+    built = build_course_revision(workspace, lectures, timeout_seconds=timeout_seconds)
     if built['status'] == 'PERSONAL_CONTENT_CONFLICT': return built
     if course['publication']['mode'] == 'review':
         return {**built, 'status': 'AWAITING_APPROVAL', 'next_action': 'Show the cumulative candidate and publish only after approval.'}
+    if before_publish is not None:
+        before_publish(built)
     return publish_course_revision(workspace, Path(built['candidate']))

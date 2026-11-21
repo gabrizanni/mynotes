@@ -139,17 +139,19 @@ def test_batch_correction_can_run_more_than_ten_minutes_after_eight_minute_writi
     clock = [1.]
     monkeypatch.setattr(generation_budget.time, 'monotonic', lambda: clock[0])
     ws, _, selection = workspace_and_deck(tmp_path, lessons=1, slides=2)
+    # Freeze the historical full-deck validation contract under test.
+    legacy=ws.configuration_store().load();legacy['style']['profile']['slide_scope']='all_supplied';ws.configuration_store().save(legacy)
     class Writer:
         calls = []
         def generate(self, req):
             self.calls.append(req.phase)
             if req.phase == 'writing':
-                assert req.timeout_seconds == 1200
+                assert req.timeout_seconds == float("inf")
                 clock[0] += 480
                 notes = notes_for(req,'OPS-L01')
                 notes['blocks'] = [b for b in notes['blocks'] if b.get('evidence_ids') != ['S002']]
                 return ProviderResponse({'lessons':[{'lecture_id':'OPS-L01','notes':notes}]},'codex','test-model','high')
-            assert req.timeout_seconds == 1200
+            assert req.timeout_seconds == float("inf")
             clock[0] += 700
             task = req.batch_context['repair_task']
             anchor = next(r for r in task['anchors'] if r['block']['kind'] == 'paragraph')

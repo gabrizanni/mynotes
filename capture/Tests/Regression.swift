@@ -8,6 +8,37 @@ struct Regression {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("capture-regression-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        // No microphone or system-clock changes: synthesize instants and notifications.
+        let firstHour = ISO8601DateFormatter().date(from: "2026-10-25T02:30:00+02:00")!
+        let repeatedHour = ISO8601DateFormatter().date(from: "2026-10-25T02:30:00+01:00")!
+        var folded = Lecture(id: "fold", sourceID: "static", courseCode: "QNT9", lessonNumber: 1,
+                             startsAt: firstHour, endsAt: repeatedHour, recordAt: firstHour, stopAt: repeatedHour,
+                             timezone: "Europe/Rome", title: "Repeated hour", eligibility: "SCHEDULED", reason: "")
+        precondition(folded.isCurrent(firstHour) && folded.isCurrent(firstHour.addingTimeInterval(3599)))
+        precondition(!folded.isCurrent(repeatedHour))
+        folded.timezone = "Asia/Kolkata"
+        precondition(folded.isCurrent(firstHour) && !folded.isCurrent(repeatedHour), "Display timezone cannot move deadlines")
+        let clockRoot = root.appendingPathComponent("clock-workspace")
+        let clockConfig = CaptureConfiguration(revision: 1, enabled: false, paused: true, refreshHours: 6,
+                                               recordBeforeSeconds: 0, recordAfterSeconds: 120,
+                                               outputDirectory: clockRoot.appendingPathComponent("recordings").path,
+                                               stageDirectory: clockRoot.appendingPathComponent("staging").path,
+                                               pythonExecutable: "/usr/bin/false", courseCodes: ["QNT9"])
+        try CaptureJSON.save(clockConfig, to: clockRoot.appendingPathComponent("config/capture.json"))
+        try CaptureJSON.save(Schedule(schemaVersion: 1, revision: 1, events: []), to: clockRoot.appendingPathComponent("state/capture/schedule.json"))
+        do {
+            let clockEngine = try CaptureEngine(workspace: clockRoot, authorization: { false })
+            clockEngine.start()
+            defer { clockEngine.shutdown() }
+            for name in [Notification.Name.NSSystemClockDidChange, .NSSystemTimeZoneDidChange, .NSCalendarDayChanged] {
+                clockEngine.evaluate(now: Date().addingTimeInterval(-3600))
+                NotificationCenter.default.post(name: name, object: nil)
+                try await Task.sleep(nanoseconds: 20_000_000)
+                let status = try CaptureJSON.load(RuntimeStatus.self, from: clockRoot.appendingPathComponent("state/capture/runtime.json"))
+                precondition(abs(status.updatedAt.timeIntervalSinceNow) < 5, "Clock changes must reconcile immediately")
+                precondition(!status.recording && status.title == "Capture disabled" && clockEngine.paused, "Clock changes preserve pause and disablement")
+            }
+        }
         let now = Date()
         let standalone = Lecture(id: "free", sourceID: "manual", courseCode: nil, lessonNumber: nil,
                                  startsAt: now, endsAt: now.addingTimeInterval(60), recordAt: now, stopAt: now.addingTimeInterval(60),

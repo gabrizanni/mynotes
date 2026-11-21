@@ -244,7 +244,10 @@ def assign(store, payload):
 
 def linked_recording(workspace, lecture_id):
     from .transcription_queue import library
-    matches=[r for r in library(workspace) if r.get('lecture_id')==lecture_id]
+    candidates=[r for r in library(workspace) if r.get('lecture_id')==lecture_id]
+    matches=[r for r in candidates if r.get('source_selected', True)]
+    if candidates and not matches:
+        raise capture.CaptureError('More than one recording identifies this lecture; scegli una sorgente in MyNotes' if len(candidates) > 1 else 'Scegli la sorgente audio della lezione prima di preparare gli appunti')
     if len(matches)>1:
         raise capture.CaptureError('More than one recording identifies this lecture')
     return matches[0] if matches else None

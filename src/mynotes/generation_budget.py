@@ -15,9 +15,19 @@ import time
 
 from .utils import atomic_json_write, file_sha256
 
-MODEL_PHASE_SECONDS = 1200
+# Elapsed model time is accounted, but no longer stops productive writing.
+MODEL_PHASE_SECONDS = math.inf
+SOFT_PROGRESS_MESSAGE = (
+    "PROGRESS CHECK / LOOP RECOVERY: Continue while making useful progress; elapsed time alone is not a reason to stop. "
+    "If you notice repeated identical reads, plans, tool errors or reasoning without new source-grounded content, "
+    "break that loop now: identify the last completed section/checkpoint, choose a different permitted approach "
+    "and continue with the next missing topic. Preserve valid completed work; do not restart the whole lesson, "
+    "repeat paid generation, change model, weaken validation or omit required sources. "
+    "If a real external blocker remains after a different approach, preserve the checkpoint and report the specific blocker. "
+    "This is a progress reminder, not permission for extra tools or retries; keep the required response schema."
+)
 LOCAL_CHECK_SECONDS = 120
-CLI_PHASE_TIMEOUT = "21m"  # The application watchdog, not CLI rounding, owns 20m.
+CLI_PHASE_TIMEOUT = "0"  # Agy: wait until completion; no fixed model deadline.
 
 
 class GenerationBudgetError(RuntimeError):
@@ -30,13 +40,14 @@ def _seconds(value, label):
     return float(value)
 
 
-def phase_limit(phase: str) -> int:
+def phase_limit(phase: str) -> float:
     return LOCAL_CHECK_SECONDS if phase == "local_checks" else MODEL_PHASE_SECONDS
 
 
 def invocation_timeout(timeout_seconds: float | None) -> float:
-    return min(MODEL_PHASE_SECONDS, MODEL_PHASE_SECONDS if timeout_seconds is None
-               else _seconds(timeout_seconds, "remaining phase seconds"))
+    if timeout_seconds is None or timeout_seconds == math.inf:
+        return math.inf
+    return _seconds(timeout_seconds, "remaining phase seconds")
 
 
 def _epoch(value):
@@ -176,7 +187,7 @@ class PhaseBudget:
 
     def snapshot(self):
         return {"schema_version": 2, "lessons": self.lessons, "phases": dict(self.used),
-                "phase_limit_seconds": MODEL_PHASE_SECONDS, "local_check_limit_seconds": LOCAL_CHECK_SECONDS,
+                "phase_limit_seconds": None, "model_timeout_policy": "soft_progress", "local_check_limit_seconds": LOCAL_CHECK_SECONDS,
                 "active_phase": self.active_phase, "used_seconds": sum(self.used.values()),
                 "historical_receipts": self.receipts, "model_block_reasons": list(self.model_block_reasons)}
 

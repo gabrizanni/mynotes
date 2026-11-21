@@ -228,7 +228,10 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
               let launcherText = try? String(contentsOf: launcher, encoding: .utf8), launcherText.contains("MyNotes managed launcher"),
               let data = try? Data(contentsOf: runtime.appendingPathComponent("setup.json")),
               let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        return receipt["version"] as? String == Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+        // A local app update can retain an older setup receipt. Read the actual
+        // selected runtime rather than making an installed app look unprepared.
+        let installed = runtime.appendingPathComponent("app/current/installation.json")
+        return receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path)
     }
     func readProgress() {
         guard busy, let startedAt,
@@ -333,15 +336,28 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
             timer?.invalidate(); busy = false
         }
     }
-    func openChat() {
+    func openChat(message: String? = nil) {
+        Task {
+            do { try await launchChat(message: message) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func launchChat(message: String? = nil) async throws {
+        try savePreferences()
+        // Terminal consumes the document asynchronously. Each launch has its own
+        // message, even if a different course chat opens immediately afterward.
+        let name = message == nil ? "Open MyNotes.command" : "MyNotes Chat \(UUID().uuidString).command"
+        let path = runtime.appendingPathComponent(name)
+        let cleanup = message == nil ? "" : "/bin/rm -f -- \"$0\"\n"
+        let script = "#!/bin/zsh\n" + cleanup + "export MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
         do {
-            try savePreferences()
-            let path = runtime.appendingPathComponent("Open MyNotes.command")
-            let script = "#!/bin/zsh\nexport MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + "\n"
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
-            NSWorkspace.shared.open(path)
-        } catch { self.error = error.localizedDescription }
+            try await ChatTerminal.open(script: path, directory: runtime)
+        } catch {
+            if message != nil { try? FileManager.default.removeItem(at: path) }
+            throw error
+        }
     }
     func openLogin() {
         loginPending = true
@@ -356,17 +372,22 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
     }
 }
 
-private struct MyNotesRootView: View {
-    @CaptureViewState<String> private var section = ProcessInfo.processInfo.environment["MYNOTES_INITIAL_SECTION"] == "capture" ? "capture" : "notes"
-    var body: some View {
-        TabView(selection: $section) {
-            MyNotesHomeView(active: section == "notes").tabItem { Label("MyNotes", systemImage: "book.closed") }.tag("notes")
-            CaptureView(active: section == "capture").tabItem { Label("Capture", systemImage: "mic") }.tag("capture")
-        }.frame(minWidth: 1000, minHeight: 700).background(CaptureWindowLease().frame(width: 0, height: 0))
-    }
-}
 @main struct MyNotesSetup: App {
+    @StateObject private var state = WorkspaceState()
+    private var compactPreview: Bool { ProcessInfo.processInfo.environment["MYNOTES_UI_PREVIEW"] == "1" && ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_SIZE"] == "compact" }
+    private var previewAppearance: ColorScheme? {
+        guard ProcessInfo.processInfo.environment["MYNOTES_UI_PREVIEW"] == "1" else { return nil }
+        switch ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_APPEARANCE"] {
+        case "light": return .light
+        case "dark": return .dark
+        default: return nil
+        }
+    }
     var body: some Scene {
-        Window("MyNotes", id: "mynotes-main") { MyNotesRootView() }.defaultSize(width: 1040, height: 780).windowResizability(.contentMinSize)
+        Window("MyNotes", id: compactPreview ? "mynotes-preview-compact" : "mynotes-main") {
+            MyNotesWorkspaceView(state: state, model: state.capture, setup: state.setup)
+                .preferredColorScheme(previewAppearance)
+        }.defaultSize(width: compactPreview ? 900 : 1120, height: compactPreview ? 620 : 780).windowResizability(.contentMinSize)
+        Settings { WorkspaceSettingsView(model: state.capture, setup: state.setup).preferredColorScheme(previewAppearance) }
     }
 }

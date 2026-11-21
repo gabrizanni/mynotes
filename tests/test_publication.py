@@ -50,7 +50,7 @@ def prepared(tmp_path: Path, *, visual: bool = False, formula: str | None = None
     return workspace, tmp_path / "handouts" / "OPS7_COURSE_NOTES.docx"
 
 
-def fake_render(path: Path, output: Path) -> dict:
+def fake_render(path: Path, output: Path, **_kwargs) -> dict:
     output.mkdir(parents=True, exist_ok=True); pdf = output / f"{path.stem}.pdf"; pdf.write_bytes(b"test")
     return {"pdf": str(pdf), "pages": [{"page": 1, "characters": 1, "images": 0}], "renderer": "test"}
 
@@ -202,6 +202,29 @@ def test_equation_text_is_literal_and_visual_caption_uses_filename(tmp_path, mon
     assert "Demand satisfied from stock" in xml
     assert 'm:nor m:val="1"' in xml
     assert str(tmp_path) not in " ".join(paragraph.text for paragraph in document.paragraphs)
+
+
+def test_rendered_source_ids_stay_in_metadata_and_caption_uses_description(tmp_path):
+    from mynotes.publication import _display_source_citations, _new_document, append_note_blocks
+    from PIL import Image
+    assert _display_source_citations('Evidence (S001, T002).',['S001','T002'])=='Evidence.'
+    assert _display_source_citations('Value (S001, T999).',['S001','T002'])=='Value (S001, T999).'
+    assert _display_source_citations('Keep (37%) and ($1).',['S001'])=='Keep (37%) and ($1).'
+    assert _display_source_citations('Code `(T002)` and math $f(T002)$.',['T002'])=='Code `(T002)` and math $f(T002)$.'
+    image=tmp_path/'graph.png';Image.new('RGB',(50,50),'orange').save(image)
+    notes={'blocks':[{'kind':'paragraph','text':'Evidence (S001, T002).','evidence_ids':['S001','T002']},
+                     {'kind':'visual','visual_id':'S001','text':'Six related dimensions.','evidence_ids':['S001']}],
+           'visual_decisions':[{'evidence_id':'S001','decision':'include','reason':'Already present; internal inspection details.'}]}
+    before=json.dumps(notes,sort_keys=True);document=_new_document({}, {})
+    notes['blocks'].insert(1,{'kind':'paragraph','text':'Global source (T2151, T2161).','evidence_ids':['T936','T946']})
+    before=json.dumps(notes,sort_keys=True)
+    append_note_blocks(document,notes,{'_render_reference_ids':['T2151','T2161'],
+        'visuals':[{'evidence_id':'S001','image_path':str(image),'source_file':'deck.pdf','page':2}]})
+    text='\n'.join(p.text for p in document.paragraphs)
+    assert 'Evidence.' in text and '(S001' not in text
+    assert 'Global source.' in text and 'T2151' not in text
+    assert 'Figure — Six related dimensions. (deck.pdf, page 2)' in text
+    assert 'internal inspection' not in text and json.dumps(notes,sort_keys=True)==before
 
 
 def test_study_profile_uses_neutral_template_and_character_style(tmp_path, monkeypatch) -> None:

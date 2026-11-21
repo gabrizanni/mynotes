@@ -21,7 +21,7 @@ private enum CaptureSheet: Equatable, Identifiable {
 }
 
 struct CaptureView: View {
-    @StateObject private var model = CaptureModel()
+    @ObservedObject var model: CaptureModel
     @CaptureViewState<String?> private var selected: String?
     @CaptureViewState<String> private var query = ""
     @CaptureViewState<Bool> private var showCancelled = false
@@ -49,6 +49,9 @@ struct CaptureView: View {
                     Spacer()
                     Button { model.notice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).help("Chiudi messaggio")
                 }
+            }
+            if model.recorderRecoveryBlocked {
+                Label("Riattivazione di Capture sospesa mentre Digiexam è aperto. Chiudi Digiexam e torna a Capture per riprendere.", systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary)
             }
             if let warning = model.refreshWarning { Label(warning, systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             if let snapshot {
@@ -126,11 +129,14 @@ struct CaptureView: View {
             Menu("Opzioni Capture") {
                 Button("Nuovo corso…") { sheet = .course }.disabled(model.busy || model.isPreview)
                 if let snapshot {
+                    if snapshot.enabled && snapshot.running == false {
+                        Button("Riavvia Capture") { Task { await model.restoreRecorderIfNeeded(retry: true) } }.disabled(unavailable || model.recorderRecoveryBlocked)
+                    }
                     Button(snapshot.paused ? "Riprendi calendario" : "Sospendi calendario") { Task { await model.perform(snapshot.paused ? "resume" : "pause") } }.disabled(!snapshot.enabled || model.busy || model.isPreview)
                     Button(snapshot.enabled ? "Disattiva Capture" : "Attiva Capture") { Task { await model.perform(snapshot.enabled ? "disable" : "enable") } }.disabled(snapshot.isRecording || snapshot.isExporting || model.busy || model.isPreview)
                 }
             }.fixedSize()
-            Button("Registra ora", systemImage: "record.circle") { openLesson(.immediate) }.buttonStyle(.borderedProminent).disabled(unavailable || snapshot?.running != true || snapshot?.runtime.recording == true || snapshot?.runtime.exporting == true)
+            Button("Registra ora", systemImage: "record.circle") { openLesson(.immediate) }.buttonStyle(.borderedProminent).disabled(unavailable || model.recorderRecoveryBlocked || snapshot?.canStartManualRecording != true)
         }
     }
     private var unavailable: Bool { model.busy || model.isPreview }
@@ -262,7 +268,7 @@ struct CaptureView: View {
     }
 }
 
-private struct CaptureLessonForm: View {
+struct CaptureLessonForm: View {
     @ObservedObject var model: CaptureModel
     let snapshot: CaptureSnapshot
     let event: CaptureEvent?
@@ -362,7 +368,7 @@ private struct CaptureMappingDraft: Identifiable {
     var courseCode: String
     var firstLesson = 1
 }
-private struct CaptureCalendarForm: View {
+struct CaptureCalendarForm: View {
     @ObservedObject var model: CaptureModel
     let snapshot: CaptureSnapshot
     let repairing: String?

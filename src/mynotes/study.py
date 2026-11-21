@@ -264,7 +264,8 @@ def _verify_snapshots(record: dict) -> None:
 
 
 def build_study_candidate(workspace: Workspace, course_code: str, candidate_path: Path,
-                          manifest_path: Path, output_path: Path, *, render: bool = True) -> dict:
+                          manifest_path: Path, output_path: Path, *, render: bool = True,
+                          writing_snapshot: tuple[dict, dict] | None = None) -> dict:
     candidate_path, manifest_path, output_path = map(lambda p: Path(p).expanduser().resolve(), (candidate_path, manifest_path, output_path))
     if output_path.suffix.lower() != ".docx":
         raise StudyError("Study deliverables use .docx; other formats require an explicit separate export")
@@ -278,6 +279,8 @@ def build_study_candidate(workspace: Workspace, course_code: str, candidate_path
     configuration = workspace.configuration_store().load()
     course = _course(configuration, course_code)
     profile = effective_style(configuration, course_code)
+    if writing_snapshot is not None:
+        course, profile = deepcopy(writing_snapshot)
     language = str(course.get("languages", {}).get("notes", "en"))
     recap_language = str(profile.get("recap_language", "it"))
     if recap_language == "same_as_notes":
@@ -481,8 +484,8 @@ def generate_study_candidate(workspace: Workspace, course_code: str, manifest_pa
     if manifest["course"] != code:
         raise StudyError("Manifest does not match requested course")
     configuration = workspace.configuration_store().load()
-    course = _course(configuration, code)
-    style = effective_style(configuration, code)
+    from .memory import writing_configuration
+    course, style = writing_configuration(configuration, code)
     requested = resolve_model(configuration, provider, quality)
     fingerprint = hashlib.sha256(json.dumps({"manifest": manifest, "requested": requested.__dict__, "course": course, "style": style}, sort_keys=True).encode()).hexdigest()
     run_dir = workspace.runs_dir / "studies" / fingerprint
@@ -507,5 +510,5 @@ def generate_study_candidate(workspace: Workspace, course_code: str, manifest_pa
             atomic_json_write(run_dir / "generation.json", {"requested": requested.__dict__, "actual_model": {"provider": response.provider, "model": response.model, "effort": response.effort},
                                                             "usage": response.usage, "attempt_path": response.attempt_path, "shared_invocation": True})
             reused = False
-    result = build_study_candidate(workspace, code, candidate_path, manifest_path, output_path, render=render)
+    result = build_study_candidate(workspace, code, candidate_path, manifest_path, output_path, render=render, writing_snapshot=(course, style))
     return {**result, "generation_reused": reused, "editorial_review_required": True}

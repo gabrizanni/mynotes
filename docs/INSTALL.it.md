@@ -6,7 +6,7 @@ Il setup DMG richiede **Apple Silicon e macOS 14+**. Include Capture. La version
 
 1. Scarica il DMG desiderato da [GitHub Releases](https://github.com/gabrizanni/mynotes/releases).
 2. Aprilo, trascina **MyNotes** in **Applicazioni** e apri **MyNotes** da lì.
-3. Segui la preparazione dei componenti, scegli l’agente e premi **Apri la chat**.
+3. Apri **Impostazioni → Agenti AI**, prepara i componenti e scegli l’agente. Poi usa **Apri chat esterna** nella sidebar.
 
 Il setup prepara Python, pacchetti bloccati, trascrizione locale e strumenti Word nelle cartelle gestite da MyNotes. Non servono prima Python, Homebrew, Xcode o un agente ereditato da un altro progetto. La preparazione richiede internet e mostra l’avanzamento. Se chiudi l’app, i passaggi completati restano salvati; dopo un problema di rete o spazio puoi riprovare.
 
@@ -92,3 +92,17 @@ una prova con MyNotes nuovo, non con un account macOS vuoto. La prova autorizzat
 ## Installer ZIP manuale (avanzato / release precedenti)
 
 Da uno ZIP standalone estratto puoi eseguire `zsh scripts/install-mynotes.sh`. Questo percorso richiede macOS, Python 3.12+ e `uv` già disponibili e non offre il setup dei componenti del DMG. Opzioni: `--prefix PERCORSO`, `--app-home PERCORSO`, `--python PERCORSO`, `--offline`, `--dry-run`, `--list-versions` e `--rollback VERSIONE`. Offline richiede pacchetti bloccati già in cache. Da un clone sorgente usa invece `uv sync --locked`: il clone non è un archivio standalone.
+
+### Evitare copie duplicate nei risultati di avvio
+
+Al termine di installazione e rollback l’installer esegue
+`scripts/cleanup_launch_services.py`: registra soltanto MyNotes installato e il
+Capture del runtime selezionato, rimuovendo dal registro macOS le copie obsolete
+(compresi alias, runtime precedenti e bundle annidati nelle build). I file dei
+backup e le firme non vengono modificati. Anche i builder ripuliscono le voci di
+avvio dopo la compilazione. Le installazioni isolate con `--app-home` personalizzato
+non modificano il registro dell’utente.
+
+La consegna di un aggiornamento comprende sempre un controllo finale di queste
+due voci e l’archiviazione delle copie di build fuori uso: non lasciare bundle
+annidati `.app` dentro cartelle semplicemente rinominate `.app.disabled`.

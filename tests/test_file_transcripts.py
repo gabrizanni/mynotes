@@ -98,9 +98,11 @@ def test_failed_secondary_saves_primary_and_empty_primary_still_fails(setup,monk
     assert other.exists() and not (folder/'Trascrizioni'/'Dubbi'/'No text.txt').exists()
 
 
-def test_mtime_change_does_not_invalidate_and_new_content_does(setup):
+def test_metadata_change_requires_explicit_verification_and_keeps_transcript(setup):
     ws,folder,engine=setup;audio(folder);item=queue.library(ws)[0];transcribe(ws,item['id'])
     current=queue.library(ws)[0];p=Path(current['path']);st=p.stat();os.utime(p,(st.st_atime,st.st_mtime+100))
+    assert queue.library(ws)[0]['transcription_status']=='OUTDATED'
+    lib.sync(ws)
     assert queue.library(ws)[0]['transcription_status']=='COMPLETED'
     p.write_bytes(p.read_bytes()+b'changed');assert queue.library(ws)[0]['transcription_status']=='OUTDATED'
     assert Path(current['export_text']).exists() and engine.calls==1
@@ -135,8 +137,9 @@ def test_export_write_failure_offers_save_retry_without_asr(setup,monkeypatch,ca
     assert engine.calls==1 and len(txt.scan(ws))==1
 
 
-def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch):
+def test_agent_prompt_checks_all_txt_when_a_required_transcript_is_missing(setup,monkeypatch):
     from mynotes.chat import launch_chat
+    from mynotes.context import task_context
     ws,folder,_=setup
     for number in range(36):external(folder,f'External lecture {number}.txt')
     config=ws.configuration_store().load()
@@ -145,8 +148,12 @@ def test_agent_prompt_checks_all_txt_before_every_course_task(setup,monkeypatch)
     monkeypatch.setattr('mynotes.chat.subprocess.run',lambda args,**kw:calls.append(args) or type('Done',(),{'returncode':0})())
     assert launch_chat(ws,config,'agy','Lavora sul corso')==0
     prompt=' '.join(calls[0])
-    assert 'Before EVERY course task' in prompt and 'capture pending --json' in prompt
-    assert 'TXT files without audio/metadata' in prompt and 'External lecture 35' in prompt
+    assert 'External lecture 35' not in prompt
+    task=task_context(config,'notes')['instructions']
+    assert 'If a required transcript is missing' in task and 'capture pending --json' in task
+    assert 'TXT files without audio/metadata' in task
+    pending=links.pending(capture.CaptureStore(ws))['items']
+    assert len(pending)==36 and any(item['title']=='External lecture 35' for item in pending)
 
 
 def test_two_existing_hardlinks_remain_two_visible_transcripts(setup):

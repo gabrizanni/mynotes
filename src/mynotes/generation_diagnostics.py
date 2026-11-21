@@ -2,6 +2,36 @@
 from .evidence_refs import normalize_references, EvidenceReferenceError
 
 
+def recap_language_defects(response, plan, lectures, maps):
+    """Flag only strongly English long recaps when Italian was requested.
+
+    Conservative local diagnostic, not general language or semantic detection.
+    Short, mixed or uncertain passages require actual editorial review.
+    """
+    import re
+    from .batch import _remap_notes
+    if plan['style'].get('recap_language', 'it') != 'it':
+        return []
+    english = set('the this these those which that within through between without while where whose their them both rather however although therefore'.split())
+    italian = set('il lo la gli le dei degli delle nel nella nelle che questo questa questi queste per della sono viene perché quindi tuttavia attraverso'.split())
+    defects = []
+    for row in response.notes.get('lessons', []):
+        lecture = row.get('lecture_id')
+        if lecture not in lectures:
+            continue
+        notes = _remap_notes(row['notes'], maps[lecture])
+        for index, block in enumerate(notes.get('blocks', [])):
+            if block.get('kind') != 'recap':
+                continue
+            words = re.findall(r'\b\w+\b', block.get('text', '').casefold())
+            en = sum(w in english for w in words); it = sum(w in italian for w in words)
+            if len(words) >= 60 and en >= 12 and en >= 4 * max(1, it):
+                defects.append({'lecture_id': lecture, 'path': f'blocks[{index}]',
+                    'evidence_id': block['evidence_ids'][0],
+                    'reason': 'The long recap is strongly English while the saved recap language is Italian; translate only this recap, preserving its supported facts.'})
+    return defects
+
+
 def group_defects(response,plan,lectures,maps):
     from .batch import _remap_notes, NARRATIVE_KINDS
     defects=[]
@@ -44,12 +74,16 @@ def source_read_audit(stdout):
     for line in stdout.splitlines():
         try:event=json.loads(line)
         except ValueError:continue
+        if not isinstance(event, dict):continue
         step=event.get('step_update',{})
-        if step.get('state')!='DONE' or step.get('tool_name')!='view_file':continue
+        if not isinstance(step, dict):continue
+        if step.get('state')!='DONE' or step.get('tool_name') not in {'view_file', 'read_file'}:continue
         identity=(step.get('conversation_id'),step.get('step_index'))
         if identity in seen_events:continue
         seen_events.add(identity)
-        parameters=step.get('tool_info',{}).get('parameters',{})
+        info=step.get('tool_info',{})
+        if not isinstance(info, dict):continue
+        parameters=info.get('parameters',{})
         key=json.dumps(parameters,sort_keys=True)
         row={'step_index':step.get('step_index'),'parameters':parameters,'reported_output':step.get('tool_info',{}).get('output'),
              'duration_seconds':step.get('duration_seconds')}
@@ -57,4 +91,5 @@ def source_read_audit(stdout):
         if key in reads:repeated.append({'first_step':reads[key],'repeat_step':step.get('step_index'),'parameters':parameters})
         else:reads[key]=step.get('step_index')
     return {'view_file_calls':len(events),'unique_requests':len(reads),'exact_repeat_calls':len(repeated),'reads':events,'repeats':repeated,
+            'observability':'recorded_stream_tool_events' if events else 'no_read_events_exposed; zero_observed_is_not_zero_actual',
             'interpretation':'Exact repeated parameters are measurable; overlapping ranges may be needed after truncated responses.'}

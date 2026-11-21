@@ -29,7 +29,9 @@ def build_batch_documents(workspace,batch_id,*,mode='both'):
             rows.append((lesson,candidate,pack))
         sources={l:file_sha256(workspace.runs_dir/l/'lecture_notes.candidate.json') for l,_,_ in rows}
         configuration=workspace.configuration_store().load();course=_course(configuration,manifest['course_code'])
-        profile=effective_style(configuration,manifest['course_code'])
+        from .memory import candidate_style
+        profile=candidate_style(configuration,manifest['course_code'],{'effective_style':manifest.get('style')})
+        course['languages'] = manifest.get('course', {}).get('languages', course['languages'])
         key=__import__('hashlib').sha256(json.dumps({'sources':sources,'renderer':word_renderer_hash(),'mode':mode,
             'course':course,'style':profile,'builder':file_sha256(Path(__file__))},sort_keys=True).encode()).hexdigest()
         output=root/'documents'/key;index=output/'index.json'
@@ -41,7 +43,7 @@ def build_batch_documents(workspace,batch_id,*,mode='both'):
         output.mkdir(parents=True,exist_ok=True);files=[]
         if mode in {'standalone','both'}:
             for lesson,_,_ in rows:
-                built=build_word_candidate(workspace,lesson,mode='standalone')
+                built=build_word_candidate(workspace,lesson,mode='standalone',timeout_seconds=300)
                 files.append({'kind':'standalone','lecture_id':lesson,'path':built['candidate'],'sha256':built['candidate_hash'],
                               'validation':str(Path(built['candidate']).with_suffix('.validation.json'))})
         if mode in {'cumulative','both'}:
@@ -56,7 +58,7 @@ def build_batch_documents(workspace,batch_id,*,mode='both'):
                 structure[lesson]=_docx_structure(path,lesson,sum(v.get('decision')=='include' for v in notes.get('visual_decisions',[])),
                     bool(notes.get('formula') or notes.get('formulas') or any(b.get('kind')=='formula' for b in blocks)),
                     [b['rows'] for b in blocks if b.get('kind')=='table'] if blocks else ([notes['table']] if notes.get('table') else []))
-            render=_render_and_validate(path,output/'render')
+            render=_render_and_validate(path,output/'render',timeout_seconds=900)
             validation={'mode':'cumulative','candidate':str(path),'candidate_hash':file_sha256(path),'source_candidates':sources,
                         'renderer_hash':word_renderer_hash(),'structure':structure,'render':render,'published':False}
             atomic_json_write(path.with_suffix('.validation.json'),validation)

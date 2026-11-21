@@ -3,6 +3,17 @@ from copy import deepcopy
 import re
 
 
+def without_source_citations(text, valid_ids):
+    """Analysis projection only: remove exact source lists, preserving code/math."""
+    known=set(valid_ids)
+    protected=r'`[^`]*`|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|\$[^\n$]+\$'
+    lists=r'[ \t]*[\(\[](?P<ids>[STHWK]\d+(?:\s*[,;]\s*[STHWK]\d+)*)[\)\]]'
+    def replace(match):
+        ids=match.groupdict().get('ids')
+        return '' if ids and set(re.findall(r'[STHWK]\d+',ids))<=known else match[0]
+    return re.sub(protected+'|'+lists,replace,str(text))
+
+
 class EvidenceReferenceError(ValueError):
     def __init__(self, defects):
         self.defects = defects

@@ -426,13 +426,13 @@ def process(
     """Publish one generic lecture and safely skip identical inputs on rerun."""
     course_code, _ = parse_lecture_id(lecture_id)
     configuration = workspace.configuration_store().load()
-    course = _course(configuration, course_code)
+    from .memory import writing_configuration
+    course, profile = writing_configuration(configuration, course_code)
     requested = resolve_model(configuration, provider, quality)
-    profile = effective_style(configuration, course_code)
     sources, texts = _sources(transcript, materials, personal_notes, web_source, course)
     input_hash = hashlib.sha256(
         json.dumps(
-            {"texts": texts, "quality": requested.quality, "course": course, "provider": requested.__dict__},
+            {"texts": texts, "quality": requested.quality, "course": course, "style": profile, "provider": requested.__dict__},
             sort_keys=True,
         ).encode()
     ).hexdigest()
@@ -643,7 +643,7 @@ def ordinary_emphasis_diagnostics(notes: dict[str, Any], source_pack: dict[str, 
             "required": required, "missing": required and not spans}
 
 
-def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True, normalization_report_path: Path | None = None) -> dict[str, Any]:
+def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pack: dict[str, Any], *, source_root: Path | None = None, style: dict[str, Any] | None = None, final_phase: bool = True, normalization_report_path: Path | None = None, editorial_warnings: bool = False) -> dict[str, Any]:
     """Reject a polished-looking draft unless it accounts for its actual evidence."""
     from .evidence_refs import normalize_references, EvidenceReferenceError
     try:
@@ -657,6 +657,21 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     except EvidenceReferenceError as error:
         raise WorkflowError(str(error)) from error
     result = _validate_notes(notes, lecture_id)
+    if style is not None and isinstance(result.get('blocks'), list) and style.get('recap', True):
+        blocks = result['blocks']; start = len(blocks)
+        while start and isinstance(blocks[start-1], dict) and blocks[start-1].get('kind') in {'heading','qa','recap'}:
+            start -= 1
+        footer = blocks[start:]
+        questions = [b for b in footer if b.get('kind') == 'qa']
+        recaps = [b for b in footer if b.get('kind') == 'recap']
+        if questions and len(recaps) == 1:
+            ordered = blocks[:start] + questions + recaps
+            if ordered != blocks:
+                result['blocks'] = ordered
+                result.setdefault('render_normalizations', []).append({
+                    'kind': 'editorial_footer_order', 'footer_start': start,
+                    'removed_wrapper_heading_indices': [start+i for i,b in enumerate(footer) if b['kind']=='heading'],
+                    'narrative_and_answers_unchanged': True})
     # Some providers repeat the document title as a level-2 block even though
     # the Word renderer inserts that heading itself. Remove only that exact
     # duplicate; other unexpected levels remain validation errors.
@@ -838,7 +853,12 @@ def _validate_candidate_notes(notes: dict[str, Any], lecture_id: str, source_pac
     if style is not None and technical_structure and narrative_words >= 500 and narrative_term_count == 0:
         raise WorkflowError("Long technical candidate needs a [[term:...]] key term in its narrative")
     if style is not None and final_phase and ordinary_emphasis_diagnostics(result, source_pack)["missing"]:
-        raise WorkflowError("Long technical candidate needs ordinary black **emphasis** in its narrative, distinct from orange terms")
+        if not editorial_warnings:
+            raise WorkflowError("Long technical candidate needs ordinary black **emphasis** in its narrative, distinct from orange terms")
+        from .note_assembly import attach_comments
+        from .progressive_review import digest
+        attach_comments(result,[{'block_sha256':digest(result['blocks'][0]),'issue_code':'minor_editorial',
+            'reason':'Manca l’enfasi ordinaria in grassetto nel testo; appunti conservati senza riscrittura automatica. I termini tecnici arancioni restano distinti.'}])
     # Saved candidates from earlier versions may contain only legacy blocks.
     # Once a draft opts into the explicit editorial structure, validate its
     # sequence rather than trusting a prompt alone to produce it consistently.
@@ -938,6 +958,9 @@ def generate_candidate(workspace: Workspace, lecture_id: str, *, source_pack_pat
                        instructions: str = "", image_limit: int | None = None, speaker_focus: str | None = None) -> dict[str, Any]:
     lecture_id = lecture_id.upper()
     parse_lecture_id(lecture_id)
+    from .lesson_registry import assert_generation_allowed
+    code, number = parse_lecture_id(lecture_id)
+    assert_generation_allowed(workspace, code, number)
     with _generation_lock(workspace, lecture_id):
         return _generate_candidate_locked(workspace, lecture_id, source_pack_path=source_pack_path,
                                           provider=provider, quality=quality, provider_adapter=provider_adapter,
@@ -965,7 +988,11 @@ def _generate_candidate_locked(
     lecture_id = lecture_id.upper()
     course_code, _ = parse_lecture_id(lecture_id)
     configuration = workspace.configuration_store().load()
-    course = dict(_course(configuration, course_code))
+    from .memory import writing_configuration
+    try:
+        course, editorial_style = writing_configuration(configuration, course_code, instructions=instructions, image_limit=image_limit)
+    except ConfigurationError as error:
+        raise WorkflowError(str(error)) from error
     if speaker_focus is not None:
         if speaker_focus not in {"lecture","professor"}:raise WorkflowError("Invalid speaker_focus")
         course['speaker_focus']=speaker_focus
@@ -986,6 +1013,9 @@ def _generate_candidate_locked(
         raise WorkflowError(f"Invalid source pack: {error}") from error
     if pack.get("lecture_id") != lecture_id:
         raise WorkflowError("Source pack lecture id does not match the requested lecture")
+    from .lesson_registry import source_revision
+    if pack.get("lesson_sources_revision") != source_revision(workspace, lecture_id):
+        raise WorkflowError("I collegamenti della lezione sono cambiati. Prepara nuovamente le fonti.")
     stale_path = workspace.runs_dir / lecture_id / "source_pack-stale.json"
     if stale_path.exists():
         try:
@@ -994,21 +1024,6 @@ def _generate_candidate_locked(
             raise WorkflowError("Cannot verify source-pack freshness; run prepare again") from error
         if stale.get("transcription_cache_key") != (pack.get("transcription") or {}).get("cache_key"):
             raise WorkflowError("Transcription changed after preparation; run prepare again before generation")
-    editorial_style = effective_style(configuration, course_code)
-    if image_limit is not None:
-        if isinstance(image_limit, bool) or not isinstance(image_limit, int) or image_limit < 0:
-            raise WorkflowError("image_limit must be a non-negative integer")
-        editorial_style["image_limit"] = image_limit
-    if not isinstance(instructions, str):
-        raise WorkflowError("Lesson instructions must be text")
-    if instructions.strip():
-        editorial_style["lesson_instructions"] = instructions.strip()
-    editorial_style["question_language"] = str(configuration.get("personal", {}).get("interface_language") or course.get("languages", {}).get("notes", "en"))
-    # Existing free-form instructions remain part of the editorial request
-    # until the user chooses to replace them in the guided style editor.
-    editorial_style["freeform_preferences"] = configuration["style"].get("freeform_preferences", "")
-    if configuration.get("personal", {}).get("background"):
-        editorial_style["learner_background"] = configuration["personal"]["background"]
     input_hash = hashlib.sha256(json.dumps({"source_pack": pack_hash, "requested": requested.__dict__, "quality": requested.quality, "style": editorial_style, "course": course, "generation_contract": GENERATION_CONTRACT_VERSION}, sort_keys=True).encode()).hexdigest()
     run_dir = workspace.runs_dir / lecture_id
     candidate_path = run_dir / "lecture_notes.candidate.json"

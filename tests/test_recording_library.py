@@ -252,7 +252,10 @@ def test_two_external_files_for_same_lesson_get_independent_storage(setup):
     audio(folder,code+'_L01.wav');audio(folder,code+' lecture 1.wav')
     items=queue.library(ws)
     assert len(items)==2 and len({r['id'] for r in items})==2
-    assert all(r['storage_recording_id']==r['id'] and r['can_transcribe'] for r in items)
+    assert all(r['storage_recording_id']==r['id'] and r['source_selection_required'] and not r['can_transcribe'] for r in items)
+    from mynotes.audio_sources import choose
+    choose(ws, items[0]['id'], 'prefer-audio')
+    assert sum(r['can_transcribe'] for r in queue.library(ws)) == 1
 
 
 def test_prepare_first_archives_original_and_reuses_bound_transcript(setup):
