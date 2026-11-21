@@ -5,6 +5,9 @@ private struct AudioDestination {
     var target = ""
     var course = ""
     var number = ""
+    var confirmDate = false
+    var recordedAt = Date()
+    var moveDuplicate = false
 }
 
 struct WorkspaceAudioImportView: View {
@@ -44,7 +47,7 @@ struct WorkspaceAudioImportView: View {
                             Picker("Destinazione", selection: binding(file.path).target) {
                                 Text("Assegna corso e numero…").tag("")
                                 ForEach(model.libraryLessons.filter { !$0.hidden && ($0.course == (destinations[file.path]?.course ?? "") || (destinations[file.path]?.course ?? "").isEmpty) }) { lesson in
-                                    Text("\(lesson.course ?? "Da associare") · \(lesson.number.map { "Lezione \($0)" } ?? lesson.title)").tag(lesson.id)
+                                    Text("\(lesson.course ?? "Da associare") · \(lesson.number.map { "Lezione \($0)" } ?? lesson.title) · \(CaptureDates.label(lesson.date))").tag(lesson.id)
                                 }
                             }
                             if (destinations[file.path]?.target ?? "").isEmpty {
@@ -59,7 +62,17 @@ struct WorkspaceAudioImportView: View {
                             } else {
                                 Text("Se ci sono più audio, sceglierai quale trascrivere nel dettaglio della lezione.").font(.caption).foregroundStyle(.secondary)
                             }
-                        }.disabled(file.duplicate == true)
+                            if file.duplicate == true {
+                                Toggle("Sposta il file già presente nella destinazione scelta", isOn: binding(file.path).moveDuplicate)
+                            } else {
+                                Toggle("Confermo la data originale di registrazione", isOn: binding(file.path).confirmDate)
+                                if destinations[file.path]?.confirmDate == true {
+                                    DatePicker("Registrata il", selection: binding(file.path).recordedAt)
+                                } else {
+                                    Text(file.recordedAt.map { "Data originale · " + CaptureDates.label($0) } ?? "Data di registrazione sconosciuta").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         Divider()
                     }
                 }
@@ -73,6 +86,8 @@ struct WorkspaceAudioImportView: View {
                     let items: [[String: Any]] = files.map { file in
                         let destination = destinations[file.path] ?? AudioDestination()
                         var item: [String: Any] = ["path": file.path]
+                        item["move_duplicate"] = destination.moveDuplicate
+                        if destination.confirmDate { item["recorded_at"] = CaptureDates.write(destination.recordedAt) }
                         if !destination.target.isEmpty { item["target"] = destination.target }
                         else if !destination.course.isEmpty {
                             item["course"] = destination.course

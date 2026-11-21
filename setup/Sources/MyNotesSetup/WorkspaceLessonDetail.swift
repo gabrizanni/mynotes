@@ -5,8 +5,8 @@ import Combine
 import UniformTypeIdentifiers
 
 private enum LessonSheet: Identifiable {
-    case manage, rename(CaptureRecording), renameTranscript(CaptureTranscript), associate(CaptureRecording), eventAssociation(CaptureEvent), edit(CaptureEvent), files([URL])
-    var id: String { switch self { case .manage: return "manage"; case .rename(let x): return "rename:" + x.id; case .renameTranscript(let x): return "transcript:" + x.id; case .associate(let x): return "associate:" + x.id; case .eventAssociation(let x): return "event-association:" + x.id; case .edit(let x): return "edit:" + x.id; case .files: return "files" } }
+    case metadata, linkAudio, linkText, manage, rename(CaptureRecording), renameTranscript(CaptureTranscript), associate(CaptureRecording), eventAssociation(CaptureEvent), edit(CaptureEvent), files([URL])
+    var id: String { switch self { case .metadata: return "metadata"; case .linkAudio: return "linkAudio"; case .linkText: return "linkText"; case .manage: return "manage"; case .rename(let x): return "rename:" + x.id; case .renameTranscript(let x): return "transcript:" + x.id; case .associate(let x): return "associate:" + x.id; case .eventAssociation(let x): return "event-association:" + x.id; case .edit(let x): return "edit:" + x.id; case .files: return "files" } }
 }
 
 struct WorkspaceLessonDetail: View {
@@ -31,7 +31,7 @@ struct WorkspaceLessonDetail: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(lesson.title).font(.title2.weight(.semibold))
                         if let number = lesson.registry?.number { Text("Lezione \(number)").font(.headline) }
-                        if lesson.registry != nil { Button("Gestisci lezione…") { sheet = .manage } }
+                        if lesson.registry != nil { Button("Modifica lezione…") { sheet = .metadata } }
                         Text(courseName).foregroundStyle(.secondary)
                         Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).font(.callout).foregroundStyle(.secondary)
                         if let sourceZone = lesson.event?.timezone, let original = WorkspaceCalendar(timezone: displayTimeZone.identifier).originalTimeLabel(lesson.date, timezone: sourceZone) {
@@ -41,9 +41,14 @@ struct WorkspaceLessonDetail: View {
                     Spacer()
                     Menu {
                         Button("Importa audio…", systemImage: "square.and.arrow.down") { showImporter = true }
+                        Button("Collega registrazione esistente…") { sheet = .linkAudio }
+                        Button("Collega TXT esistente…") { sheet = .linkText }
+                        Button("Gestisci e rimuovi lezione…") { sheet = .manage }
+                        Button(lesson.registry?.cancelled == true ? "Ripristina lezione annullata" : "Segna lezione annullata") { Task {
+                            await model.queueAction("lesson-edit", payload: ["id": lesson.id, "action": lesson.registry?.cancelled == true ? "uncancelled" : "cancelled"])
+                        } }
                         if let event = lesson.event, let snapshot = model.snapshot {
                             if event.recordingID != nil { Button("Associa a corso e numero…") { sheet = .eventAssociation(event) }.disabled(!snapshot.editable(event)) }
-                            Button("Modifica lezione…") { sheet = .edit(event) }.disabled(!snapshot.editable(event))
                             if event.localChanges { Button("Ripristina dal calendario") { Task { await model.perform("reset-lesson", arguments: ["--event", event.id]) } } }
                         }
                     } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Altre azioni sulla lezione")
@@ -59,6 +64,38 @@ struct WorkspaceLessonDetail: View {
                     }
                 }
                 audioSection
+                if lesson.registry?.revisionRequired == true {
+                    Label("Scegli il TXT corretto qui sotto e conferma i collegamenti per proseguire con il numero attuale.", systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.orange)
+                    if lesson.transcripts.isEmpty, let audio = lesson.selectedAudio {
+                        Button("Conferma registrazione per il numero attuale") { Task {
+                            await model.queueAction("lesson-edit", payload: ["id": lesson.id, "action": "review-sources", "recording": audio.id])
+                        } }
+                    }
+                }
+                ForEach(lesson.transcripts) { item in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(.callout.weight(.medium))
+                            Text(item.recordingID.flatMap { identifier in lesson.audio.first { $0.id == identifier }?.originalName } ?? (item.recordingID == nil ? "TXT indipendente" : "Da registrazione collegata")).font(.caption).foregroundStyle(.secondary)
+                            if lesson.registry?.preferredTranscript == item.id { Text("Usata per gli appunti").font(.caption).foregroundStyle(.tint) }
+                        }
+                        Spacer()
+                        Menu("Azioni") {
+                            Button("Apri TXT") { model.openFile(item.path) }
+                            Button("Usa per gli appunti") { Task {
+                                await model.queueAction("lesson-edit", payload: ["id": lesson.id, "action": "prefer-transcript", "transcript": item.id])
+                            } }
+                            if lesson.registry?.revisionRequired == true {
+                                Button("Verifica collegamenti con questo TXT") { Task {
+                                    await model.queueAction("lesson-edit", payload: ["id": lesson.id, "action": "review-sources", "transcript": item.id])
+                                } }
+                            }
+                            Button("Rinomina…") { sheet = .renameTranscript(item) }
+                            Button("Mostra nel Finder") { model.revealFile(item.path) }
+                            Button("Sposta nel Cestino…", role: .destructive) { trashTranscript = item.path }
+                        }.fixedSize()
+                    }.padding(.vertical, 8)
+                }
                 if let audio = lesson.selectedAudio {
                     let action = audio.actions?.first { ["enqueue", "retry", "restart", "recover"].contains($0) || $0 == "finish" && audio.archiveStatus == "PENDING" }
                     if let action {
@@ -133,6 +170,9 @@ struct WorkspaceLessonDetail: View {
         .dropDestination(for: URL.self) { urls, _ in guard !urls.isEmpty else { return false }; sheet = .files(urls); return true }
         .sheet(item: $sheet) { kind in
             switch kind {
+            case .metadata: LessonMetadataEditor(model: model, lessonID: lesson.id)
+            case .linkAudio: LessonLinkEditor(model: model, lessonID: lesson.id, transcriptMode: false)
+            case .linkText: LessonLinkEditor(model: model, lessonID: lesson.id, transcriptMode: true)
             case .renameTranscript(let transcript): WorkspaceTranscriptRenameView(model: model, transcript: transcript)
             case .manage: LibraryLessonEditor(model: model, lessonID: lesson.id)
             case .rename(let audio): WorkspaceAudioEditView(model: model, audio: audio, association: false)
@@ -184,7 +224,8 @@ struct WorkspaceLessonDetail: View {
         if let seconds = audio.duration { duration = Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)) }
         else { duration = "Durata non disponibile" }
         let role = selected ? "In uso" : (audio.sourceExcluded == true ? "Escluso" : "Alternativo")
-        return [audio.origin ?? "Audio", duration, role].joined(separator: " · ")
+        let date = audio.recordedAt.map { CaptureDates.label($0, zone: displayTimeZone.identifier) } ?? "Data di registrazione sconosciuta"
+        return [audio.origin ?? "Audio", duration, role, date].joined(separator: " · ")
     }
     private func audioMenu(_ audio: CaptureRecording) -> some View {
         Menu {
@@ -195,6 +236,9 @@ struct WorkspaceLessonDetail: View {
             }
             Button("Rinomina…") { sheet = .rename(audio) }
             Button("Associa a corso e lezione…") { sheet = .associate(audio) }
+            Button("Scollega dalla lezione") { Task {
+                await model.queueAction("lesson-edit", payload: ["action": "move-audio", "recording": audio.id])
+            } }
             if audio.actions?.contains("download") == true { Button("Scarica audio sul Mac") { Task { await model.recordingAction("download", item: audio) } } }
             Divider()
             Button(audio.sourceExcluded == true ? "Ripristina audio" : "Escludi dalla trascrizione") { Task { await model.queueAction(audio.sourceExcluded == true ? "restore-audio" : "exclude-audio", arguments: ["--recording", audio.id]) } }

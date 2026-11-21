@@ -18,10 +18,11 @@ enum WorkspaceStyle {
 }
 
 private enum WorkspaceSheet: Identifiable {
-    case courses(String?), record, schedule, edit(CaptureEvent), detail(String), importAudio([URL], String?)
+    case courses(String?), record, schedule, createLesson, edit(CaptureEvent), detail(String), importAudio([URL], String?)
     var id: String {
         switch self {
         case .courses: return "courses"; case .record: return "record"; case .schedule: return "schedule"
+        case .createLesson: return "createLesson"
         case .edit(let event): return "edit:" + event.id
         case .detail(let id): return "detail:" + id
         case .importAudio: return "import"
@@ -202,7 +203,13 @@ struct MyNotesWorkspaceView: View {
                     }
                 case .record: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: true)
                 case .schedule: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: false)
-                case .edit(let event): CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false)
+                case .createLesson: LessonMetadataEditor(model: model)
+                case .edit(let event):
+                    if let lesson = model.libraryLessons.first(where: { $0.eventIDs.contains(event.id) }) {
+                        LessonMetadataEditor(model: model, lessonID: lesson.id)
+                    } else {
+                        CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false)
+                    }
                 case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID, initialCourse: course == "all" || course == "none" ? nil : course)
                 case .detail(let id):
                     NavigationStack {
@@ -380,6 +387,7 @@ struct MyNotesWorkspaceView: View {
                 }
             }.disabled(model.busy || model.queueBusy || libraryRefreshing)
             Menu("Altre azioni", systemImage: "ellipsis.circle") {
+                Button("Aggiungi lezione…") { sheet = .createLesson }
                 Button("Verifica i file di tutti i corsi…") { Task { await model.queueAction("verify-library") } }
                     .disabled(model.queueBusy || model.busy || model.isPreview)
             }.fixedSize()

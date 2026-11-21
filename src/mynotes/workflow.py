@@ -1013,6 +1013,9 @@ def _generate_candidate_locked(
         raise WorkflowError(f"Invalid source pack: {error}") from error
     if pack.get("lecture_id") != lecture_id:
         raise WorkflowError("Source pack lecture id does not match the requested lecture")
+    from .lesson_registry import source_revision
+    if pack.get("lesson_sources_revision") != source_revision(workspace, lecture_id):
+        raise WorkflowError("I collegamenti della lezione sono cambiati. Prepara nuovamente le fonti.")
     stale_path = workspace.runs_dir / lecture_id / "source_pack-stale.json"
     if stale_path.exists():
         try:

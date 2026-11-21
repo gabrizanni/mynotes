@@ -1,5 +1,24 @@
 # Versioned updates and recovery
 
+## 0.3.11 · Lesson management and transcription activities
+
+- Edit course, lesson number, title, date and timezone from the lesson detail.
+  Preview conflicts, swap numbers, merge duplicate lessons or shift a sequence.
+- Confirmed recordings retain their lesson identity after renumbering. Newly
+  discovered recordings are matched against course, number and original day.
+  Import supports original recording dates and explicit reassignment of duplicates.
+- Link or detach recordings and independent TXT files. Select the transcript for
+  notes independently from the audio chosen for transcription. Source changes
+  require fresh preparation before generating or publishing notes.
+- Optionally rename managed copies with recoverable pending operations. Add past
+  lessons, mark cancelled occurrences and retain per-file and per-lesson removal.
+- Activity shows pending lesson transcription work with course filters and scoped
+  batch actions. Course profiles expose saved preferences and contextual editing.
+- Includes Finder-style trash recovery and Codex subscription chat startup fixes.
+
+The downloadable macOS application targets Apple Silicon and uses ad-hoc signing.
+The release is distributed through the existing prerelease channel.
+
 ## 0.2.27: progressive slide placement and independent phase budgets
 
 - Writing and one necessary managed correction each have a separate 20-minute

@@ -9,7 +9,9 @@ from copy import deepcopy
 from datetime import datetime, UTC
 from pathlib import Path
 import json
+import hashlib
 import uuid
+from zoneinfo import ZoneInfo
 
 from .recording_library import locked
 from .utils import atomic_json_write
@@ -42,6 +44,22 @@ def save(ws, value):
 def _legacy_key(item):
     return item.get('legacy_lesson_key') or item.get('lesson_key') or ('event:' + item['event_id'] if item.get('event_id') else
         'lesson:' + item['lecture_id'] if item.get('lecture_id') else 'audio:' + item['id'])
+
+
+def lecture_key(row):
+    if row.get('course') and row.get('number'):
+        return f"{row['course']}-L{row['number']:02d}"
+    return None
+
+
+def same_recording_day(recorded_at, starts_at, timezone):
+    try:
+        zone = ZoneInfo(timezone or 'UTC')
+        recorded = datetime.fromisoformat(recorded_at)
+        starts = datetime.fromisoformat(starts_at)
+        return recorded.tzinfo is not None and starts.tzinfo is not None and recorded.astimezone(zone).date() == starts.astimezone(zone).date()
+    except (ValueError, TypeError, KeyError):
+        return False
 
 
 def snapshot(ws, audio=None, transcripts=None):
@@ -84,7 +102,8 @@ def snapshot(ws, audio=None, transcripts=None):
         if code and number:
             event_lectures.setdefault(f'{code}-L{number:02d}', []).append(event)
         row = ensure('event:' + event['id'], code, number, event['title'], event['startsAt'])
-        row['title'], row['date'] = event['title'], event['startsAt']
+        row['title'] = row.get('title_override') or event['title']
+        row['date'] = row.get('date_override') or event['startsAt']
         if event['id'] not in row['event_ids']: row['event_ids'].append(event['id'])
     # Link a unique legacy lecture alias to its calendar lesson; ambiguity stays separate.
     for lecture, matches in event_lectures.items():
@@ -94,23 +113,30 @@ def snapshot(ws, audio=None, transcripts=None):
             if alias not in by_alias:
                 row['aliases'].append(alias); by_alias[alias] = row
     for item in audio:
-        row = by_audio.get(item['id']) or by_alias.get(_legacy_key(item))
-        if row is None and item.get('course_code') and item.get('lecture_id'):
-            number = int(item['lecture_id'].rsplit('-L', 1)[1])
-            matches = [r for r in rows.values() if not r['hidden'] and r['course'] == item['course_code'] and r['number'] == number]
+        key = _legacy_key(item)
+        row = by_audio.get(item['id']) or by_alias.get(key)
+        lecture = item.get('lecture_id')
+        if row and item['id'] not in by_audio and key.startswith('lesson:') and lecture_key(row) != key[7:]:
+            row = None
+            key = 'audio:' + item['id']
+        if row is None and lecture and not key.startswith('audio:'):
+            matches = [r for r in rows.values() if not r['hidden'] and lecture_key(r) == lecture]
             if len(matches) == 1: row = matches[0]
         if row is None:
-            lecture = item.get('lecture_id')
+            if key.startswith('audio:'):
+                lecture = None
             number = int(lecture.rsplit('-L', 1)[1]) if lecture else None
-            row = ensure(_legacy_key(item), item.get('course_code'), number, item['title'], item.get('created_at'))
+            row = ensure(key, item.get('course_code'), number, item['title'], item.get('recorded_at') or item.get('created_at'))
         if item['id'] not in row['recording_ids']: row['recording_ids'].append(item['id'])
         by_audio[item['id']] = row
     for item in transcripts:
-        row = by_text.get(item['id']) or by_audio.get(item.get('recording_id'))
+        row = by_audio.get(item.get('recording_id')) or by_text.get(item['id'])
         lecture = item.get('lecture_id')
         if row is None:
-            row = ensure('lesson:' + lecture if lecture else 'text:' + item['id'], item.get('course_code'),
-                         int(lecture.rsplit('-L', 1)[1]) if lecture else None, item['title'], item.get('created_at'))
+            matches = [r for r in rows.values() if lecture and not r['hidden'] and lecture_key(r) == lecture]
+            row = matches[0] if len(matches) == 1 and item.get('association_source') == 'explicit' else None
+        if row is None:
+            row = ensure('text:' + item['id'], item.get('course_code'), None, item['title'], item.get('created_at'))
         if item['id'] not in row['transcript_ids']: row['transcript_ids'].append(item['id'])
     return value
 
@@ -119,30 +145,44 @@ def project_audio(ws, audio):
     # Never call snapshot here: snapshot uses the legacy audio projection.
     rows = load(ws)['lessons'].values()
     bindings = {key: row for row in rows for key in row['recording_ids']}
+    aliases = {a: row for row in rows for a in row['aliases'] if a.startswith('lesson:')}
     for item in audio:
         row = bindings.get(item['id'])
         if not row:
+            historical = aliases.get(item['lesson_key'])
+            if historical and lecture_key(historical) != item['lesson_key'][7:]:
+                item['association_conflict'] = 'Il numero nel nome appartiene a un collegamento storico. Scegli la lezione.'
+                item['lecture_id'] = None
+                item['lesson_key'] = 'audio:' + item['id']
             item['legacy_lesson_key'] = item['lesson_key']
             item['lesson_key'] = 'lesson-' + uuid.uuid5(uuid.NAMESPACE_URL, item['lesson_key']).hex
             continue
         item['legacy_lesson_key'] = item['lesson_key']
         item['lesson_key'] = row['id']
         item['course_code'] = row['course']
-        item['lecture_id'] = f"{row['course']}-L{row['number']:02d}" if row['course'] and row['number'] else None
-        if row['hidden'] or row['not_recorded'] or row['revision_required'] or row.get('pending_trash'):
+        item['lecture_id'] = lecture_key(row)
+        item['event_id'] = next(iter(row['event_ids']), None)
+        if row['hidden'] or row['not_recorded'] or row.get('cancelled') or row.get('pending_trash'):
             item['can_transcribe'] = False
-            item.setdefault('blocking_reasons', []).append({'code': 'LESSON_STATE', 'message': 'Lezione rimossa, non registrata o rinumerata: verifica il corso prima di trascrivere.'})
+            item['actions'] = [a for a in item.get('actions', []) if a not in {'enqueue', 'retry', 'restart', 'recover'}]
+            item.setdefault('blocking_reasons', []).append({'code': 'LESSON_STATE', 'message': 'La lezione è rimossa, annullata o non registrata.'})
     return audio
 
 
 def project_events(ws, events):
     rows = load(ws)['lessons'].values()
     bindings = {key: row for row in rows for key in row['event_ids']}
+    retired = {key for row in rows for key in row.get('retired_event_ids', [])}
     for event in events:
+        if event['id'] in retired:
+            event.update(eligibility='CANCELLED', reason='Occorrenza riunita localmente', reasonCode='LOCAL_EXCLUSION')
+            continue
         row = bindings.get(event['id'])
         if not row: continue
         event.update(courseCode=row['course'], lessonNumber=row['number'])
-        if row['hidden']:
+        for field, key in [('title', 'title_override'), ('startsAt', 'date_override'), ('endsAt', 'end_override'), ('timezone', 'timezone_override')]:
+            if row.get(key): event[field] = row[key]
+        if row['hidden'] or row.get('cancelled'):
             event.update(eligibility='CANCELLED', reason='Lezione rimossa localmente', reasonCode='LOCAL_EXCLUSION')
     return events
 
@@ -152,7 +192,9 @@ def listing(ws, audio=None, transcripts=None):
     return list(value['lessons'].values())
 
 
-def _idle(ws, rows):
+def _idle(ws, rows, *, allow_renames=False):
+    if not allow_renames and any(row.get('pending_renames') for row in rows):
+        raise ValueError('Completa la rinomina dei file prima di modificare la lezione')
     from .audio_sources import _idle as idle_audio
     from .capture import CaptureStore
     from .capture_dashboard import _assert_editable
@@ -193,11 +235,214 @@ def _publish_calendar(ws):
     from .capture import CaptureStore
     store = CaptureStore(ws)
     if store.schedule_path.exists():
-        store.save_schedule(store.source_events(), store.config())
+        with store.lock():
+            config = store.config()
+            store.save_schedule(store.source_events(), config)
+            store.save_config(config)
+
+
+def _revision(ws, old, row):
+    before, after = lecture_key(old), lecture_key(row)
+    if before == after:
+        return
+    row['sources_revision'] = uuid.uuid4().hex
+    if before:
+        alias = 'lesson:' + before
+        if alias not in row['aliases']:
+            row['aliases'].append(alias)
+        row.setdefault('source_number', old['number'])
+    if row.get('revision_required') and row.get('review_original') == row['number'] and old['course'] == row['course']:
+        row['revision_required'] = False
+        row.pop('review_original', None)
+    elif row.get('revision_required') or row['transcript_ids'] or any((ws.runs_dir / key).exists() for key in (before, after) if key):
+        row.setdefault('review_original', old['number'])
+        row['revision_required'] = True
+
+
+def _refresh_title(old, row):
+    title = old['title']
+    if old.get('title_override') or not row['number']:
+        return
+    if title.casefold() in {f"lezione {old['number']}", f"{old['course']} {old['number']}".casefold(), (lecture_key(old) or '').casefold()}:
+        row.update(title=f"Lezione {row['number']}", title_override=f"Lezione {row['number']}")
+
+
+def _token(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def rename_candidates(ws, row):
+    from .recording_library import discover
+    from .transcript_library import scan
+    managed = set(inventory(ws, row))
+    audio = [item for item in discover(ws) if item['id'] in row['recording_ids'] and item['path'] in managed]
+    texts = [item for item in scan(ws) if item['id'] in row['transcript_ids'] and item['path'] in managed]
+    result = []
+    for kind, items in [('audio', audio), ('text', texts)]:
+        for position, item in enumerate(items, start=1):
+            source = Path(item['path'])
+            target = source.with_name(f"{lecture_key(row)}-{position}{source.suffix}")
+            if source != target:
+                result.append({'kind': kind, 'id': item['id'], 'path': str(source), 'target': str(target)})
+    return result
 
 
 @locked
-def renumber(ws, changes, *, preview=False):
+def resume_renames(ws, identifier):
+    from .recording_library import records, save as save_audio, _move_original
+    from .transcript_library import index, _references
+    from .utils import file_sha256
+    value = load(ws)
+    row = value['lessons'][identifier]
+    _idle(ws, [row], allow_renames=True)
+    for move in list(row.get('pending_renames', [])):
+        source, target = Path(move['path']), Path(move['target'])
+        digest = move['sha256']
+        if source.exists() and target.exists() and source.stat().st_ino != target.stat().st_ino:
+            raise ValueError('Il nome destinazione è occupato. Libera il nome e riprendi la rinomina.')
+        if not source.exists() and (not target.exists() or file_sha256(target) != digest):
+            raise ValueError('File da rinominare non disponibile')
+        if move['kind'] == 'audio':
+            item = records(ws).get(move['id'])
+            if item is None:
+                raise ValueError('Registrazione non disponibile')
+            item['pending_destination'] = str(target)
+            save_audio(ws, item)
+        if source.exists():
+            _move_original(source, target, digest)
+        if move['kind'] == 'audio':
+            item.update(path=str(target), file_identity=[target.stat().st_dev, target.stat().st_ino])
+            item.pop('pending_destination', None)
+            save_audio(ws, item)
+        else:
+            known = index(ws)
+            item = known[move['id']]
+            item.update(path=str(target), title=target.stem, file_identity=[target.stat().st_dev, target.stat().st_ino])
+            known[item['id']] = item
+            atomic_json_write(path(ws).parent / 'transcripts.json', known)
+            _references(ws, item)
+        row['pending_renames'].remove(move)
+        save(ws, value)
+    return {'status': 'OK', 'message': 'Rinomina completata.'}
+
+
+@locked
+def update_lesson(ws, payload):
+    value = snapshot(ws)
+    rows = value['lessons']
+    identifier = payload.get('id')
+    creating = payload.get('action') == 'create'
+    row = deepcopy(rows.get(identifier))
+    if creating:
+        identifier = payload.get('new_id') or 'lesson-' + uuid.uuid4().hex
+        row = {'id': identifier, 'aliases': [], 'course': None, 'number': None,
+               'title': '', 'date': None, 'recording_ids': [], 'transcript_ids': [],
+               'event_ids': [], 'not_recorded': False, 'hidden': False,
+               'revision_required': False, 'manual': True}
+    if row is None or row['hidden']:
+        raise ValueError('Lezione non disponibile')
+    before = deepcopy(row)
+    patch = payload.get('patch', {})
+    if not isinstance(patch, dict) or set(patch) - {'course', 'number', 'title', 'date', 'end', 'timezone'}:
+        raise ValueError('Campi lezione non validi')
+    course = patch.get('course', row['course'])
+    number = patch.get('number', row['number'])
+    codes = {course['code'] for course in ws.configuration_store().load()['courses']}
+    if course not in codes or type(number) is not int or not 1 <= number <= 999:
+        raise ValueError('Scegli un corso e un numero da 1 a 999')
+    row.update(course=course, number=number)
+    _refresh_title(before, row)
+    if 'title' in patch:
+        title = patch['title'].strip()
+        if not title or len(title) > 300 or any(ord(char) < 32 for char in title):
+            raise ValueError('Inserisci un titolo da 1 a 300 caratteri')
+        row.update(title=title, title_override=title)
+    for field, override in [('date', 'date_override'), ('end', 'end_override'), ('timezone', 'timezone_override')]:
+        if field in patch:
+            row[override] = patch[field]
+    if row.get('date_override'):
+        row['date'] = row['date_override']
+        starts = datetime.fromisoformat(row['date'])
+        if starts.tzinfo is None:
+            raise ValueError('La data deve includere il fuso orario')
+    if row.get('end_override'):
+        end = datetime.fromisoformat(row['end_override'])
+        if end.tzinfo is None or not row['date'] or end <= datetime.fromisoformat(row['date']):
+            raise ValueError('La fine deve essere successiva all’inizio')
+    if row.get('timezone_override'):
+        ZoneInfo(row['timezone_override'])
+    conflicts = [other for other in rows.values() if other['id'] != identifier and not other['hidden']
+                 and other['course'] == course and other['number'] == number]
+    mode = payload.get('conflict', 'stop')
+    affected = [before]
+    if conflicts:
+        other = conflicts[0]
+        if len(conflicts) != 1 or mode not in {'swap', 'merge'}:
+            return {'status': 'CONFLICT', 'conflicts': conflicts, 'message': 'Numero occupato: confronta le lezioni.'}
+        _idle(ws, [other])
+        affected.append(deepcopy(other))
+        if mode == 'swap':
+            if before['course'] != course or before['number'] is None:
+                raise ValueError('Lo scambio richiede due lezioni numerate dello stesso corso')
+            other['number'] = before['number']
+            _revision(ws, affected[-1], other)
+            _refresh_title(affected[-1], other)
+        else:
+            if row['event_ids'] and other['event_ids']:
+                row.setdefault('retired_event_ids', []).extend(other['event_ids'])
+            else:
+                row['event_ids'] = list(dict.fromkeys(row['event_ids'] + other['event_ids']))
+            for field in ('recording_ids', 'transcript_ids'):
+                row[field] = list(dict.fromkeys(row[field] + other[field]))
+                other[field] = []
+            other.update(hidden=True, merged_into=identifier)
+    _idle(ws, [before, row])
+    token = _token([snapshot(ws), payload.get('patch'), mode])
+    if payload.get('preview'):
+        return {'status': 'OK', 'token': token, 'new_id': identifier, 'before': before, 'after': row, 'affected': affected,
+                'renames': rename_candidates(ws, row)}
+    if payload.get('token') != token:
+        raise ValueError('I collegamenti sono cambiati. Aggiorna l’anteprima.')
+    _revision(ws, before, row)
+    selected = payload.get('rename_paths', [])
+    candidates = rename_candidates(ws, row)
+    if not isinstance(selected, list) or set(selected) - {move['path'] for move in candidates}:
+        raise ValueError('Aggiorna la scelta dei file da rinominare')
+    from .utils import file_sha256
+    row['pending_renames'] = [{**move, 'sha256': file_sha256(Path(move['path']))} for move in candidates if move['path'] in selected]
+    if any(Path(move['target']).exists() for move in row['pending_renames']):
+        raise ValueError('Un nome destinazione è già occupato. Modifica la scelta dei file.')
+    if row['pending_renames']:
+        from .recording_library import sync
+        sync(ws)
+    rows[identifier] = row
+    save(ws, value)
+    _publish_calendar(ws)
+    if row['pending_renames']:
+        resume_renames(ws, identifier)
+    return {'status': 'OK', 'id': identifier, 'message': 'Lezione aggiornata.'}
+
+
+def selected_transcript(ws, row):
+    from .transcript_library import scan
+    texts = [text for text in scan(ws) if text['id'] in row['transcript_ids']]
+    preferred = row.get('preferred_transcript')
+    if preferred:
+        return next((text for text in texts if text['id'] == preferred), None)
+    return texts[0] if len(texts) == 1 else None
+
+
+def source_revision(ws, lecture):
+    rows = list(load(ws)['lessons'].values())
+    matches = [row for row in rows if not row['hidden'] and lecture_key(row) == lecture]
+    if len(matches) == 1:
+        return matches[0].get('sources_revision')
+    historical = [row for row in rows if 'lesson:' + lecture in row['aliases'] and row.get('sources_revision')]
+    return _token([row['sources_revision'] for row in historical]) if historical else None
+
+
+@locked
+def renumber(ws, changes, *, preview=False, expected=None):
     if not isinstance(changes, list) or not changes or len(changes) > 999:
         raise ValueError('Indica le lezioni da rinumerare')
     value = snapshot(ws); rows = value['lessons']; seen = set(); result = []; originals = []
@@ -219,48 +464,77 @@ def renumber(ws, changes, *, preview=False):
         if key in claims and (row['id'] in seen or claims[key] in seen): raise ValueError(f"Lezione {row['number']} già occupata nel corso {row['course']}. Sposta gli audio nella lezione esistente oppure includila nella rinumerazione.")
         claims.setdefault(key, row['id'])
     _idle(ws, [*originals, *[rows[key] for key in seen]])
+    token = _token([originals, result])
     if not preview:
-        for change in result:
-            if change['before'] != change['after']:
-                row = rows[change['id']]
-                # Old artifacts are immutable. Prevent accidental reuse/publication
-                # under a different number until the course is explicitly reviewed.
-                row.setdefault('source_number', change['before'])
-                old = ws.runs_dir / f"{row['course']}-L{change['before']:02d}" if change['before'] else None
-                destination = ws.runs_dir / f"{row['course']}-L{change['after']:02d}"
-                if row['revision_required'] and row.get('review_original') == change['after']:
-                    row['revision_required'] = False
-                    row.pop('review_original', None)
-                elif (old and old.exists()) or destination.exists() or row['revision_required']:
-                    if not row['revision_required']: row['review_original'] = change['before']
-                    row['revision_required'] = True
+        if expected is not None and expected != token:
+            raise ValueError('I collegamenti sono cambiati. Aggiorna l’anteprima.')
+        for old in originals:
+            row = rows[old['id']]
+            _revision(ws, old, row)
+            _refresh_title(old, row)
         save(ws, value); _publish_calendar(ws)
-    return {'status': 'OK', 'changes': result, 'message': 'Numerazione verificata.' if preview else 'Numerazione aggiornata. I documenti pubblicati restano invariati.'}
+    return {'status': 'OK', 'changes': result, 'token': token, 'message': 'Numerazione verificata.' if preview else 'Numerazione aggiornata.'}
 
 
 @locked
-def move_audio(ws, recording, target):
+def move_audio(ws, recording, target, *, preview=False, expected=None):
     value = snapshot(ws); rows = value['lessons']
-    if target not in rows or rows[target]['hidden']: raise ValueError('Lezione di destinazione non disponibile')
+    if target is not None and (target not in rows or rows[target]['hidden'] or rows[target].get('cancelled')):
+        raise ValueError('Lezione di destinazione non disponibile')
     sources = [row for row in rows.values() if recording in row['recording_ids']]
     if not sources: raise ValueError('Audio non trovato')
-    destination = rows[target]; _idle(ws, [*sources, destination])
+    from .transcript_library import scan
+    texts = [t for t in scan(ws) if t.get('recording_id') == recording]
+    destination = rows.get(target)
+    _idle(ws, [*sources, *([destination] if destination else [])])
+    token = _token([sources, destination, texts])
+    if preview:
+        return {'status': 'OK', 'token': token, 'transcripts': [t['title'] for t in texts]}
+    if expected is not None and expected != token:
+        raise ValueError('I collegamenti sono cambiati. Aggiorna l’anteprima.')
+    if destination in sources:
+        return {'status': 'OK', 'message': 'L’audio è già collegato a questa lezione.'}
+    if destination is None:
+        key = 'audio:' + recording
+        identifier = 'lesson-' + uuid.uuid5(uuid.NAMESPACE_URL, key).hex
+        destination = rows.get(identifier) or {
+            'id': identifier, 'aliases': [key], 'title': sources[0]['title'],
+            'date': sources[0]['date'], 'recording_ids': [], 'transcript_ids': [], 'event_ids': [],
+            'not_recorded': False, 'hidden': False, 'revision_required': False, 'course': None, 'number': None,
+        }
+        destination.update(hidden=False, course=None, number=None, detached=True)
+        rows[identifier] = destination
+        if destination in sources:
+            save(ws, value)
+            return {'status': 'OK', 'message': 'Audio scollegato. Lo trovi tra i file da associare.'}
+    moved_texts = {t['id'] for t in texts}
     for row in sources:
         row['recording_ids'].remove(recording)
-        if not row['recording_ids'] and not row['transcript_ids'] and not row['event_ids']: row['hidden'] = True
-    destination['recording_ids'].append(recording); destination['not_recorded'] = False
-    # Transcripts follow their recording; standalone transcripts retain their binding.
-    from .transcript_library import scan
-    for transcript in scan(ws):
-        if transcript.get('recording_id') == recording:
-            for row in rows.values():
-                if transcript['id'] in row['transcript_ids']: row['transcript_ids'].remove(transcript['id'])
-            destination['transcript_ids'].append(transcript['id'])
+        row['transcript_ids'] = [key for key in row['transcript_ids'] if key not in moved_texts]
+        row['sources_revision'] = uuid.uuid4().hex
+        if row.get('preferred_transcript') in moved_texts:
+            row.pop('preferred_transcript')
+            row['sources_revision'] = uuid.uuid4().hex
+        if not row['recording_ids'] and not row['transcript_ids'] and not row['event_ids'] and not row.get('manual'):
+            row['hidden'] = True
+    destination['recording_ids'].append(recording)
+    destination['not_recorded'] = False
+    destination['sources_revision'] = uuid.uuid4().hex
+    destination['transcript_ids'] = list(dict.fromkeys([*destination['transcript_ids'], *sorted(moved_texts)]))
     save(ws, value)
     from .audio_sources import policy, save_policy
-    choices = policy(ws); choices['preferred'].pop(target, None)
-    choices.setdefault('require_choice', []).append(target); save_policy(ws, choices)
-    return {'status': 'OK', 'message': 'Audio spostato. Scegli la sorgente da usare.'}
+    choices = policy(ws)
+    for row in [*sources, destination]:
+        key = row['id']
+        if key == destination['id'] or choices['preferred'].get(key) == recording:
+            choices['preferred'].pop(key, None)
+        required = choices.setdefault('require_choice', [])
+        if key == destination['id'] and len(row['recording_ids']) > 1 and key not in required:
+            required.append(key)
+        if len(row['recording_ids']) <= 1 and key in required:
+            required.remove(key)
+    save_policy(ws, choices)
+    return {'status': 'OK', 'message': 'Registrazione aggiornata.'}
 
 
 def inventory(ws, row):
@@ -291,7 +565,7 @@ def inventory(ws, row):
     owned_runs = [ws.runs_dir / '_recordings' / key for key in row['recording_ids']]
     aliases = [a.removeprefix('lesson:') for a in row['aliases'] if a.startswith('lesson:')]
     for lecture in aliases:
-        if not any(other['id'] != row['id'] and 'lesson:' + lecture in other['aliases'] for other in rows):
+        if not any(other['id'] != row['id'] and ('lesson:' + lecture in other['aliases'] or lecture_key(other) == lecture) for other in rows):
             owned_runs.append(ws.runs_dir / lecture)
     for run in owned_runs:
         if not run.exists() or run.is_symlink(): continue
@@ -317,7 +591,37 @@ def action(ws, payload):
         save(ws, value)
         return {'status': 'OK', 'message': 'Spostamento annullato. Il file è ancora nella raccolta.'}
     _idle(ws, [row])
-    if action == 'not-recorded':
+    if action in {'prefer-transcript', 'review-sources'}:
+        transcript = payload.get('transcript')
+        recording_review = action == 'review-sources' and payload.get('recording') in row['recording_ids']
+        if transcript not in row['transcript_ids'] and not recording_review:
+            raise ValueError('Scegli una trascrizione di questa lezione')
+        from .transcript_library import scan
+        if not recording_review and not any(text['id'] == transcript for text in scan(ws)):
+            raise ValueError('Trascrizione non disponibile')
+        if transcript:
+            row['preferred_transcript'] = transcript
+        row['sources_revision'] = uuid.uuid4().hex
+        if action == 'review-sources':
+            row['revision_required'] = False
+            row.pop('review_original', None)
+    elif action == 'move-transcript':
+        transcript = payload.get('transcript')
+        target = rows.get(payload.get('target'))
+        from .transcript_library import scan
+        text = next((text for text in scan(ws) if text['id'] == transcript), None)
+        if text is None or text.get('recording_id') or target is None or target['hidden'] or transcript not in row['transcript_ids']:
+            raise ValueError('Scegli un TXT indipendente e una lezione disponibile')
+        _idle(ws, [target])
+        row['transcript_ids'].remove(transcript)
+        target['transcript_ids'] = list(dict.fromkeys(target['transcript_ids'] + [transcript]))
+        if row.get('preferred_transcript') == transcript:
+            row.pop('preferred_transcript')
+        row['sources_revision'] = uuid.uuid4().hex
+        target['sources_revision'] = uuid.uuid4().hex
+    elif action in {'cancelled', 'uncancelled'}:
+        row['cancelled'] = action == 'cancelled'
+    elif action == 'not-recorded':
         from .recording_library import records
         from .recording_library import discover
         known = records(ws); known.update({i['id']: i for i in discover(ws)})
@@ -384,6 +688,9 @@ def import_items(ws, items):
     value = snapshot(ws)
     for item in items:
         inspect_audio(ws, item['path'])
+        if item.get('recorded_at'):
+            if datetime.fromisoformat(item['recorded_at']).tzinfo is None:
+                raise ValueError('Conferma la data con il suo fuso orario')
         if item.get('target'):
             target = value['lessons'].get(item['target'])
             if not target or target['hidden']: raise ValueError('Lezione di destinazione non disponibile')
@@ -402,10 +709,15 @@ def import_items(ws, items):
                               course=target['course'] if target else item.get('course'),
                               lesson=target['number'] if target else item.get('lesson'))
         for imported in result['imported']:
-            if target and not imported['duplicate']:
+            if target and (not imported['duplicate'] or item.get('move_duplicate') is True):
                 current = snapshot(ws)
                 row = next(r for r in current['lessons'].values() if imported['recording_id'] in r['recording_ids'])
                 if row['id'] != target['id']: move_audio(ws, imported['recording_id'], target['id'])
+            if item.get('recorded_at') and not imported['duplicate']:
+                from .audio_sources import policy, save_policy
+                choices = policy(ws)
+                choices['imports'][imported['recording_id']]['recorded_at'] = item['recorded_at']
+                save_policy(ws, choices)
             results.append(imported)
     return {'status': 'OK', 'imported': results, 'message': f'{len(results)} audio riconosciuti; i duplicati non sono stati copiati.'}
 

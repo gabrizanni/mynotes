@@ -67,7 +67,7 @@ struct WorkspaceCalendarView: View {
         }
     }
     private func dayColumn(_ day: Date) -> some View {
-        let events = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
+        let events = entries.filter { $0.appearsInCalendar && clock.clipped(start: $0.date, end: $0.scheduledEnd, on: day) != nil }.sorted { $0.date < $1.date }
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ForEach(clock.hours(day), id: \.self) { hour in
@@ -109,7 +109,7 @@ struct WorkspaceCalendarView: View {
                     Text(weekday).font(.caption).foregroundStyle(.secondary).padding(.vertical, 16)
                 }
                 ForEach(days, id: \.self) { day in
-                    let items = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
+                    let items = entries.filter { $0.appearsInCalendar && clock.clipped(start: $0.date, end: $0.scheduledEnd, on: day) != nil }.sorted { $0.date < $1.date }
                     VStack(alignment: .leading, spacing: 6) {
                         Button { anchor = day; monthly = false } label: {
                             Text(clock.label(day, format: "d")).font(.callout.weight(.medium))

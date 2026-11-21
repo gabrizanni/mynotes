@@ -11,13 +11,28 @@ a eventi, audio e trascrizioni. Le letture non modificano il workspace. La prima
 operazione esplicita salva la proiezione dei dati precedenti; le modifiche
 successive conservano una copia precedente in `lesson-history`.
 
-Il numero si modifica con tastiera o stepper, con verifica prima della conferma.
-Lo spostamento di gruppo conserva i buchi e controlla collisioni e anteprime
-obsolete. Gli originali non sono rinominati; le etichette originali dei materiali
-restano utilizzabili. I risultati già generati non vengono reinterpretati sotto
-un altro numero: la generazione resta bloccata se la rinumerazione interessa
-cartelle di lavoro esistenti. Ripristinare il numero originale consente di
-riprendere; una migrazione dei documenti pubblicati non fa parte di questa modifica.
+Modifica lezione riunisce corso, numero, titolo, data, fine e fuso orario.
+La conferma usa una versione verificata dei collegamenti e mostra gli eventuali
+numeri occupati. Si possono scambiare due numeri o riunire due schede nella
+scheda aperta. Organizza lezioni offre lo spostamento di un intervallo.
+Raccolta permette anche di aggiungere una lezione passata.
+
+I collegamenti storici identificano i materiali già confermati. Un nuovo audio
+con il vecchio numero resta da associare. L'abbinamento automatico con il
+calendario confronta corso, numero e giorno originale di registrazione nel
+fuso della lezione. Le date originali provengono da Capture, dai metadati audio
+o dalla conferma esplicita nell'importazione.
+
+L'anteprima propone la rinomina delle copie gestite. Ogni file si seleziona
+esplicitamente e i nomi occupati vengono segnalati. Il registro conserva
+le rinomine pendenti e Gestisci lezione offre Riprendi rinomina file.
+Le etichette originali dei materiali rimangono disponibili per il recupero.
+
+La scheda offre una scelta del TXT per gli appunti indipendente dalla scelta
+dell'audio da trascrivere. Dopo una rinumerazione con risultati esistenti,
+Verifica collegamenti conferma la trascrizione per il numero attuale.
+Le nuove generazioni e pubblicazioni controllano la versione delle fonti.
+Quando cambia, occorre preparare nuovamente le fonti e gli appunti.
 
 L'importazione offre destinazione per file, identifica contenuti duplicati e nomi
 omonimi, e non assegna numeri progressivi in assenza di una scelta esplicita.
@@ -26,6 +41,11 @@ una nuova sorgente richiede una nuova scelta prima di trascrivere. Non concatena
 spezzoni. I comandi preesistenti continuano a essere accettati.
 
 ## Stato e rimozione
+
+Lezione annullata conserva l'occorrenza e la esclude dalle attività di registrazione.
+Scollega dalla lezione sposta la sorgente tra gli elementi da associare.
+Le trascrizioni prodotte da una registrazione seguono lo spostamento dell'audio.
+I TXT indipendenti si collegano direttamente dalla scheda di destinazione.
 
 Non registrata indica una lezione passata priva di audio. Il contesto fornito
 all'agente espone questo stato; importare un audio lo rimuove. Rimuovi dall'app

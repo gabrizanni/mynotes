@@ -1,5 +1,172 @@
 import SwiftUI
 
+struct LessonLinkEditor: View {
+    @ObservedObject var model: CaptureModel
+    let lessonID: String
+    let transcriptMode: Bool
+    @Environment(\.dismiss) private var dismiss
+    @CaptureViewState private var selected = ""
+    @CaptureViewState private var token: String?
+    @CaptureViewState private var followers: [String] = []
+    private var texts: [CaptureTranscript] { model.transcripts.filter { $0.recordingID == nil } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(transcriptMode ? "Collega TXT indipendente" : "Collega registrazione").font(.title2.bold())
+            Picker("File", selection: $selected) {
+                Text("Scegli file").tag("")
+                if transcriptMode {
+                    ForEach(texts) { Text($0.title).tag($0.id) }
+                } else {
+                    ForEach(model.recordings) { audio in
+                        Text("\(audio.originalName ?? audio.title) · \(audio.courseCode ?? "Da associare") · \(audio.lectureID ?? "")").tag(audio.id)
+                    }
+                }
+            }
+            ForEach(followers, id: \.self) { Text("Segue la registrazione · " + $0).font(.callout) }
+            if let error = model.error { Text(error).foregroundStyle(.red) }
+            HStack {
+                Button("Annulla") { dismiss() }
+                Spacer()
+                Button(token == nil && !transcriptMode ? "Verifica collegamenti" : "Conferma collegamento") { Task {
+                    if transcriptMode {
+                        guard let owner = model.libraryLessons.first(where: { $0.transcriptIDs.contains(selected) }) else { return }
+                        await model.queueAction("lesson-edit", payload: ["action": "move-transcript", "id": owner.id, "target": lessonID, "transcript": selected])
+                        if model.error == nil { dismiss() }
+                    } else if let token {
+                        await model.queueAction("lesson-edit", payload: ["action": "move-audio", "recording": selected, "target": lessonID, "token": token])
+                        if model.error == nil { dismiss() }
+                    } else {
+                        do {
+                            let result = try await model.libraryRequest(["action": "move-audio", "recording": selected, "target": lessonID, "preview": true])
+                            token = result["token"] as? String
+                            followers = result["transcripts"] as? [String] ?? []
+                        } catch { model.error = error.localizedDescription }
+                    }
+                } }.disabled(selected.isEmpty).buttonStyle(.borderedProminent)
+            }
+        }.padding(24).frame(width: 590).disabled(model.busy || model.queueBusy || model.isPreview)
+            .onChange(of: selected) { _, _ in token = nil; followers = [] }
+    }
+}
+
+struct LessonMetadataEditor: View {
+    @ObservedObject var model: CaptureModel
+    var lessonID: String?
+    @Environment(\.dismiss) private var dismiss
+    @CaptureViewState private var course = ""
+    @CaptureViewState private var number = 1
+    @CaptureViewState private var title = ""
+    @CaptureViewState private var start = Date()
+    @CaptureViewState private var end = Date().addingTimeInterval(5400)
+    @CaptureViewState private var timezone = TimeZone.current.identifier
+    @CaptureViewState private var conflictMode = "stop"
+    @CaptureViewState private var conflicts: [LibraryLesson] = []
+    @CaptureViewState private var prepared: [String: Any]?
+    @CaptureViewState private var summary = ""
+    @CaptureViewState private var renames: [[String: String]] = []
+    @CaptureViewState private var renamePaths: Set<String> = []
+    private var row: LibraryLesson? { model.libraryLessons.first { $0.id == lessonID } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(lessonID == nil ? "Aggiungi lezione" : "Modifica lezione").font(.title2.bold())
+            Form {
+                Picker("Corso", selection: $course) {
+                    Text("Scegli corso").tag("")
+                    ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
+                }
+                HStack {
+                    TextField("Numero lezione", value: $number, format: .number)
+                    Stepper("Numero lezione", value: $number, in: 1...999).labelsHidden()
+                }
+                TextField("Titolo", text: $title)
+                TextField("Fuso orario", text: $timezone)
+                DatePicker("Inizio", selection: $start)
+                DatePicker("Fine", selection: $end)
+            }.environment(\.timeZone, TimeZone(identifier: timezone) ?? .current)
+            if !conflicts.isEmpty {
+                Text("Numero già occupato").font(.headline)
+                ForEach(conflicts) { other in
+                    Text("\(other.title) · \(other.date ?? "") · \(other.recordingIDs.count) audio · \(other.transcriptIDs.count) TXT").font(.callout)
+                }
+                Picker("Correzione", selection: $conflictMode) {
+                    Text("Scegli un altro numero").tag("stop")
+                    if row?.number != nil && row?.course == course { Text("Scambia i numeri").tag("swap") }
+                    Text("Riunisci nella scheda aperta").tag("merge")
+                }
+                Text("Per spostare una sequenza usa Sposta numerazione in Organizza lezioni.").font(.caption).foregroundStyle(.secondary)
+            }
+            if let prepared {
+                Text(summary).font(.callout)
+                ForEach(renames, id: \.self) { move in
+                    if let path = move["path"], let target = move["target"] {
+                        Toggle("\(URL(fileURLWithPath: path).lastPathComponent) → \(URL(fileURLWithPath: target).lastPathComponent)",
+                               isOn: Binding(get: { renamePaths.contains(path) }, set: { selected in
+                                   if selected { renamePaths.insert(path) } else { renamePaths.remove(path) }
+                               })).font(.caption)
+                    }
+                }
+                Button("Conferma modifica") { Task {
+                    var payload = prepared
+                    payload["rename_paths"] = Array(renamePaths)
+                    await model.queueAction("lesson-edit", payload: payload)
+                    if model.error == nil { dismiss() }
+                } }.buttonStyle(.borderedProminent)
+            }
+            if let error = model.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Verifica modifica") { Task {
+                    var patch: [String: Any] = ["course": course, "number": number,
+                                               "date": CaptureDates.write(start), "end": CaptureDates.write(end), "timezone": timezone]
+                    if lessonID == nil || title != row?.title { patch["title"] = title.isEmpty ? "Lezione \(number)" : title }
+                    var payload: [String: Any] = [
+                        "action": lessonID == nil ? "create" : "update", "preview": true,
+                        "conflict": conflictMode,
+                        "patch": patch
+                    ]
+                    if let lessonID { payload["id"] = lessonID }
+                    do {
+                        let result = try await model.libraryRequest(payload)
+                        if result["status"] as? String == "CONFLICT" {
+                            let data = try JSONSerialization.data(withJSONObject: result["conflicts"] ?? [])
+                            conflicts = try JSONDecoder().decode([LibraryLesson].self, from: data)
+                            prepared = nil
+                        } else {
+                            payload["preview"] = false
+                            payload["token"] = result["token"]
+                            payload["new_id"] = result["new_id"]
+                            prepared = payload
+                            renames = result["renames"] as? [[String: String]] ?? []
+                            renamePaths = []
+                            summary = "\(course) · Lezione \(number) · \(CaptureDates.label(CaptureDates.write(start), zone: timezone)). \(row?.recordingIDs.count ?? 0) registrazioni e \(row?.transcriptIDs.count ?? 0) trascrizioni collegate."
+                            model.error = nil
+                        }
+                    } catch { prepared = nil; model.error = error.localizedDescription }
+                } }.disabled(course.isEmpty || !(1...999).contains(number) || end <= start)
+            }
+        }.padding(24).frame(width: 590)
+            .disabled(model.busy || model.queueBusy || model.isPreview)
+            .onAppear {
+                course = row?.course ?? model.snapshot?.courses.first?.code ?? ""
+                number = row?.number ?? 1
+                title = row?.title ?? ""
+                start = CaptureDates.read(row?.date) ?? Date()
+                let event = model.snapshot?.events.first { row?.eventIDs.contains($0.id) == true }
+                end = CaptureDates.read(row?.endOverride) ?? event?.end ?? start.addingTimeInterval(5400)
+                timezone = row?.timezoneOverride ?? event?.timezone ?? TimeZone.current.identifier
+            }
+            .onChange(of: course) { _, _ in prepared = nil }
+            .onChange(of: number) { _, _ in prepared = nil }
+            .onChange(of: title) { _, _ in prepared = nil }
+            .onChange(of: start) { _, _ in prepared = nil }
+            .onChange(of: end) { _, _ in prepared = nil }
+            .onChange(of: timezone) { _, _ in prepared = nil }
+            .onChange(of: conflictMode) { _, _ in prepared = nil }
+    }
+}
+
 struct LibraryManagementView: View {
     @ObservedObject var model: CaptureModel
     let openProfile: (String) -> Void
@@ -83,36 +250,24 @@ struct LibraryLessonEditor: View {
     @ObservedObject var model: CaptureModel
     let lessonID: String
     @Environment(\.dismiss) private var dismiss
-    @CaptureViewState private var number = 1
     @CaptureViewState private var files: [String]?
-    @CaptureViewState private var renumberPreview = false
     @CaptureViewState private var moveRecording = ""
     @CaptureViewState private var target = ""
+    @CaptureViewState private var showMetadata = false
     private var row: LibraryLesson? { model.libraryLessons.first { $0.id == lessonID } }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Gestisci lezione").font(.title2.weight(.semibold))
             if let row {
+                if !(row.pendingRenames ?? []).isEmpty {
+                    Button("Riprendi rinomina file") { Task {
+                        await model.queueAction("lesson-edit", payload: ["action": "resume-renames", "id": row.id])
+                    } }
+                }
                 Text(row.title).font(.headline)
                 if !row.hidden {
-                    HStack {
-                        TextField("Numero", value: $number, format: .number).textFieldStyle(.roundedBorder).frame(width: 90)
-                        Stepper("Numero lezione", value: $number, in: 1...999).labelsHidden()
-                        Button("Verifica modifica") { Task {
-                            do {
-                                _ = try await model.libraryRequest(["action": "renumber", "preview": true, "changes": [["id": row.id, "number": number, "before": row.number as Any? ?? NSNull()]]])
-                                renumberPreview = true
-                            } catch { model.error = error.localizedDescription }
-                        } }.disabled(row.course == nil || model.queueBusy)
-                    }
-                    if renumberPreview {
-                        Text("Lezione \(row.number.map(String.init) ?? "senza numero") → \(number). I documenti già pubblicati non saranno riscritti.").font(.callout)
-                        Button("Conferma numero") { Task {
-                            await model.queueAction("lesson-edit", payload: ["action": "renumber", "changes": [["id": row.id, "number": number, "before": row.number as Any? ?? NSNull()]]])
-                            renumberPreview = false
-                        } }.buttonStyle(.borderedProminent)
-                    }
-                    if row.revisionRequired { Text("Questa lezione contiene risultati associati al numero precedente. Per riprendere la generazione, ripristina il numero originale; conserva i documenti già pubblicati.").font(.callout).foregroundStyle(.orange) }
+                    Button("Modifica corso, numero, titolo e data…") { showMetadata = true }
+                    if row.revisionRequired { Text("Apri la scheda, scegli il TXT corretto e usa Verifica collegamenti per confermare le fonti del nuovo numero.").font(.callout).foregroundStyle(.orange) }
                     Divider()
                     Button(row.notRecorded ? "Rimuovi stato Non registrata" : "Segna come Non registrata") { Task {
                         await model.queueAction("lesson-edit", payload: ["id": row.id, "action": row.notRecorded ? "recorded" : "not-recorded"])
@@ -154,8 +309,7 @@ struct LibraryLessonEditor: View {
             HStack { Spacer(); Button("Fine") { dismiss() }.keyboardShortcut(.cancelAction) }
         }.padding(28).frame(width: 580)
             .disabled(model.queueBusy)
-            .onAppear { number = row?.number ?? 1 }
-            .onChange(of: number) { _, _ in renumberPreview = false }
+            .sheet(isPresented: $showMetadata) { LessonMetadataEditor(model: model, lessonID: lessonID) }
             .confirmationDialog("Rimuovere la lezione soltanto dall’app?", isPresented: $showHide) {
                 Button("Rimuovi dall’app", role: .destructive) { Task {
                     await model.queueAction("lesson-edit", payload: ["id": lessonID, "action": "hide"])
@@ -175,6 +329,7 @@ struct LibraryNumberShift: View {
     @CaptureViewState private var offset = 1
     @CaptureViewState private var preview: [[String: Any]] = []
     @CaptureViewState private var changes: [[String: Any]] = []
+    @CaptureViewState private var token = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Sposta numerazione").font(.title2.weight(.semibold))
@@ -188,6 +343,7 @@ struct LibraryNumberShift: View {
                 do {
                     let result = try await model.libraryRequest(["action": "renumber", "preview": true, "changes": proposed])
                     preview = result["changes"] as? [[String: Any]] ?? []; changes = proposed
+                    token = result["token"] as? String ?? ""
                 } catch { model.error = error.localizedDescription; preview = []; changes = [] }
             } }
             ScrollView {
@@ -200,7 +356,7 @@ struct LibraryNumberShift: View {
                 Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Conferma spostamento") { Task {
-                    await model.queueAction("lesson-edit", payload: ["action": "renumber", "changes": changes])
+                    await model.queueAction("lesson-edit", payload: ["action": "renumber", "changes": changes, "token": token])
                     if model.error == nil { dismiss() }
                 } }.disabled(changes.isEmpty || model.queueBusy).buttonStyle(.borderedProminent)
             }

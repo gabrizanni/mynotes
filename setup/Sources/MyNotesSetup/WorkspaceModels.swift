@@ -22,7 +22,9 @@ struct WorkspaceLesson: Identifiable {
     var courseCode: String? { registry?.course ?? event?.courseCode ?? audio.first?.courseCode ?? transcripts.first?.courseCode }
     private var resolvedDate: Date?
     var date: Date { resolvedDate ?? event?.start ?? CaptureDates.read(audio.first?.createdAt ?? transcripts.first?.createdAt) ?? .distantPast }
-    var timezone: String { event?.timezone ?? TimeZone.current.identifier }
+    var timezone: String { registry?.timezoneOverride ?? event?.timezone ?? TimeZone.current.identifier }
+    var scheduledEnd: Date { CaptureDates.read(registry?.endOverride) ?? event?.end ?? date.addingTimeInterval(5400) }
+    var appearsInCalendar: Bool { event != nil || registry?.manual == true }
     var selectedAudio: CaptureRecording? {
         audio.first { $0.sourceSelected == true && $0.sourceExcluded != true }
             ?? (audio.count == 1 && audio[0].sourceSelected == nil && audio[0].sourceExcluded != true ? audio[0] : nil)
@@ -34,15 +36,22 @@ struct WorkspaceLesson: Identifiable {
         needsChoice || isUnassigned || audio.contains { $0.hasProblem } || event.map { $0.eligibility == "NEEDS_REVIEW" || $0.eligibility == "CONFLICT" } == true
     }
     var transcriptPath: String? {
-        selectedAudio?.exportText ?? selectedAudio?.transcriptText ?? transcripts.first?.path
+        if let preferred = registry?.preferredTranscript {
+            return transcripts.first { $0.id == preferred }?.path
+        }
+        return selectedAudio?.exportText ?? selectedAudio?.transcriptText ?? transcripts.first?.path
             ?? audio.first(where: { $0.isTranscribed })?.exportText ?? audio.first(where: { $0.isTranscribed })?.transcriptText
     }
     var transcriptAudioID: String? {
+        if let preferred = registry?.preferredTranscript {
+            return transcripts.first { $0.id == preferred }?.recordingID
+        }
         if selectedAudio?.exportText != nil || selectedAudio?.transcriptText != nil { return selectedAudio?.id }
         return transcripts.first?.recordingID ?? audio.first(where: { $0.isTranscribed })?.id
     }
     var transcriptionLabel: String {
         if registry?.notRecorded == true { return "Non registrata" }
+        if registry?.cancelled == true { return "Lezione annullata" }
         if registry?.revisionRequired == true { return "Numerazione da verificare" }
         if needsChoice { return "Scegli audio" }
         if let selectedAudio {
@@ -141,7 +150,7 @@ struct WorkspaceActivityEntry: Identifiable {
     var id: String { lesson.id }
 
     init?(lesson: WorkspaceLesson, activeJob: CaptureQueueJob?) {
-        guard lesson.registry?.hidden != true, lesson.registry?.notRecorded != true, !lesson.audio.isEmpty else { return nil }
+        guard lesson.registry?.hidden != true, lesson.registry?.notRecorded != true, lesson.registry?.cancelled != true, !lesson.audio.isEmpty else { return nil }
         self.lesson = lesson
         if let activeJob {
             state = .active(activeJob.status, activeJob)
@@ -300,7 +309,7 @@ struct WorkspaceCalendarPlacement: Identifiable {
 extension WorkspaceCalendar {
     func placements(_ lessons: [WorkspaceLesson], on day: Date, minimumMinutes: Double = 0) -> [WorkspaceCalendarPlacement] {
         let entries = lessons.compactMap { lesson -> WorkspaceCalendarPlacement? in
-            guard let event = lesson.event, let segment = clipped(start: event.start, end: event.end, on: day) else { return nil }
+            guard lesson.appearsInCalendar, let segment = clipped(start: lesson.date, end: lesson.scheduledEnd, on: day) else { return nil }
             return WorkspaceCalendarPlacement(lesson: lesson, start: segment.start,
                 end: max(segment.end, segment.start.addingTimeInterval(minimumMinutes * 60)), column: 0, columnCount: 1, span: 1)
         }.sorted { $0.start == $1.start ? ($0.end == $1.end ? $0.id < $1.id : $0.end > $1.end) : $0.start < $1.start }

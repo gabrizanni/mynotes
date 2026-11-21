@@ -42,6 +42,9 @@ def paired(ws, folder):
     capture.import_schedule(store, [event(courseCode=code)])
     a = audio(folder, f'{code}_L01.wav');b = audio(folder, f'{code}-L01.wav')
     content = bytearray(b.read_bytes());content[-2:] = b'\x02\x00';b.write_bytes(content)
+    for item in library.discover(ws):
+        item['recorded_at'] = store.source_events()[0]['startsAt']
+        library.save(ws, item)
     library.sync(ws)
     return queue.library(ws)
 

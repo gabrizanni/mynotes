@@ -103,7 +103,7 @@ def task_context(settings, activity, course=None, *, include_core=False, workspa
         from .source_routes import route_index
         result['source_paths'] = route_index(workspace, settings, course)
         from .lesson_registry import load as lesson_state
-        result['lesson_states'] = [{key: row.get(key) for key in ('id', 'course', 'number', 'not_recorded', 'hidden', 'revision_required')} for row in lesson_state(workspace)['lessons'].values() if not course or row['course'] == course.upper()]
+        result['lesson_states'] = [{key: row.get(key) for key in ('id', 'course', 'number', 'title', 'date', 'not_recorded', 'cancelled', 'hidden', 'revision_required', 'recording_ids', 'transcript_ids', 'preferred_transcript')} for row in lesson_state(workspace)['lessons'].values() if not course or row['course'] == course.upper()]
         result['lesson_state_guidance'] = 'Non registrata means the lesson occurred without audio: do not search for or transcribe missing audio. Hidden lessons are excluded. Use mynotes transcription-queue lessons --json for the complete local registry.'
     if course:
         item = next(c for c in settings["courses"] if c["code"] == course.upper())

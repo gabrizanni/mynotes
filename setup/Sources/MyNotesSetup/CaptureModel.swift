@@ -542,7 +542,8 @@ private struct CaptureStatus: Decodable { var running: Bool?; var runtime: Captu
 struct CaptureAudioInspection: Decodable, Identifiable {
     var duplicate: Bool?
     var nameCollision: Bool?
-    enum CodingKeys: String, CodingKey { case path, name, size, duration, duplicate; case nameCollision = "name_collision" }
+    var recordedAt: String?
+    enum CodingKeys: String, CodingKey { case path, name, size, duration, duplicate; case nameCollision = "name_collision"; case recordedAt = "recorded_at" }
     var path: String
     var name: String
     var duration: Double?

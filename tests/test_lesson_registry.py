@@ -15,6 +15,161 @@ def course(ws):
     return add_course(ws, 'Example course')['course']['code']
 
 
+def test_old_number_does_not_capture_new_audio_after_renumber(setup):
+    ws, folder, _ = setup
+    code = course(ws)
+    store = capture.CaptureStore(ws)
+    capture.configure(store, {})
+    capture.import_schedule(store, [event(courseCode=code, lessonNumber=12, title=f'{code} 12')])
+    original = lessons.listing(ws)[0]
+    lessons.renumber(ws, [{'id': original['id'], 'number': 13}])
+    audio(folder, f'{code}_L12.wav')
+    rows = lessons.listing(ws)
+    current = next(row for row in rows if row['id'] == original['id'])
+    assert current['number'] == 13
+    assert current['recording_ids'] == []
+    assert current['title'] == 'Lezione 13'
+    assert any(row['recording_ids'] and row['number'] is None for row in rows)
+
+
+def test_calendar_filename_alone_cannot_claim_recording_day(setup):
+    ws, folder, _ = setup
+    code = course(ws)
+    store = capture.CaptureStore(ws)
+    capture.configure(store, {})
+    capture.import_schedule(store, [event(courseCode=code)])
+    audio(folder, f'{code}_L01.wav')
+    item = queue.library(ws)[0]
+    assert item['lecture_id'] is None
+    assert item['association_conflict']
+    from mynotes.recording_library import save
+    item['recorded_at'] = store.source_events()[0]['startsAt']
+    save(ws, item)
+    assert queue.library(ws)[0]['lecture_id'] == f'{code}-L01'
+
+
+def test_unified_update_preview_and_stale_commit(setup):
+    ws, folder, _ = setup
+    value, _ = make(ws, folder)
+    row = next(iter(value['lessons'].values()))
+    patch = {'number': 4, 'date': '2026-11-06T18:00:00+05:30',
+             'end': '2026-11-06T19:30:00+05:30', 'timezone': 'Asia/Kolkata'}
+    payload = {'action': 'update', 'id': row['id'], 'patch': patch}
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    assert not lessons.path(ws).exists()
+    lessons.update_lesson(ws, {**payload, 'token': preview['token']})
+    updated = lessons.listing(ws)[0]
+    assert updated['id'] == row['id'] and updated['number'] == 4
+    assert updated['date'] == patch['date']
+    with pytest.raises(ValueError, match='cambiati'):
+        lessons.update_lesson(ws, {**payload, 'token': preview['token']})
+
+
+def test_unified_conflict_swap_is_atomic(setup):
+    ws, folder, _ = setup
+    value, _ = make(ws, folder)
+    code = next(iter(value['lessons'].values()))['course']
+    audio(folder, f'{code}_L02.wav')
+    rows = sorted(lessons.listing(ws), key=lambda row: row['number'])
+    payload = {'action': 'update', 'id': rows[0]['id'], 'patch': {'number': 2}}
+    assert lessons.update_lesson(ws, {**payload, 'preview': True})['status'] == 'CONFLICT'
+    payload['conflict'] = 'swap'
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    lessons.update_lesson(ws, {**payload, 'token': preview['token']})
+    numbers = {row['id']: row['number'] for row in lessons.listing(ws)}
+    assert numbers[rows[0]['id']] == 2 and numbers[rows[1]['id']] == 1
+
+
+def test_detach_audio_survives_rescan(setup):
+    ws, folder, _ = setup
+    value, _ = make(ws, folder)
+    row = next(iter(value['lessons'].values()))
+    lessons.save(ws, value)
+    recording = row['recording_ids'][0]
+    lessons.move_audio(ws, recording, None)
+    for _ in range(2):
+        current = next(row for row in lessons.listing(ws) if recording in row['recording_ids'])
+        assert current['course'] is None and current['number'] is None
+
+
+def test_manual_past_lesson_can_be_created_and_cancelled(setup):
+    ws, _, _ = setup
+    payload = {'action': 'create', 'patch': {'course': course(ws), 'number': 10,
+               'date': '2026-10-03T18:00:00+05:30', 'title': 'Lezione recuperata'}}
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    result = lessons.update_lesson(ws, {**payload, 'new_id': preview['new_id'], 'token': preview['token']})
+    lessons.action(ws, {'id': result['id'], 'action': 'cancelled'})
+    assert lessons.listing(ws)[0]['cancelled']
+
+
+def test_renaming_managed_copy_preserves_source_identity_and_original(setup, tmp_path):
+    ws, _, _ = setup
+    source = audio(tmp_path / 'Outside')
+    result = sources.import_audio(ws, [str(source)], course=course(ws), lesson=1)
+    row = lessons.listing(ws)[0]
+    payload = {'action': 'update', 'id': row['id'], 'patch': {'number': 2}}
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    paths = [move['path'] for move in preview['renames']]
+    assert paths and str(source) not in paths
+    lessons.update_lesson(ws, {**payload, 'token': preview['token'], 'rename_paths': paths})
+    current = queue.library(ws)[0]
+    assert current['id'] == result['imported'][0]['recording_id']
+    assert source.exists()
+    assert Path(current['path']).name.startswith(row['course'] + '-L02')
+    assert not lessons.load(ws)['lessons'][row['id']]['pending_renames']
+
+
+def test_merge_retains_both_recordings_and_one_visible_lesson(setup):
+    ws, folder, _ = setup
+    value, _ = make(ws, folder)
+    code = next(iter(value['lessons'].values()))['course']
+    audio(folder, f'{code}_L02.wav')
+    rows = sorted(lessons.listing(ws), key=lambda row: row['number'])
+    payload = {'action': 'update', 'id': rows[0]['id'], 'patch': {'number': 2}, 'conflict': 'merge'}
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    lessons.update_lesson(ws, {**payload, 'token': preview['token']})
+    visible = [row for row in lessons.listing(ws) if not row['hidden']]
+    assert len(visible) == 1 and len(visible[0]['recording_ids']) == 2
+
+
+def test_interrupted_rename_can_resume_without_losing_recording(setup, tmp_path, monkeypatch):
+    from mynotes import recording_library
+    ws, _, _ = setup
+    source = audio(tmp_path / 'Outside')
+    sources.import_audio(ws, [str(source)], course=course(ws), lesson=1)
+    row = lessons.listing(ws)[0]
+    payload = {'action': 'update', 'id': row['id'], 'patch': {'number': 2}}
+    preview = lessons.update_lesson(ws, {**payload, 'preview': True})
+    move = recording_library._move_original
+    def interrupted(*args):
+        raise OSError('Simulated interruption')
+    monkeypatch.setattr(recording_library, '_move_original', interrupted)
+    with pytest.raises(OSError, match='interruption'):
+        lessons.update_lesson(ws, {**payload, 'token': preview['token'],
+                                  'rename_paths': [item['path'] for item in preview['renames']]})
+    assert lessons.load(ws)['lessons'][row['id']]['pending_renames']
+    monkeypatch.setattr(recording_library, '_move_original', move)
+    lessons.resume_renames(ws, row['id'])
+    assert source.exists() and len(queue.library(ws)) == 1
+    assert not lessons.load(ws)['lessons'][row['id']]['pending_renames']
+
+
+def test_verified_transcript_unblocks_new_number_with_new_source_revision(setup):
+    from test_recording_library import transcribe
+    ws, folder, _ = setup
+    value, _ = make(ws, folder)
+    row = next(iter(value['lessons'].values()))
+    transcribe(ws, row['recording_ids'][0])
+    row = lessons.listing(ws)[0]
+    lessons.renumber(ws, [{'id': row['id'], 'number': 2}])
+    current = lessons.listing(ws)[0]
+    assert current['revision_required']
+    lessons.action(ws, {'id': row['id'], 'action': 'review-sources', 'transcript': current['transcript_ids'][0]})
+    lessons.assert_generation_allowed(ws, row['course'], 2)
+    assert lessons.selected_transcript(ws, lessons.listing(ws)[0])['lecture_id'].endswith('L02')
+    assert lessons.source_revision(ws, f"{row['course']}-L02")
+
+
 def test_course_profile_reads_current_effective_preferences_without_writing(setup):
     ws, _, _ = setup
     code = course(ws)

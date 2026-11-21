@@ -912,12 +912,16 @@ def run_cli(args):
         from .lesson_registry import profile
         value = profile(ws, args.course)
     elif action == 'lesson-edit':
-        from .lesson_registry import action as edit, renumber, move_audio, trash_completed
+        from .lesson_registry import action as edit, renumber, move_audio, trash_completed, update_lesson, resume_renames
         payload = json.loads(Path(args.file).read_text())
-        if payload.get('action') == 'renumber':
-            value = renumber(ws, payload.get('changes'), preview=payload.get('preview') is True)
+        if payload.get('action') == 'resume-renames':
+            value = resume_renames(ws, payload['id'])
+        elif payload.get('action') in {'update', 'create'}:
+            value = update_lesson(ws, payload)
+        elif payload.get('action') == 'renumber':
+            value = renumber(ws, payload.get('changes'), preview=payload.get('preview') is True, expected=payload.get('token'))
         elif payload.get('action') == 'move-audio':
-            value = move_audio(ws, payload.get('recording'), payload.get('target'))
+            value = move_audio(ws, payload.get('recording'), payload.get('target'), preview=payload.get('preview') is True, expected=payload.get('token'))
         elif payload.get('action') == 'trash-completed':
             value = trash_completed(ws, payload['id'], payload.get('completed', []))
         else: value = edit(ws, payload)

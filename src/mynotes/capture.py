@@ -118,6 +118,7 @@ class CaptureStore:
         from .capture_associations import project_events
         from .lesson_registry import project_events as lesson_events
         effective = apply_local_changes(lesson_events(self.workspace, project_events(self, events)), changes, config)
+        effective = validate_windows(lesson_events(self.workspace, effective), config)
         self.save(self.directory / "source-events.json", {"schemaVersion": 1, "events": events})
         self.save(self.schedule_path, {"schemaVersion": 1, "events": effective})
 
