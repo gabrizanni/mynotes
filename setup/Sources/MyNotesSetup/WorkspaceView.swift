@@ -39,6 +39,7 @@ struct MyNotesWorkspaceView: View {
     @CaptureViewState<String?> private var selectedLessonID: String?
     @CaptureViewState<String> private var query = ""
     @CaptureViewState<String> private var course = "all"
+    @CaptureViewState<WorkspaceActivityCourse> private var activityCourse = .all
     @CaptureViewState<Bool> private var coursesExpanded = true
     @CaptureViewState<Bool> private var attentionOnly = false
     @CaptureViewState<String> private var displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
@@ -220,7 +221,7 @@ struct MyNotesWorkspaceView: View {
             WorkspaceCalendarView(model: model, lessons: lessons, now: now) { sheet = .detail($0) }
         case .library: library
         case .activity:
-            CaptureRecordingsView(model: model, queueVisible: true, activityOnly: true).padding(24)
+            WorkspaceActivityView(model: model, course: $activityCourse) { sheet = .detail($0) }
         }
     }
     private var today: some View {

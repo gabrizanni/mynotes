@@ -11,6 +11,74 @@ from test_capture import store, event
 pytestmark=pytest.mark.skipif(sys.platform!='darwin' or not shutil.which('swiftc'),reason='macOS compiler required')
 
 
+def test_activity_projects_lessons_before_queue_and_preserves_source_identity(tmp_path):
+    source = Path(__file__).parents[1] / "setup/Sources/MyNotesSetup"
+    driver = tmp_path / "main.swift"
+    driver.write_text(r'''
+import Foundation
+
+func recording(_ id: String, course: String? = "MATH", status: String = "NOT_STARTED",
+               selected: Bool = true, excluded: Bool = false, day: Int = 2) -> CaptureRecording {
+    CaptureRecording(id: id, path: "/sample.wav", title: id, status: status, courseCode: course,
+                     createdAt: "2026-11-0\(day)T10:00:00Z", sourceSelected: selected, sourceExcluded: excluded)
+}
+func job(_ id: String, recording: String, status: String, course: String = "MATH") -> CaptureQueueJob {
+    CaptureQueueJob(id: id, recordingID: recording, title: recording, courseCode: course, status: status)
+}
+func transcript(_ recording: String?) -> CaptureTranscript {
+    CaptureTranscript(id: "txt", path: "/sample.txt", title: "Saved", status: "COMPLETED",
+                      recordingID: recording, createdAt: "")
+}
+
+let new = recording("new")
+let old = recording("old", status: "COMPLETED", selected: false)
+let lesson = WorkspaceLesson(id: "with-alternative", audio: [new, old], transcripts: [transcript("old")])
+let earlier = WorkspaceLesson(id: "earlier", audio: [recording("first", day: 1)])
+let unassigned = WorkspaceLesson(id: "unassigned", audio: [recording("other", course: nil)])
+let excluded = WorkspaceLesson(id: "excluded", audio: [recording("excluded", selected: false, excluded: true)])
+let choose = WorkspaceLesson(id: "choose", audio: [recording("a", selected: false), recording("b", selected: false)])
+let independent = WorkspaceLesson(id: "independent", audio: choose.audio, transcripts: [transcript(nil)])
+let completed = WorkspaceLesson(id: "complete", audio: [recording("complete", status: "COMPLETED")])
+let empty = WorkspaceLesson(id: "calendar-only")
+let local = WorkspaceActivity(lessons: [lesson, earlier, unassigned, excluded, choose, independent, completed, empty],
+                              queue: nil, course: .course("MATH"))
+precondition(local.ready.map(\.id) == ["earlier", "with-alternative"])
+precondition(Set(local.review.map(\.id)) == ["excluded", "choose"])
+precondition(local.active.isEmpty && local.count == 4 && local.hasUnassigned)
+precondition(WorkspaceActivity(lessons: [lesson, unassigned], queue: nil, course: .unassigned).ready.map(\.id) == ["unassigned"])
+
+var queue = CaptureQueue(parallel: 2, paused: true, uiOpen: true, jobs: [
+    job("queued", recording: "first", status: "QUEUED"),
+    job("running", recording: "new", status: "RUNNING"),
+    job("different-course", recording: "other", status: "QUEUED", course: "OLD"),
+    job("old-attempt", recording: "old", status: "COMPLETED")
+])
+let active = WorkspaceActivity(lessons: [earlier, lesson, unassigned], queue: queue, course: .course("MATH"))
+precondition(active.active.map(\.id) == ["with-alternative", "earlier"])
+precondition(active.ready.isEmpty && active.history.map(\.id) == ["old-attempt"])
+precondition(WorkspaceActivity(lessons: [unassigned], queue: queue, course: .unassigned).active.map(\.id) == ["unassigned"])
+precondition(queue.activeJobs.count == 3 && queue.paused)
+
+queue.jobs[1].status = "COMPLETED"
+let saved = WorkspaceLesson(id: lesson.id, audio: [recording("new", status: "COMPLETED"), old])
+let done = WorkspaceActivity(lessons: [saved], queue: queue, course: .course("MATH"))
+precondition(done.count == 0 && done.history.contains { $0.id == "running" })
+var unsaved = saved
+unsaved.audio[0].archiveStatus = "PENDING"
+let pending = WorkspaceActivity(lessons: [unsaved], queue: nil, course: .all)
+precondition(pending.review.map(\.id) == [saved.id])
+''')
+    binary = tmp_path / "activity"
+    build = subprocess.run(
+        ["swiftc", "-module-cache-path", str(tmp_path / "cache"), str(source / "CaptureDashboard.swift"),
+         str(source / "WorkspaceModels.swift"), str(driver), "-o", str(binary)],
+        capture_output=True, text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
 def test_lessons_keep_preferred_audio_and_previous_transcript_provenance(store,tmp_path):
     capture.import_schedule(store,[event()])
     snapshot=capture_dashboard.dashboard(store)

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Darwin
 
-private func captureStateLabel(_ status: String) -> String {
+func captureStateLabel(_ status: String) -> String {
     switch status {
     case "COMPLETED": return "Trascritta"
     case "QUEUED": return "In coda"
@@ -18,7 +18,7 @@ private func captureStateLabel(_ status: String) -> String {
     }
 }
 
-private func capturePhaseLabel(_ phase: String) -> String {
+func capturePhaseLabel(_ phase: String) -> String {
     switch phase {
     case "waiting_model": return "In attesa del modello"
     case "finalizing": return "Salvataggio"
@@ -52,7 +52,6 @@ struct CaptureRecordingsView: View {
     @CaptureViewState<String> private var associationCourse = ""
     @CaptureViewState<String> private var associationLesson = ""
     let queueVisible: Bool
-    var activityOnly = false
     private var recordings: [CaptureRecording] {
         model.recordings.sorted { left, right in
             switch sortOrder {
@@ -72,24 +71,13 @@ struct CaptureRecordingsView: View {
     private var selectedReady: [CaptureRecording] { recordings.filter { selected.contains($0.id) && CaptureRecordingFilter.ready.includes($0) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if !activityOnly { controls }
-            else {
-                HStack {
-                    Text("\(model.queue?.activeJobs.count ?? 0) lavori attivi").foregroundStyle(.secondary)
-                    Spacer()
-                    Button(model.queue?.paused == true ? "Riprendi coda" : "Pausa coda") { Task { await model.queueAction(model.queue?.paused == true ? "resume" : "pause") } }
-                    Menu("Altro") { Button("Svuota lavori in attesa") { Task { await model.queueAction("clear") } }.disabled(model.queue?.activeJobs.contains { $0.status == "QUEUED" } != true) }.fixedSize()
-                }.disabled(model.isPreview || model.queueBusy)
-            }
+            controls
             if !queueVisible { folderControls }
             if queueVisible {
-                if activityOnly { queueList.frame(maxHeight: .infinity) }
-                else {
-                    DisclosureGroup("Coda (\(model.queue?.activeJobs.count ?? 0))", isExpanded: $showQueue) {
-                        queueList.frame(maxHeight: 240)
-                    }
+                DisclosureGroup("Coda (\(model.queue?.activeJobs.count ?? 0))", isExpanded: $showQueue) {
+                    queueList.frame(maxHeight: 240)
                 }
-                if !activityOnly { transcriptList }
+                transcriptList
             }
             else { libraryList }
         }
@@ -363,7 +351,7 @@ struct CaptureRecordingsView: View {
                 } else if let reason = model.queue?.waitReason { Label(reason, systemImage: "pause.circle").font(.callout).foregroundStyle(.secondary) }
                 if model.queue?.activeJobs.isEmpty != false {
                     Label("Nessun lavoro in attesa", systemImage: "checkmark.circle").font(.headline)
-                    Text(activityOnly ? "Apri una lezione nella Raccolta per avviare una trascrizione." : "Avvia una trascrizione dalla scheda Registrazioni.").foregroundStyle(.secondary)
+                    Text("Avvia una trascrizione dalla scheda Registrazioni.").foregroundStyle(.secondary)
                 } else {
                     ForEach(model.queue?.activeJobs ?? []) { queueRow($0) }
                 }
@@ -423,7 +411,7 @@ struct CaptureRecordingsView: View {
 
 }
 
-private struct FlowActions: View {
+struct FlowActions: View {
     var actions: [String]
     var archivePending = false
     var perform: (String) -> Void

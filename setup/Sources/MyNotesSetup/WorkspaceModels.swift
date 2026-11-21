@@ -117,6 +117,124 @@ struct WorkspaceLesson: Identifiable {
     }
 }
 
+enum WorkspaceActivityCourse: Hashable {
+    case all, unassigned, course(String)
+
+    func includes(_ code: String?) -> Bool {
+        switch self {
+        case .all: return true
+        case .unassigned: return code == nil
+        case .course(let selected): return code == selected
+        }
+    }
+}
+
+struct WorkspaceActivityEntry: Identifiable {
+    enum State {
+        case active(String, CaptureQueueJob?)
+        case ready(CaptureRecording)
+        case review(String)
+    }
+
+    let lesson: WorkspaceLesson
+    let state: State
+    var id: String { lesson.id }
+
+    init?(lesson: WorkspaceLesson, activeJob: CaptureQueueJob?) {
+        guard lesson.registry?.hidden != true, lesson.registry?.notRecorded != true, !lesson.audio.isEmpty else { return nil }
+        self.lesson = lesson
+        if let activeJob {
+            state = .active(activeJob.status, activeJob)
+        } else if let active = lesson.audio.first(where: { ["RUNNING", "CANCELLING"].contains($0.transcriptionState) })
+            ?? lesson.audio.first(where: { $0.transcriptionState == "QUEUED" }) {
+            state = .active(active.transcriptionState, nil)
+        } else if lesson.registry?.revisionRequired == true {
+            state = .review("Numerazione da verificare")
+        } else if let selected = lesson.selectedAudio {
+            if selected.archiveStatus == "PENDING" {
+                state = .review("Archiviazione da completare")
+            } else if selected.isTranscribed {
+                return nil
+            } else if selected.hasProblem {
+                state = .review(selected.actions?.contains("download") == true
+                    ? "Scarica l’audio sul Mac"
+                    : selected.blockingReasons?.first?.message ?? CaptureProblem.summary(status: selected.transcriptionState))
+            } else if lesson.transcripts.contains(where: { $0.recordingID == selected.id && $0.status == "COMPLETED" }) {
+                return nil
+            } else if selected.audioAvailable == false {
+                state = .review(selected.actions?.contains("download") == true ? "Scarica l’audio sul Mac" : "Audio non disponibile")
+            } else if CaptureRecordingFilter.ready.includes(selected) {
+                state = .ready(selected)
+            } else {
+                state = .review(selected.blockingReasons?.first?.message ?? "Controlla la sorgente audio")
+            }
+        } else if lesson.transcripts.contains(where: { $0.recordingID == nil && $0.status == "COMPLETED" }) {
+            return nil
+        } else if lesson.audio.allSatisfy({ $0.sourceExcluded == true }) {
+            state = .review("Audio escluso dalla trascrizione")
+        } else {
+            state = .review("Scegli la sorgente audio")
+        }
+    }
+}
+
+struct WorkspaceActivity {
+    var active: [WorkspaceActivityEntry] = []
+    var ready: [WorkspaceActivityEntry] = []
+    var review: [WorkspaceActivityEntry] = []
+    var history: [CaptureQueueJob] = []
+    let hasUnassigned: Bool
+    var count: Int { active.count + ready.count + review.count }
+
+    init(lessons: [WorkspaceLesson], queue: CaptureQueue?, course: WorkspaceActivityCourse) {
+        let activeJobs = queue?.activeJobs ?? []
+        let jobsByRecording = Dictionary(uniqueKeysWithValues: activeJobs.enumerated().map { ($0.element.recordingID, $0.offset) })
+        var lessonByRecording: [String: WorkspaceLesson] = [:]
+        var activeByRank: [(entry: WorkspaceActivityEntry, rank: Int)] = []
+        var unassigned = false
+        for lesson in lessons {
+            for recording in lesson.audio {
+                lessonByRecording[recording.id] = lesson
+            }
+            let rank = lesson.audio.compactMap { jobsByRecording[$0.id] }.min { lhs, rhs in
+                let a = activeJobs[lhs], b = activeJobs[rhs]
+                if (a.status == "QUEUED") != (b.status == "QUEUED") { return a.status != "QUEUED" }
+                return lhs < rhs
+            }
+            guard let entry = WorkspaceActivityEntry(lesson: lesson, activeJob: rank.map({ activeJobs[$0] })) else { continue }
+            unassigned = unassigned || lesson.isUnassigned
+            guard course.includes(lesson.courseCode) else { continue }
+            switch entry.state {
+            case .active: activeByRank.append((entry, rank ?? Int.max))
+            case .ready: ready.append(entry)
+            case .review: review.append(entry)
+            }
+        }
+        active = activeByRank.sorted { lhs, rhs in
+            guard case .active(let a, _) = lhs.entry.state, case .active(let b, _) = rhs.entry.state else { return false }
+            if (a == "QUEUED") != (b == "QUEUED") { return a != "QUEUED" }
+            if lhs.rank != rhs.rank { return lhs.rank < rhs.rank }
+            return lhs.entry.id < rhs.entry.id
+        }.map(\.entry)
+        ready.sort(by: Self.oldestFirst)
+        review.sort(by: Self.oldestFirst)
+        for job in queue?.historyJobs ?? [] where !["QUEUED", "RUNNING", "CANCELLING"].contains(job.status) {
+            let code = lessonByRecording[job.recordingID].map(\.courseCode) ?? job.courseCode
+            unassigned = unassigned || code == nil
+            if course.includes(code) { history.append(job) }
+        }
+        hasUnassigned = unassigned
+    }
+
+    private static func oldestFirst(_ lhs: WorkspaceActivityEntry, _ rhs: WorkspaceActivityEntry) -> Bool {
+        let a = lhs.lesson.date, b = rhs.lesson.date
+        if a == b { return lhs.id < rhs.id }
+        if a == .distantPast { return false }
+        if b == .distantPast { return true }
+        return a < b
+    }
+}
+
 struct WorkspaceCalendar {
     var calendar: Calendar
     init(timezone: String = TimeZone.autoupdatingCurrent.identifier) {
