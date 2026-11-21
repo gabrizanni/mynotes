@@ -18,6 +18,13 @@ struct WorkspaceLesson: Identifiable {
     var audio: [CaptureRecording] = []
     var transcripts: [CaptureTranscript] = []
     var registry: LibraryLesson?
+    init(id: String, event: CaptureEvent? = nil, audio: [CaptureRecording] = [], transcripts: [CaptureTranscript] = [], registry: LibraryLesson? = nil) {
+        self.id = id
+        self.event = event
+        self.audio = audio
+        self.transcripts = transcripts
+        self.registry = registry
+    }
     var title: String { registry?.title ?? event?.title ?? audio.first?.title ?? transcripts.first?.title ?? "Registrazione" }
     var courseCode: String? { registry?.course ?? event?.courseCode ?? audio.first?.courseCode ?? transcripts.first?.courseCode }
     private var resolvedDate: Date?
