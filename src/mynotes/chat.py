@@ -85,7 +85,11 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         instructions = Path(integration["path"]) / "SKILL.md"
         command = [executable, "--permission-mode", "acceptEdits", "--append-system-prompt-file", str(instructions)] + overrides + [prompt]
     else:
-        command = [executable, "-C", str(repository), "--add-dir", str(workspace.root)] + overrides + [prompt]
+        # The private workspace is already the working root. Adding it again
+        # with --add-dir is fatal in Codex when the inherited permissions are
+        # read-only. MyNotes coordination needs ordinary workspace writes;
+        # keep that scope explicit without granting unrestricted access.
+        command = [executable, "-C", str(repository), "--sandbox", "workspace-write"] + overrides + [prompt]
     environment["MYNOTES_WORKSPACE"] = str(workspace.root)
     environment["MYNOTES_CHAT_ACTIVE"] = "1"
     return subprocess.run(command, env=environment, cwd=repository, check=False).returncode

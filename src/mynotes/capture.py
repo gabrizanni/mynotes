@@ -116,7 +116,9 @@ class CaptureStore:
         from .capture_dashboard import apply_local_changes
         changes = read_json(self.directory / "overrides.json", {"events": {}}) if overrides is None else overrides
         from .capture_associations import project_events
-        effective = apply_local_changes(project_events(self, events), changes, config)
+        from .lesson_registry import project_events as lesson_events
+        effective = apply_local_changes(lesson_events(self.workspace, project_events(self, events)), changes, config)
+        effective = validate_windows(lesson_events(self.workspace, effective), config)
         self.save(self.directory / "source-events.json", {"schemaVersion": 1, "events": events})
         self.save(self.schedule_path, {"schemaVersion": 1, "events": effective})
 

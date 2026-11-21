@@ -1,6 +1,15 @@
 import SwiftUI
 import Foundation
 
+private struct AudioDestination {
+    var target = ""
+    var course = ""
+    var number = ""
+    var confirmDate = false
+    var recordedAt = Date()
+    var moveDuplicate = false
+}
+
 struct WorkspaceAudioImportView: View {
     @ObservedObject var model: CaptureModel
     let urls: [URL]
@@ -8,93 +17,101 @@ struct WorkspaceAudioImportView: View {
     var initialCourse: String? = nil
     var initialLectureID: String? = nil
     @Environment(\.dismiss) private var dismiss
-    @CaptureViewState<String> private var eventID = ""
-    @CaptureViewState<String> private var course = ""
-    @CaptureViewState<Int> private var number = 1
-    @CaptureViewState<Bool> private var hasNumber = false
-    @CaptureViewState<Bool> private var inspecting = true
-    @CaptureViewState<[CaptureAudioInspection]> private var files: [CaptureAudioInspection] = []
-    @CaptureViewState<String?> private var failure: String?
-    @CaptureViewState<[URL]> private var scoped: [URL] = []
-    private var events: [CaptureEvent] { (model.snapshot?.events ?? []).sorted { $0.start > $1.start } }
+    @CaptureViewState private var files: [CaptureAudioInspection] = []
+    @CaptureViewState private var destinations: [String: AudioDestination] = [:]
+    @CaptureViewState private var inspecting = true
+    @CaptureViewState private var failure: String?
+    @CaptureViewState private var scoped: [URL] = []
+    private func binding(_ path: String) -> Binding<AudioDestination> {
+        Binding(get: { destinations[path] ?? AudioDestination() }, set: { destinations[path] = $0 })
+    }
+    private var valid: Bool {
+        files.allSatisfy { file in
+            let choice = destinations[file.path] ?? AudioDestination()
+            return choice.number.isEmpty || (!choice.course.isEmpty && Int(choice.number).map { (1...999).contains($0) } == true)
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if model.snapshot?.isRecording == true || model.snapshot?.isExporting == true { WorkspaceRecordingBar(model: model) }
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Importa audio").font(.title2.weight(.semibold))
-                Text("Una copia entra nella raccolta. I file originali restano dove sono.").font(.callout).foregroundStyle(.secondary)
-            }
-            if inspecting { ProgressView("Verifica dei file…").frame(maxWidth: .infinity, minHeight: 100) }
-            else if let failure {
-                Label(failure, systemImage: "exclamationmark.circle").foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
-                Button("Verifica di nuovo") { Task { await inspect() } }
-            } else {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(files) { file in
-                            HStack(spacing: 12) {
-                                Image(systemName: "waveform").foregroundStyle(.secondary)
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(file.name).font(.callout.weight(.medium))
-                                    Text((file.duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) } ?? "Durata non disponibile") + " · " + ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary)
+            Text("Importa audio").font(.title2.weight(.semibold))
+            Text("Scegli la destinazione di ogni file. Gli originali esterni restano conservati.").font(.callout).foregroundStyle(.secondary)
+            if inspecting { ProgressView("Verifica dei file…") }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    ForEach(files) { file in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(file.name, systemImage: "waveform").font(.headline)
+                            Text((file.duration.map { Duration.seconds($0).formatted(.time(pattern: .minuteSecond)) } ?? "Durata non disponibile") + " · " + ByteCountFormatter.string(fromByteCount: file.size, countStyle: .file)).font(.caption).foregroundStyle(.secondary)
+                            if file.duplicate == true { Label("Già presente: non verrà creata una copia o modificata l’associazione.", systemImage: "doc.on.doc").font(.caption) }
+                            if file.nameCollision == true { Text("Nome già presente: i contenuti diversi saranno conservati separatamente.").font(.caption).foregroundStyle(.secondary) }
+                            Picker("Destinazione", selection: binding(file.path).target) {
+                                Text("Assegna corso e numero…").tag("")
+                                ForEach(model.libraryLessons.filter { !$0.hidden && ($0.course == (destinations[file.path]?.course ?? "") || (destinations[file.path]?.course ?? "").isEmpty) }) { lesson in
+                                    Text("\(lesson.course ?? "Da associare") · \(lesson.number.map { "Lezione \($0)" } ?? lesson.title) · \(CaptureDates.label(lesson.date))").tag(lesson.id)
                                 }
-                                Spacer()
-                                Image(systemName: "checkmark.circle").foregroundStyle(.secondary).accessibilityLabel("Audio verificato")
-                            }.padding(.vertical, 4)
+                            }
+                            if (destinations[file.path]?.target ?? "").isEmpty {
+                                HStack {
+                                    Picker("Corso", selection: binding(file.path).course) {
+                                        Text("Da associare").tag("")
+                                        ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
+                                    }
+                                    TextField("Numero (facoltativo)", text: binding(file.path).number).textFieldStyle(.roundedBorder).frame(width: 180)
+                                }
+                                Text("Senza un numero confermato l’audio resta da assegnare; non viene aggiunto un numero progressivo.").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                Text("Se ci sono più audio, sceglierai quale trascrivere nel dettaglio della lezione.").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if file.duplicate == true {
+                                Toggle("Sposta il file già presente nella destinazione scelta", isOn: binding(file.path).moveDuplicate)
+                            } else {
+                                Toggle("Confermo la data originale di registrazione", isOn: binding(file.path).confirmDate)
+                                if destinations[file.path]?.confirmDate == true {
+                                    DatePicker("Registrata il", selection: binding(file.path).recordedAt)
+                                } else {
+                                    Text(file.recordedAt.map { "Data originale · " + CaptureDates.label($0) } ?? "Data di registrazione sconosciuta").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
-                    }
-                }.frame(maxHeight: 170)
-            }
-            Divider()
-            Form {
-                Picker("Lezione", selection: $eventID) {
-                    Text("Senza lezione del calendario").tag("")
-                    ForEach(events) { event in
-                        Text(event.title + " · " + CaptureDates.label(event.startsAt, zone: event.timezone)).tag(event.id)
+                        Divider()
                     }
                 }
-                if eventID.isEmpty {
-                    Picker("Corso", selection: $course) {
-                        Text("Senza corso / da associare").tag("")
-                        ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
-                    }
-                    if !course.isEmpty {
-                        Toggle("Indica il numero della lezione", isOn: $hasNumber)
-                        if hasNumber { Stepper("Lezione \(number)", value: $number, in: 1...999) }
-                    }
-                }
-            }
-            Text("Se la lezione ha già un audio, potrai confrontare le sorgenti e scegliere quale trascrivere. Nessun file viene sostituito.").font(.caption).foregroundStyle(.secondary)
-            if let error = model.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+            }.frame(maxHeight: 430)
+            if let failure { Text(failure).foregroundStyle(.red).font(.callout) }
+            if let error = model.error { Text(error).foregroundStyle(.red).font(.callout).textSelection(.enabled) }
             HStack {
-                Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction).disabled(model.queueBusy)
+                Button("Annulla") { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                if model.queueBusy { ProgressView().controlSize(.small) }
                 Button("Importa nella raccolta") { Task {
-                    var payload: [String: Any] = ["paths": urls.map(\.path)]
-                    if !eventID.isEmpty { payload["event_id"] = eventID }
-                    else if !course.isEmpty {
-                        payload["course"] = course
-                        if hasNumber { payload["lesson"] = number }
+                    let items: [[String: Any]] = files.map { file in
+                        let destination = destinations[file.path] ?? AudioDestination()
+                        var item: [String: Any] = ["path": file.path]
+                        item["move_duplicate"] = destination.moveDuplicate
+                        if destination.confirmDate { item["recorded_at"] = CaptureDates.write(destination.recordedAt) }
+                        if !destination.target.isEmpty { item["target"] = destination.target }
+                        else if !destination.course.isEmpty {
+                            item["course"] = destination.course
+                            if let number = Int(destination.number) { item["lesson"] = number }
+                        }
+                        return item
                     }
-                    await model.queueAction("import-audio", payload: payload)
+                    await model.queueAction("import-audio", payload: ["items": items])
                     if model.error == nil { dismiss() }
-                } }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(inspecting || failure != nil || files.count != urls.count || model.queueBusy || model.isPreview)
+                } }.buttonStyle(.borderedProminent).disabled(inspecting || failure != nil || files.count != urls.count || !valid || model.queueBusy || model.isPreview)
             }
-        }.padding(28).frame(width: 580)
-        .task {
-            eventID = initialEventID ?? ""; course = initialCourse ?? ""
-            if let raw = initialLectureID?.components(separatedBy: "-L").last, let value = Int(raw) { number = value; hasNumber = true }
-            scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
-            await inspect()
-        }
-        .onDisappear { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
-    }
-    private func inspect() async {
-        inspecting = true; failure = nil
-        defer { inspecting = false }
-        do { files = try await model.inspectAudio(urls) }
-        catch { files = []; failure = error.localizedDescription }
+        }.padding(28).frame(width: 680)
+            .task {
+                scoped = urls.filter { $0.startAccessingSecurityScopedResource() }
+                do {
+                    files = try await model.inspectAudio(urls)
+                    let target = model.libraryLessons.first { lesson in
+                        initialEventID.map { lesson.eventIDs.contains($0) } == true
+                            || initialLectureID.map { raw in lesson.course == initialCourse && lesson.number == Int(raw.components(separatedBy: "-L").last ?? "") } == true
+                    }
+                    for file in files { destinations[file.path] = AudioDestination(target: target?.id ?? "", course: initialCourse ?? target?.course ?? "", number: "") }
+                } catch { failure = error.localizedDescription }
+                inspecting = false
+            }
+            .onDisappear { scoped.forEach { $0.stopAccessingSecurityScopedResource() } }
     }
 }

@@ -3,6 +3,17 @@ import AppKit
 import SwiftUI
 import Combine
 
+@MainActor
+func recycleLibraryFile(at path: String) async throws {
+    let source = URL(fileURLWithPath: path)
+    // Use macOS's Finder-style recycle operation, including for File Provider
+    // folders such as OneDrive. Require confirmation for this specific file.
+    let moved = try await NSWorkspace.shared.recycle([source])
+    guard moved[source] != nil else {
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
+    }
+}
+
 @MainActor final class CaptureModel: ObservableObject {
     @Published var snapshot: CaptureSnapshot?
     @Published var busy = false
@@ -14,12 +25,13 @@ import Combine
     @Published var recordings: [CaptureRecording] = []
     @Published var transcripts: [CaptureTranscript] = []
     @Published private(set) var lessons: [WorkspaceLesson] = []
+    @Published var libraryLessons: [LibraryLesson] = []
     private var lessonsByID: [String: WorkspaceLesson] = [:]
     private var lessonProjectionDirty = true
     private(set) var lessonProjectionRevision = 0
     func lesson(withID id: String) -> WorkspaceLesson? { lessonsByID[id] }
     private func rebuildLessons(snapshot: CaptureSnapshot?) {
-        let next = WorkspaceLesson.build(snapshot: snapshot, audio: recordings, transcripts: transcripts)
+        let next = WorkspaceLesson.build(snapshot: snapshot, audio: recordings, transcripts: transcripts, registry: libraryLessons)
         lessonsByID = Dictionary(uniqueKeysWithValues: next.map { ($0.id, $0) })
         lessons = next
         lessonProjectionDirty = false
@@ -326,6 +338,8 @@ import Combine
             try JSONDecoder().decode(CaptureLibrary.self, from: Self.invoke(executable, workspace, "library", [], nil, group: "transcription-queue"))
         }.value
         if version == revision {
+            let nextLessons = value.lessons ?? []
+            if !Self.equal(libraryLessons, nextLessons) { libraryLessons = nextLessons; lessonProjectionDirty = true }
             let nextTranscripts = value.transcripts ?? []
             if !Self.equal(transcripts, nextTranscripts) { transcripts = nextTranscripts; lessonProjectionDirty = true }
             if recordingFolder != value.folder { recordingFolder = value.folder }
@@ -526,6 +540,10 @@ private final class CaptureErrorBytes: @unchecked Sendable { var data = Data() }
 private struct CaptureStatus: Decodable { var running: Bool?; var runtime: CaptureRuntime; var enabled: Bool; var paused: Bool }
 
 struct CaptureAudioInspection: Decodable, Identifiable {
+    var duplicate: Bool?
+    var nameCollision: Bool?
+    var recordedAt: String?
+    enum CodingKeys: String, CodingKey { case path, name, size, duration, duplicate; case nameCollision = "name_collision"; case recordedAt = "recorded_at" }
     var path: String
     var name: String
     var duration: Double?
@@ -555,13 +573,23 @@ extension CaptureModel {
                 throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Impossibile preparare lo spostamento nel Cestino."])
             }
             restore = result["was_excluded"] as? Bool != true
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-            restore = false
+            try await recycleLibraryFile(at: path)
             notice = "Audio spostato nel Cestino. Trascrizioni e altri audio sono conservati."
+        } catch {
+            var message = error.localizedDescription
+            if restore {
+                do {
+                    _ = try await Task.detached { try Self.invoke(executable, workspace, "restore-audio", ["--recording", audio.id], nil, group: "transcription-queue") }.value
+                } catch {
+                    message += " Impossibile ripristinare lo stato della sorgente. Usa «Ripristina audio» per riattivarla."
+                }
+            }
+            self.error = message
+        }
+        do {
             try await reconcile(version: version, includeLibrary: true)
         } catch {
-            if restore { _ = try? await Task.detached { try Self.invoke(executable, workspace, "restore-audio", ["--recording", audio.id], nil, group: "transcription-queue") }.value }
-            self.error = error.localizedDescription
+            refreshWarning = "Impossibile aggiornare la Raccolta. Premi Aggiorna per riprovare."
         }
     }
 }

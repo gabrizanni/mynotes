@@ -240,7 +240,7 @@ def provider_check(provider: str | None) -> dict:
         # Help probes verify the interfaces actually used by chat/generation.
         # A successful --version alone establishes neither API compatibility nor auth.
         probes = {
-            "codex": [(["--help"], ("--add-dir", "--cd")),
+            "codex": [(["--help"], ("--sandbox", "--cd")),
                       (["exec", "--help"], ("--output-schema", "--output-last-message", "--json", "--ephemeral", "--sandbox", "--skip-git-repo-check"))],
             "claude": [(["--help"], ("--print", "--output-format", "--permission-mode", "--no-session-persistence", "--json-schema", "--append-system-prompt-file", "--add-dir"))],
             "agy": [(["--help"], ("--agent", "--mode", "--add-dir", "--prompt-interactive", "--print", "--output-format", "--json-schema"))],

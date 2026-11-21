@@ -325,6 +325,7 @@ struct CaptureRecording: Codable, Identifiable {
     var lessonKey: String?
     var origin: String?
     var originalName: String?
+    var recordedAt: String?
     var sourceSelected: Bool?
     var sourceExcluded: Bool?
     var sourceSelectionRequired: Bool?
@@ -338,6 +339,7 @@ struct CaptureRecording: Codable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, path, title, status, duration, origin, partial
         case eventID = "event_id", lessonKey = "lesson_key", originalName = "original_name"
+        case recordedAt = "recorded_at"
         case sourceSelected = "source_selected", sourceExcluded = "source_excluded"
         case sourceSelectionRequired = "source_selection_required", sourceCount = "source_count"
         case courseCode = "course_code", lectureID = "lecture_id", createdAt = "created_at", transcriptText = "transcript_text"
@@ -359,8 +361,8 @@ struct CaptureTranscript: Codable, Identifiable {
         case courseCode = "course_code", recordingID = "recording_id", lectureID = "lecture_id", createdAt = "created_at"
     }
 }
-struct CaptureLibrary: Decodable { var recordings: [CaptureRecording]; var transcripts: [CaptureTranscript]?; var folder: String?; var folderConfigured: Bool?
-    enum CodingKeys: String, CodingKey { case recordings, transcripts, folder; case folderConfigured = "folder_configured" }
+struct CaptureLibrary: Decodable { var lessons: [LibraryLesson]?; var recordings: [CaptureRecording]; var transcripts: [CaptureTranscript]?; var folder: String?; var folderConfigured: Bool?
+    enum CodingKeys: String, CodingKey { case recordings, transcripts, folder, lessons; case folderConfigured = "folder_configured" }
 }
 struct CaptureQueueJob: Codable, Identifiable {
     var id: String; var createdAt: String?; var recordingID: String; var title: String; var courseCode: String?
@@ -462,6 +464,37 @@ extension CaptureRecording {
         case "enqueue": return ["--recording", id, "--parallel", String(parallel)]
         default: return nil
         }
+    }
+}
+
+
+struct LibraryLesson: Codable, Identifiable {
+    var id: String
+    var course: String?
+    var number: Int?
+    var title: String
+    var date: String?
+    var recordingIDs: [String]
+    var transcriptIDs: [String]
+    var eventIDs: [String]
+    var notRecorded: Bool
+    var hidden: Bool
+    var revisionRequired: Bool
+    var pendingTrash: [String]?
+    var preferredTranscript: String?
+    var cancelled: Bool?
+    var timezoneOverride: String?
+    var endOverride: String?
+    var pendingRenames: [[String: String]]?
+    var manual: Bool?
+    enum CodingKeys: String, CodingKey {
+        case id, course, number, title, date, hidden
+        case preferredTranscript = "preferred_transcript", cancelled
+        case timezoneOverride = "timezone_override", endOverride = "end_override"
+        case pendingRenames = "pending_renames"
+        case manual
+        case recordingIDs = "recording_ids", transcriptIDs = "transcript_ids", eventIDs = "event_ids"
+        case notRecorded = "not_recorded", revisionRequired = "revision_required", pendingTrash = "pending_trash"
     }
 }
 

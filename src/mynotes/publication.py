@@ -1123,6 +1123,11 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
         pack = json.loads(Path(candidate["source_pack"]).read_text(encoding="utf-8"))
     except (OSError, KeyError, json.JSONDecodeError) as error:
         raise PublicationError(f"Cannot load candidate/source pack for {lecture_id}: {error}") from error
+    from .lesson_registry import source_revision, assert_generation_allowed
+    code, number = lecture_id.rsplit('-L', 1)
+    assert_generation_allowed(workspace, code, int(number))
+    if pack.get("lesson_sources_revision") != source_revision(workspace, lecture_id):
+        raise PublicationError("I collegamenti della lezione sono cambiati. Prepara e verifica nuovamente gli appunti.")
     if any(choice.get('status') == 'deferred' for choice in candidate.get('slide_ownership', {}).values()):
         raise PublicationError('Slide placement is deferred; review the next transcript and resume the batch before building or updating Word')
     if candidate.get('organization_receipt'):

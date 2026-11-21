@@ -18,15 +18,20 @@ enum WorkspaceStyle {
 }
 
 private enum WorkspaceSheet: Identifiable {
-    case record, schedule, edit(CaptureEvent), detail(String), importAudio([URL], String?)
+    case courses(String?), record, schedule, createLesson, edit(CaptureEvent), detail(String), importAudio([URL], String?)
     var id: String {
         switch self {
-        case .record: return "record"; case .schedule: return "schedule"
+        case .courses: return "courses"; case .record: return "record"; case .schedule: return "schedule"
+        case .createLesson: return "createLesson"
         case .edit(let event): return "edit:" + event.id
         case .detail(let id): return "detail:" + id
         case .importAudio: return "import"
         }
     }
+}
+
+private enum LibrarySection: String, Hashable {
+    case lessons, profile
 }
 
 struct MyNotesWorkspaceView: View {
@@ -39,6 +44,10 @@ struct MyNotesWorkspaceView: View {
     @CaptureViewState<String?> private var selectedLessonID: String?
     @CaptureViewState<String> private var query = ""
     @CaptureViewState<String> private var course = "all"
+    @CaptureViewState<LibrarySection> private var librarySection = .lessons
+    @CaptureViewState<Bool> private var libraryRefreshing = false
+    @CaptureViewState<WorkspaceActivityCourse> private var activityCourse = .all
+    @CaptureViewState<Bool> private var coursesExpanded = true
     @CaptureViewState<Bool> private var attentionOnly = false
     @CaptureViewState<String> private var displayTimezoneID = TimeZone.autoupdatingCurrent.identifier
     @CaptureViewState<Date> private var clockInstant = Date()
@@ -47,10 +56,11 @@ struct MyNotesWorkspaceView: View {
     private let poll = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
     private var now: Date { ProcessInfo.processInfo.environment["MYNOTES_PREVIEW_DATE"].flatMap(CaptureDates.read) ?? clockInstant }
     private var lessons: [WorkspaceLesson] { model.lessons }
+    private var selectedCourse: CaptureCourse? { model.snapshot?.courses.first { $0.code == course } }
     private var clock: WorkspaceCalendar { WorkspaceCalendar(timezone: displayTimezoneID) }
     private var collection: [WorkspaceLesson] {
         lessons.filter {
-            ($0.hasContent || ($0.event?.end ?? .distantFuture) < now)
+            ($0.hasContent || $0.registry?.eventIDs.isEmpty == true || ($0.event?.end ?? .distantFuture) < now)
             && (course == "all" || (course == "none" ? $0.isUnassigned : $0.courseCode == course))
             && (!attentionOnly || $0.needsAttention)
             && (query.isEmpty || ($0.title + " " + ($0.courseCode ?? "") + " " + courseName($0.courseCode)).localizedStandardContains(query))
@@ -66,13 +76,27 @@ struct MyNotesWorkspaceView: View {
                 }.padding(.horizontal, 20).padding(.vertical, 24)
                 List(selection: $state.route) {
                     ForEach(WorkspaceRoute.allCases) { route in
-                        HStack {
+                        Button {
+                            state.route = route
+                            if route == .library { selectCourse("all"); coursesExpanded = true }
+                        } label: { HStack {
                             Label(route.title, systemImage: route.symbol)
                             Spacer()
                             if route == .activity, let count = model.queue?.activeJobs.count, count > 0 {
                                 Text(count, format: .number).font(.caption).foregroundStyle(.secondary)
                             }
-                        }.tag(route).padding(.vertical, 5)
+                        } }.buttonStyle(.plain).tag(route).padding(.vertical, 5)
+                        if route == .library {
+                            DisclosureGroup("Corsi", isExpanded: $coursesExpanded) {
+                                ForEach(model.snapshot?.courses ?? []) { item in
+                                    Button { selectCourse(item.code); state.route = .library } label: {
+                                        HStack { Text(item.name); Spacer(); if course == item.code && state.route == .library { Image(systemName: "checkmark") } }
+                                    }.buttonStyle(.plain).padding(.vertical, 4)
+                                }
+                                Button("Da associare") { selectCourse("none"); state.route = .library }.buttonStyle(.plain)
+                                Button("Elenco corsi…") { sheet = .courses(nil) }.buttonStyle(.plain).padding(.top, 8)
+                            }
+                        }
                     }
                 }.listStyle(.sidebar)
                 VStack(spacing: 8) {
@@ -124,9 +148,17 @@ struct MyNotesWorkspaceView: View {
             try? await Task.sleep(for: .seconds(10))
             if !Task.isCancelled && model.notice == notice { model.notice = nil }
         }
+        .onChange(of: course) { _, _ in
+            if let id = selectedLessonID, !collection.contains(where: { $0.id == id }) { selectedLessonID = nil }
+        }
+        .onChange(of: model.lessonProjectionRevision) { _, _ in
+            if let id = selectedLessonID, !collection.contains(where: { $0.id == id }) { selectedLessonID = nil }
+        }
+        .onChange(of: state.route) { _, value in if value == .library { coursesExpanded = true } }
         .onChange(of: model.importedRecordingID) { _, id in
             if let id, let lesson = lessons.first(where: { $0.audio.contains(where: { $0.id == id }) }) {
-                selectedLessonID = lesson.id; query = ""; course = "all"; attentionOnly = false; state.route = .library
+                selectedLessonID = lesson.id; query = ""; selectCourse("all"); librarySection = .lessons
+                attentionOnly = false; state.route = .library
             }
         }
         .frame(minWidth: 900, minHeight: 620)
@@ -162,10 +194,23 @@ struct MyNotesWorkspaceView: View {
         .sheet(item: $sheet, onDismiss: { Task { await model.refresh(silent: true, includeLibrary: true) } }) { kind in
             if let snapshot = model.snapshot {
                 switch kind {
+                case .courses(let code):
+                    LibraryManagementView(model: model, course: code) { code in
+                        selectCourse(code)
+                        librarySection = .profile
+                        state.route = .library
+                        sheet = nil
+                    }
                 case .record: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: true)
                 case .schedule: CaptureLessonForm(model: model, snapshot: snapshot, event: nil, immediate: false)
-                case .edit(let event): CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false)
-                case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID)
+                case .createLesson: LessonMetadataEditor(model: model)
+                case .edit(let event):
+                    if let lesson = model.libraryLessons.first(where: { $0.eventIDs.contains(event.id) }) {
+                        LessonMetadataEditor(model: model, lessonID: lesson.id)
+                    } else {
+                        CaptureLessonForm(model: model, snapshot: snapshot, event: event, immediate: false)
+                    }
+                case .importAudio(let urls, let eventID): WorkspaceAudioImportView(model: model, urls: urls, initialEventID: eventID, initialCourse: course == "all" || course == "none" ? nil : course)
                 case .detail(let id):
                     NavigationStack {
                         if let lesson = model.lesson(withID: id) {
@@ -197,7 +242,7 @@ struct MyNotesWorkspaceView: View {
             WorkspaceCalendarView(model: model, lessons: lessons, now: now) { sheet = .detail($0) }
         case .library: library
         case .activity:
-            CaptureRecordingsView(model: model, queueVisible: true, activityOnly: true).padding(24)
+            WorkspaceActivityView(model: model, course: $activityCourse) { sheet = .detail($0) }
         }
     }
     private var today: some View {
@@ -257,22 +302,34 @@ struct MyNotesWorkspaceView: View {
     }
     private var library: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Cerca una lezione o un corso", text: $query).textFieldStyle(.plain)
-                Picker("Corso", selection: $course) {
-                    Text("Tutti i corsi").tag("all"); Text("Da associare").tag("none")
-                    ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
-                }.labelsHidden().frame(maxWidth: 210)
-                Menu {
-                    Toggle("Solo da sistemare", isOn: $attentionOnly)
-                    Button("Trascrivi audio selezionati per le lezioni") { Task { await model.queueAction("enqueue", arguments: ["--all-untranscribed"]) } }
-                        .disabled(model.queueBusy || model.busy || model.isPreview)
-                    Button("Aggiorna raccolta") { Task { await model.refresh(includeLibrary: true) } }
-                    Button("Verifica file della raccolta") { Task { await model.queueAction("verify-library") } }
-                        .disabled(model.queueBusy || model.busy || model.isPreview)
-                } label: { Image(systemName: "line.3.horizontal.decrease") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Filtra e gestisci raccolta")
-            }.padding(20)
+            if let selectedCourse {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(selectedCourse.name).font(.title.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
+                    Text(selectedCourse.code).font(.caption).foregroundStyle(.secondary)
+                    Picker("Sezione del corso", selection: $librarySection) {
+                        Text("Lezioni").tag(LibrarySection.lessons)
+                        Text("Profilo del corso").tag(LibrarySection.profile)
+                    }.pickerStyle(.segmented).labelsHidden().fixedSize()
+                }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                Divider()
+            }
+            if librarySection == .profile, let selectedCourse {
+                WorkspaceCourseProfileView(model: model, setup: setup, code: selectedCourse.code).id(selectedCourse.code)
+            } else {
+                libraryLessons
+            }
+        }
+    }
+    private var libraryLessons: some View {
+        VStack(spacing: 0) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { libraryFilters; Spacer(minLength: 0); libraryActions }
+                VStack(alignment: .leading, spacing: 10) {
+                    libraryFilters
+                    libraryActions
+                }
+            }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
             Divider()
             GeometryReader { container in
                 if container.size.width >= 740 {
@@ -305,6 +362,41 @@ struct MyNotesWorkspaceView: View {
             }
         }
     }
+    private var libraryFilters: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+                TextField("Cerca una lezione o un corso", text: $query).textFieldStyle(.plain)
+            }.frame(minWidth: 160)
+            Toggle("Solo da sistemare", isOn: $attentionOnly).fixedSize()
+            Picker("Corso", selection: Binding(get: { course }, set: { selectCourse($0) })) {
+                Text("Tutti i corsi").tag("all"); Text("Da associare").tag("none")
+                ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
+            }.labelsHidden().frame(width: 155, alignment: .leading)
+        }
+    }
+    private var libraryActions: some View {
+        HStack(spacing: 10) {
+            let code = selectedCourse?.code
+            Button(code == nil ? "Elenco corsi…" : "Organizza lezioni…") { sheet = .courses(code) }
+            Button(libraryRefreshing ? "Aggiornamento…" : "Aggiorna", systemImage: "arrow.clockwise") {
+                libraryRefreshing = true
+                Task {
+                    defer { libraryRefreshing = false }
+                    await model.refresh(includeLibrary: true)
+                }
+            }.disabled(model.busy || model.queueBusy || libraryRefreshing)
+            Menu("Altre azioni", systemImage: "ellipsis.circle") {
+                Button("Aggiungi lezione…") { sheet = .createLesson }
+                Button("Verifica i file di tutti i corsi…") { Task { await model.queueAction("verify-library") } }
+                    .disabled(model.queueBusy || model.busy || model.isPreview)
+            }.fixedSize()
+        }.fixedSize()
+    }
+    private func selectCourse(_ code: String) {
+        if course != code { librarySection = .lessons }
+        course = code
+    }
     private var lessonList: some View {
         List(selection: $selectedLessonID) {
             ForEach(collection) { lesson in
@@ -330,7 +422,7 @@ struct WorkspaceLessonRow: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: lesson.hasContent ? "waveform" : "calendar").foregroundStyle(.secondary).frame(width: 20).padding(.top, 2)
             VStack(alignment: .leading, spacing: 6) {
-                Text(lesson.title).font(.body.weight(.medium)).lineLimit(2)
+                Text(lesson.registry?.number.map { "Lezione \($0) · \(lesson.title)" } ?? lesson.title).font(.body.weight(.medium)).lineLimit(2)
                 Text(subtitle).font(.callout).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 8) {
                     Text(CaptureDates.label(CaptureDates.write(lesson.date), zone: displayTimeZone.identifier)).lineLimit(1)

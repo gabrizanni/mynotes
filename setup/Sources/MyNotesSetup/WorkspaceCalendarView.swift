@@ -67,7 +67,7 @@ struct WorkspaceCalendarView: View {
         }
     }
     private func dayColumn(_ day: Date) -> some View {
-        let events = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
+        let events = entries.filter { $0.appearsInCalendar && clock.clipped(start: $0.date, end: $0.scheduledEnd, on: day) != nil }.sorted { $0.date < $1.date }
         return ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
                 ForEach(clock.hours(day), id: \.self) { hour in
@@ -78,25 +78,24 @@ struct WorkspaceCalendarView: View {
                     }.frame(height: hourHeight, alignment: .top)
                 }
             }
-            HStack(alignment: .top, spacing: 2) {
-                let lanes = calendarLanes(events)
-                ForEach(lanes.indices, id: \.self) { lane in
-                    ZStack(alignment: .top) {
-                        Color.clear
-                        ForEach(lanes[lane]) { lesson in
-                            if let event = lesson.event, let segment = clock.clipped(start: event.start, end: event.end, on: day) {
-                                let startMinute = clock.timelineMinute(segment.start, on: day)
-                                let offset = CGFloat(startMinute) / 60 * hourHeight
-                                let duration = segment.duration
-                                WorkspaceCalendarEvent(lesson: lesson, status: lesson.recordingLabel(model.snapshot),
-                                    time: (segment.start > event.start ? "↳ " : "") + clock.label(segment.start, format: "HH:mm z"), height: max(32, CGFloat(duration / 3600) * hourHeight - 3), select: select)
-                                    .offset(y: offset)
-
-                            }
-                        }
+            GeometryReader { geometry in
+                let gutter: CGFloat = 30
+                let available = max(1, geometry.size.width - gutter - 3)
+                let placements = clock.placements(events, on: day, minimumMinutes: Double(35 / hourHeight * 60))
+                ForEach(placements) { placement in
+                    if let event = placement.lesson.event,
+                       let segment = clock.clipped(start: event.start, end: event.end, on: day) {
+                        let unit = available / CGFloat(placement.columnCount)
+                        let width = max(1, unit * CGFloat(placement.span) - 2)
+                        WorkspaceCalendarEvent(lesson: placement.lesson, status: placement.lesson.recordingLabel(model.snapshot),
+                            time: (segment.start > event.start ? "↳ " : "") + clock.label(segment.start, format: "HH:mm z"),
+                            height: max(32, CGFloat(segment.duration / 3600) * hourHeight - 3), select: select)
+                            .frame(width: width)
+                            .offset(x: gutter + unit * CGFloat(placement.column),
+                                    y: CGFloat(clock.timelineMinute(segment.start, on: day)) / 60 * hourHeight)
                     }
                 }
-            }.padding(.leading, 30).padding(.trailing, 3)
+            }
             if clock.sameDay(day, now) {
                 Rectangle().fill(Color.red).frame(height: 1).offset(y: CGFloat(clock.timelineMinute(now, on: day)) / 60 * hourHeight)
                     .accessibilityLabel("Ora attuale: " + clock.clock(now))
@@ -110,7 +109,7 @@ struct WorkspaceCalendarView: View {
                     Text(weekday).font(.caption).foregroundStyle(.secondary).padding(.vertical, 16)
                 }
                 ForEach(days, id: \.self) { day in
-                    let items = entries.filter { $0.event.map { clock.clipped(start: $0.start, end: $0.end, on: day) != nil } == true }.sorted { $0.date < $1.date }
+                    let items = entries.filter { $0.appearsInCalendar && clock.clipped(start: $0.date, end: $0.scheduledEnd, on: day) != nil }.sorted { $0.date < $1.date }
                     VStack(alignment: .leading, spacing: 6) {
                         Button { anchor = day; monthly = false } label: {
                             Text(clock.label(day, format: "d")).font(.callout.weight(.medium))
@@ -131,14 +130,7 @@ struct WorkspaceCalendarView: View {
         }
     }
     private func move(_ value: Int) { anchor = clock.calendar.date(byAdding: monthly ? .month : .weekOfYear, value: value, to: anchor) ?? anchor }
-    private func calendarLanes(_ values: [WorkspaceLesson]) -> [[WorkspaceLesson]] {
-        var lanes: [[WorkspaceLesson]] = []
-        for item in values {
-            if let index = lanes.firstIndex(where: { ($0.last?.event?.end ?? .distantPast) <= item.date }) { lanes[index].append(item) }
-            else { lanes.append([item]) }
-        }
-        return lanes.isEmpty ? [[]] : lanes
-    }
+
 }
 
 private struct WorkspaceCalendarEvent: View {

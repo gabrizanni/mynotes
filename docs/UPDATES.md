@@ -1,5 +1,24 @@
 # Versioned updates and recovery
 
+## 0.3.11 · Lesson management and transcription activities
+
+- Edit course, lesson number, title, date and timezone from the lesson detail.
+  Preview conflicts, swap numbers, merge duplicate lessons or shift a sequence.
+- Confirmed recordings retain their lesson identity after renumbering. Newly
+  discovered recordings are matched against course, number and original day.
+  Import supports original recording dates and explicit reassignment of duplicates.
+- Link or detach recordings and independent TXT files. Select the transcript for
+  notes independently from the audio chosen for transcription. Source changes
+  require fresh preparation before generating or publishing notes.
+- Optionally rename managed copies with recoverable pending operations. Add past
+  lessons, mark cancelled occurrences and retain per-file and per-lesson removal.
+- Activity shows pending lesson transcription work with course filters and scoped
+  batch actions. Course profiles expose saved preferences and contextual editing.
+- Includes Finder-style trash recovery and Codex subscription chat startup fixes.
+
+The downloadable macOS application targets Apple Silicon and uses ad-hoc signing.
+The release is distributed through the existing prerelease channel.
+
 ## 0.2.27: progressive slide placement and independent phase budgets
 
 - Writing and one necessary managed correction each have a separate 20-minute
@@ -273,3 +292,37 @@ Use is excluded. The writer checks actual slide explanations within its existing
 writing phase rather than treating unrelated citations as coverage. Startup text
 and managed exports carry the same instructions without the duplicate priority block.
 This is an instructions-only correction, not a new generation or public release.
+
+### 0.3.8 — Collection dates, calendar width and external chat
+
+Collection dates now use the saved effective calendar occurrence, including local
+changes to date, time, timezone and title. Native lesson details prefer the same
+effective event over an older collection date.
+
+Week-view cards share horizontal space only with overlapping events. Separate
+time groups regain the full day-column width; a card can expand into adjacent
+columns where there are no overlapping cards.
+
+External chat again opens its executable command file explicitly in macOS
+Terminal. This removes dependence on Warp deep-link handling and the default
+file association. Launch errors are displayed in MyNotes. Provider authentication
+and subscription use continue through the existing CLI launcher.
+
+### 0.3.9 — Codex chat startup and GPT-6.1 Terra
+
+Codex chats explicitly use workspace-write permissions for the private MyNotes
+workspace and no longer repeat that working root as an additional writable
+directory. This fixes the CLI startup failure when inherited permissions are
+read-only. Unrestricted access is not enabled.
+
+The Terra preset now selects GPT-6.1 Terra. Saved model and effort choices remain
+unchanged. Codex continues to receive the same common coordination instructions
+as the Agy agent, with operational instructions and preferences loaded on demand.
+Authentication and model use stay with the installed subscription CLI.
+
+### 0.3.10 — Collection trash and recovery
+
+The Collection sends files to the system Trash using the same operation as
+Finder. If the move fails, MyNotes refreshes the Collection after restoring
+the source's previous exclusion state. A failed attempt to trash a single
+lesson file clears its pending removal while the file is still present.

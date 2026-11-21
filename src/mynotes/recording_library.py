@@ -230,6 +230,7 @@ def discover(ws):
             'storage_recording_id': storage, 'event_id': event.get('id', (old or {}).get('event_id')), 'source_id': event.get('sourceID', (old or {}).get('source_id')),
             'duration': session.get('durationSeconds', (old or {}).get('duration')), 'language': event.get('transcriptionLanguage', (old or {}).get('language')),
             'created_at': event.get('startsAt') or (old or {}).get('created_at') or (datetime.fromtimestamp(stat.st_mtime, UTC).isoformat() if stat else ''),
+            'recorded_at': session.get('actualStart') or (old or {}).get('recorded_at'),
             'timezone': event.get('timezone', (old or {}).get('timezone', 'UTC')), 'partial': session.get('partial', (old or {}).get('partial', False)),
             'capture_status': session.get('status', (old or {}).get('capture_status')), 'capture_reason': session.get('reason', (old or {}).get('capture_reason', '')),
             'collection': collection(ws, p), 'audio_available': bool(stat and local_audio(p)), 'stable': bool(stat and local_audio(p) and (not session or session.get('status') in {'COMPLETED', 'PARTIAL'}) and (session.get('_private_session') or is_stable(p, config['ingestion']['stable_seconds']))),

@@ -206,6 +206,10 @@ def build_course_revision(workspace, lectures, *, timeout_seconds=None):
     lectures = sorted(set(lecture.upper() for lecture in lectures), key=lambda value: parse_lecture_id(value)[1])
     if not lectures or len({parse_lecture_id(value)[0] for value in lectures}) != 1:
         raise pub.PublicationError('A cumulative update requires lessons from one course')
+    from .lesson_registry import assert_generation_allowed
+    for lecture in lectures:
+        course_code, number = parse_lecture_id(lecture)
+        assert_generation_allowed(workspace, course_code, number)
     code = parse_lecture_id(lectures[0])[0]
     course = pub._course(workspace.configuration_store().load(), code)
     target = pub._target(course, workspace)
@@ -418,6 +422,10 @@ def update_course(workspace, lectures, *, timeout_seconds=None, before_publish=N
     from . import publication as pub
     if isinstance(lectures, str): lectures = [lectures]
     lectures = [value.upper() for value in lectures]
+    from .lesson_registry import assert_generation_allowed
+    for lecture in lectures:
+        course_code, number = parse_lecture_id(lecture)
+        assert_generation_allowed(workspace, course_code, number)
     code = parse_lecture_id(lectures[0])[0]
     course = pub._course(workspace.configuration_store().load(), code); target = pub._target(course, workspace)
     transactions = pub._transactions(workspace, target)

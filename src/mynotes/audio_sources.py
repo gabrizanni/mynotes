@@ -32,11 +32,12 @@ def save_policy(ws, value):
 def project(ws, items):
     """Read-only: never hash, hydrate, rename or persist during UI polling."""
     from .capture import CaptureStore
+    from .lesson_registry import project_audio, same_recording_day
     value = policy(ws)
     events = CaptureStore(ws).source_events()
     by_lesson = defaultdict(list)
     by_event = {e['id']: e for e in events}
-    for event in events:
+    for event in CaptureStore(ws).schedule()['events']:
         if event.get('courseCode') and event.get('lessonNumber'):
             by_lesson[f"{event['courseCode']}-L{event['lessonNumber']:02d}"].append(event)
     groups = defaultdict(list)
@@ -46,7 +47,7 @@ def project(ws, items):
             item.update(binding, association_source='explicit', association_state='resolved' if binding.get('course_code') else 'unresolved', association_conflict=None)
         imported = value['imports'].get(item['id'], {})
         if imported:
-            for key in ('duration', 'origin', 'original_name', 'imported_from'):
+            for key in ('duration', 'origin', 'original_name', 'imported_from', 'recorded_at'):
                 if key in imported: item[key] = imported[key]
             # A later explicit association always outranks import-time suggestions.
             if imported.get('event_id') and item.get('association_source') != 'explicit':
@@ -54,21 +55,31 @@ def project(ws, items):
                 if event:
                     item.update(event_id=event['id'], course_code=event.get('courseCode'),
                                 lecture_id=f"{event['courseCode']}-L{event['lessonNumber']:02d}" if event.get('courseCode') and event.get('lessonNumber') else None,
-                                created_at=event['startsAt'], timezone=event['timezone'])
+                                timezone=event['timezone'])
         item.setdefault('original_name', Path(item['path']).name)
         item.setdefault('origin', 'MyNotes' if item.get('capture_status') else 'File esterno')
         matches = by_lesson.get(item.get('lecture_id'), [])
         event_id = item.get('event_id')
-        if len(matches) == 1 and (not event_id or event_id == matches[0]['id']):
-            event_id = matches[0]['id']
+        explicit = item.get('association_source') in {'explicit', 'calendar', 'capture'}
+        if not event_id and len(matches) == 1:
+            event = matches[0]
+            if explicit or same_recording_day(item.get('recorded_at'), event['startsAt'], event.get('timezone')):
+                event_id = event['id']
+        if not event_id and matches:
+            item['association_conflict'] = 'Verifica il giorno di registrazione e scegli la lezione.'
+            item['lecture_id'] = None
         key = 'event:' + event_id if event_id else ('lesson:' + item['lecture_id'] if item.get('lecture_id') and len(matches) < 2 else 'audio:' + item['id'])
         item['lesson_key'] = key
         item['source_excluded'] = item['id'] in value['excluded']
-        groups[key].append(item)
+        project_audio(ws, [item])
+        groups[item['lesson_key']].append(item)
     for key, group in groups.items():
         candidates = [i for i in group if not i['source_excluded']]
-        preferred = value['preferred'].get(key)
-        chosen = preferred if preferred else candidates[0]['id'] if len(candidates) == 1 else None
+        preferred = value['preferred'].get(key) or next((value['preferred'].get(i.get('legacy_lesson_key')) for i in group if value['preferred'].get(i.get('legacy_lesson_key'))), None)
+        chosen = None if key in value.get('require_choice', []) else (preferred if preferred else candidates[0]['id'] if len(candidates) == 1 else None)
+        confirmed = value.get('preferred_members', {}).get(key)
+        if confirmed is not None and {item['id'] for item in group} - set(confirmed):
+            chosen = None
         available_ids = {i['id'] for i in candidates}
         needs_choice = bool(candidates and (chosen is None or chosen not in available_ids))
         for item in group:
@@ -118,6 +129,8 @@ def choose(ws, identifier, action):
     if action == 'prefer-audio':
         if not Path(item['path']).is_file(): raise ValueError('Ripristina o importa l’audio prima di selezionarlo')
         value['preferred'][item['lesson_key']] = identifier
+        value.setdefault('preferred_members', {})[item['lesson_key']] = sorted(related)
+        value['require_choice'] = [k for k in value.get('require_choice', []) if k != item['lesson_key']]
         value['excluded'] = [i for i in value['excluded'] if i != identifier]
     elif action in {'exclude-audio', 'prepare-trash'}:
         if identifier not in value['excluded']: value['excluded'].append(identifier)
@@ -148,10 +161,18 @@ def inspect_audio(ws, source):
             if not container.streams.audio: raise ValueError('Il file non contiene una traccia audio')
             stream = container.streams.audio[0]
             duration = float(container.duration / av.time_base) if container.duration else float(stream.duration * stream.time_base) if stream.duration else None
+            recorded_at = container.metadata.get('creation_time')
+            if recorded_at:
+                from datetime import datetime
+                try:
+                    parsed = datetime.fromisoformat(recorded_at)
+                    recorded_at = parsed.isoformat() if parsed.tzinfo is not None else None
+                except ValueError:
+                    recorded_at = None
     except (av.error.FFmpegError, OSError) as exc:
         raise ValueError('Il file audio non è leggibile o è incompleto') from exc
     stat = path.stat()
-    return {'path': str(path.resolve()), 'name': path.name, 'duration': duration, 'size': stat.st_size,
+    return {'path': str(path.resolve()), 'name': path.name, 'duration': duration, 'recorded_at': recorded_at, 'size': stat.st_size,
             'mtime_ns': stat.st_mtime_ns, 'device': stat.st_dev, 'inode': stat.st_ino}
 
 
@@ -220,9 +241,11 @@ def import_audio(ws, paths, *, event_id=None, course=None, lesson=None):
                     if published.exists() and published.stat().st_ino == identity.st_ino: published.unlink()
                     raise
             identifier = hashlib.sha256(str(published.resolve()).encode()).hexdigest()[:32]
-            metadata = {'duration': source['duration'], 'origin': 'Importato', 'original_name': source['name'], 'imported_from': str(path)}
+            metadata = {'duration': source['duration'], 'origin': 'Importato', 'original_name': source['name'], 'imported_from': str(path), 'recorded_at': source['recorded_at']}
             if event_id: metadata['event_id'] = event_id
             value['imports'][identifier] = metadata
+            if not event_id:
+                value.setdefault('bindings', {})[identifier] = {'event_id': None, 'course_code': course, 'lecture_id': f'{course}-L{lesson:02d}' if course and lesson else None}
             save_policy(ws, value)
             if course:
                 associate(ws, identifier, course=course, lesson=lesson)
@@ -230,6 +253,16 @@ def import_audio(ws, paths, *, event_id=None, course=None, lesson=None):
             sync(ws)
             item = next(i for i in discover(ws) if i['id'] == identifier)
             hashes[sha] = item
+            from .lesson_registry import snapshot, save as save_lessons
+            registry = snapshot(ws)
+            row = next(r for r in registry['lessons'].values() if identifier in r['recording_ids'])
+            row['not_recorded'] = False
+            if len(row['recording_ids']) > 1:
+                choices = policy(ws)
+                choices.setdefault('require_choice', []).append(row['id'])
+                save_policy(ws, choices)
+            save_lessons(ws, registry)
+            value = policy(ws)
             results.append({'recording_id': identifier, 'duplicate': False, 'name': source['name']})
         except BaseException:
             # Once published, retain the complete copy even if metadata/sync fails.
@@ -267,5 +300,7 @@ def associate(ws, identifier, *, event_id=None, course=None, lesson=None):
     value = policy(ws)
     value.setdefault('bindings', {})[identifier] = {'event_id': event_id, 'course_code': course, 'lecture_id': lecture_id}
     save_policy(ws, value)
+    from .lesson_registry import rebind_audio
+    rebind_audio(ws, identifier, course, lesson, event_id)
     sync(ws)
     return {'status': 'OK', 'message': 'Associazione salvata. Scegli la sorgente da trascrivere se la lezione ha più audio.'}
