@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import wave
 import pytest
 
 from mynotes import lesson_registry as lessons, audio_sources as sources, capture, transcription_queue as queue
@@ -12,6 +13,55 @@ from test_capture import event
 
 def course(ws):
     return add_course(ws, 'Example course')['course']['code']
+
+
+def test_course_profile_reads_current_effective_preferences_without_writing(setup):
+    ws, _, _ = setup
+    code = course(ws)
+    other = add_course(ws, 'Other course')['course']['code']
+    store = ws.configuration_store()
+    cfg = store.load()
+    cfg['style']['profile']['writing_style'] = 'detailed'
+    cfg['style']['freeform_preferences'] = ''
+    cfg['style']['note_instructions'] = {'examples': 'Usa esempi', 'overview': 'Aggiungi un riepilogo'}
+    item = next(item for item in cfg['courses'] if item['code'] == code)
+    item['style']['image_limit'] = 2
+    item['context'] = 'Testo originale'
+    item['preferences']['note_instructions'] = {'examples': 'Usa esempi numerici'}
+    store.save(cfg)
+    before = store.load()
+    result = lessons.profile(ws, code)
+    assert result['course']['context'] == 'Testo originale'
+    assert result['notes']['effective'] == {'examples': 'Usa esempi numerici', 'overview': 'Aggiungi un riepilogo'}
+    assert result['notes']['own'] == {'examples': 'Usa esempi numerici'}
+    assert result['notes']['style']['effective']['writing_style'] == 'detailed'
+    assert result['notes']['style']['effective']['image_limit'] == 2
+    assert lessons.profile(ws, other)['notes']['effective']['examples'] == 'Usa esempi'
+    assert store.load() == before
+
+
+def test_cli_enqueues_only_explicit_ready_sources_across_two_courses(setup, monkeypatch, capsys):
+    from mynotes.cli import main
+
+    ws, folder, _ = setup
+    codes = (course(ws), add_course(ws, 'Other course')['course']['code'])
+    lessons_by_course = [(codes[0], 1), (codes[0], 2), (codes[0], 3), (codes[1], 1), (codes[1], 2)]
+    for index, (code, number) in enumerate(lessons_by_course):
+        path = folder / f'{code}_L{number:02d}.wav'
+        with wave.open(str(path), 'wb') as out:
+            out.setparams((1, 2, 16000, 0, 'NONE', 'not compressed'))
+            out.writeframes(bytes([index, 0]) * 64000)
+    ids = [item['id'] for item in queue.library(ws, course=codes[0])]
+    assert len(ids) == 3
+    assert queue.enqueue(ws, recording_id=ids[0])['added'] == 1
+    monkeypatch.setattr(queue, 'launch_runner', lambda _: None)
+    flags = [part for identifier in ids + ['missing', ids[1]] for part in ('--ready-recording', identifier)]
+    assert main(['transcription-queue', 'enqueue', '--workspace', str(ws.root), *flags]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['added'] == 2
+    assert {item['reason'] for item in result['skipped']} == {'QUEUED', 'SOURCE_MISSING'}
+    assert {job['recording_id'] for job in queue.status(ws)['jobs']} == set(ids)
+    assert [item['transcription_status'] for item in queue.library(ws, course=codes[1])] == ['NOT_STARTED'] * 2
 
 
 def make(ws, folder, number=1):

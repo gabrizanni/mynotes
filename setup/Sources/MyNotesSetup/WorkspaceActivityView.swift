@@ -19,7 +19,7 @@ struct WorkspaceActivityView: View {
             Divider()
             List {
                 section("In lavorazione", entries: activity.active, expanded: $showActive)
-                section("Da trascrivere", entries: activity.ready, expanded: $showReady)
+                readySection(activity.ready)
                 section("Da verificare", entries: activity.review, expanded: $showReview)
                 if activity.count == 0 { emptyState }
                 if !activity.history.isEmpty {
@@ -83,6 +83,24 @@ struct WorkspaceActivityView: View {
                 }.disabled(model.queue?.activeJobs.contains { $0.status == "QUEUED" } != true)
             }.fixedSize()
         }.disabled(controlsDisabled || model.queue == nil)
+    }
+
+    @ViewBuilder
+    private func readySection(_ entries: [WorkspaceActivityEntry]) -> some View {
+        if !entries.isEmpty {
+            DisclosureGroup(isExpanded: $showReady) {
+                Button(entries.count == 1 ? "Metti in coda 1 lezione" : "Metti in coda le \(entries.count) lezioni") {
+                    let arguments = entries.flatMap { entry -> [String] in
+                        guard case .ready(let recording) = entry.state else { return [] }
+                        return ["--ready-recording", recording.id]
+                    }
+                    Task { await model.queueAction("enqueue", arguments: arguments) }
+                }.buttonStyle(.bordered).disabled(controlsDisabled)
+                ForEach(entries) { entry in lessonRow(entry) }
+            } label: {
+                sectionLabel("Da trascrivere", count: entries.count)
+            }
+        }
     }
 
     @ViewBuilder

@@ -2,16 +2,19 @@ import SwiftUI
 
 struct LibraryManagementView: View {
     @ObservedObject var model: CaptureModel
-    @ObservedObject var setup: SetupModel
+    let openProfile: (String) -> Void
+    private let fixedCourse: String?
     @CaptureViewState private var course: String
-    @CaptureViewState private var profile: [(String, String)] = []
     @CaptureViewState private var edited: LibraryLesson?
     @CaptureViewState private var showShift = false
     @CaptureViewState private var addCourse = false
     @CaptureViewState private var includeRemoved = false
     @Environment(\.dismiss) private var dismiss
-    init(model: CaptureModel, setup: SetupModel, course: String?) {
-        self.model = model; self.setup = setup; _course = CaptureViewState<String>(initialValue: course ?? "")
+    init(model: CaptureModel, course: String?, openProfile: @escaping (String) -> Void) {
+        self.model = model
+        self.openProfile = openProfile
+        fixedCourse = course
+        _course = CaptureViewState<String>(initialValue: course ?? "")
     }
     private var rows: [LibraryLesson] {
         model.libraryLessons.filter { $0.course == course && (includeRemoved || !$0.hidden) }.sorted {
@@ -22,16 +25,25 @@ struct LibraryManagementView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Gestisci corsi").font(.title2.weight(.semibold))
-                Spacer(); Button("Aggiungi corso…") { addCourse = true }; Button("Fine") { dismiss() }.keyboardShortcut(.cancelAction)
+                Text(fixedCourse == nil ? "Elenco corsi" : "Organizza lezioni").font(.title2.weight(.semibold))
+                Spacer()
+                if fixedCourse == nil { Button("Aggiungi corso…") { addCourse = true } }
+                Button("Fine") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Picker("Corso", selection: $course) {
-                Text("Scegli un corso").tag("")
-                ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
+            if let fixedCourse {
+                Text(model.snapshot?.courses.first { $0.code == fixedCourse }?.name ?? fixedCourse)
+                    .foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Picker("Corso", selection: $course) {
+                        Text("Scegli un corso").tag("")
+                        ForEach(model.snapshot?.courses ?? []) { Text($0.name).tag($0.code) }
+                    }
+                    Button("Apri profilo del corso") { openProfile(course) }.disabled(course.isEmpty)
+                }
             }
             if !course.isEmpty {
-                TabView {
-                    VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Toggle("Mostra lezioni rimosse", isOn: $includeRemoved)
                             Spacer()
@@ -53,31 +65,15 @@ struct LibraryManagementView: View {
                                 } else { Button("Gestisci…") { edited = row } }
                             }.padding(.vertical, 4)
                         }.overlay { if rows.isEmpty { ContentUnavailableView("Nessuna lezione", systemImage: "books.vertical") } }
-                    }.padding(16).tabItem { Text("Lezioni") }
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 20) {
-                            ForEach(profile, id: \.0) { field in
-                                VStack(alignment: .leading, spacing: 5) {
-                                    Text(field.0).font(.headline)
-                                    Text(field.1).foregroundStyle(.secondary).textSelection(.enabled)
-                                }.frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            Button("Modifica con l’agente", systemImage: "arrow.up.right.square") {
-                                setup.openChat(message: "Vorrei modificare il profilo del corso \(course). Leggi il profilo attuale e chiedimi quali caratteristiche desidero cambiare. Non generare o pubblicare appunti.")
-                            }.disabled(model.isPreview || !setup.prepared || !setup.providerFound)
-                        }.padding(24)
-                    }.tabItem { Text("Profilo") }
                 }
             } else { ContentUnavailableView("Scegli un corso", systemImage: "books.vertical", description: Text("Consulta le lezioni e il profilo del corso.")) }
             if let error = model.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
         }.padding(24).frame(minWidth: 680, minHeight: 520)
-            .task(id: course) {
-                profile = []
-                guard !course.isEmpty else { return }
-                do { profile = try await model.courseProfile(course) }
-                catch { model.error = error.localizedDescription }
+            .sheet(isPresented: $addCourse) {
+                CaptureCourseForm(model: model) {
+                    if let created = model.createdCourse { course = created }
+                }
             }
-            .sheet(isPresented: $addCourse) { CaptureCourseForm(model: model) }
             .sheet(item: $edited) { row in LibraryLessonEditor(model: model, lessonID: row.id) }
             .sheet(isPresented: $showShift) { LibraryNumberShift(model: model, course: course) }
     }
@@ -165,7 +161,7 @@ struct LibraryLessonEditor: View {
                     await model.queueAction("lesson-edit", payload: ["id": lessonID, "action": "hide"])
                     if model.error == nil { dismiss() }
                 } }
-            } message: { Text("I file restano conservati. Puoi ripristinare la lezione da Gestisci corsi → Mostra lezioni rimosse.") }
+            } message: { Text("I file restano conservati. Puoi ripristinare la lezione da Organizza lezioni → Mostra lezioni rimosse.") }
     }
     @CaptureViewState private var showHide = false
 }

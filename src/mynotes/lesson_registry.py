@@ -364,9 +364,13 @@ def trash_completed(ws, identifier, completed):
 
 
 def profile(ws, code):
-    course = next((c for c in ws.configuration_store().load()['courses'] if c['code'] == code), None)
+    from .memory import snapshot as preference_snapshot
+
+    settings = ws.configuration_store().load()
+    course = next((c for c in settings['courses'] if c['code'] == code), None)
     if not course: raise ValueError('Corso non trovato')
-    return {'status': 'OK', 'course': course}
+    return {'status': 'OK', 'course': course,
+            'notes': preference_snapshot(settings, scope='course', area='notes', course=code)}
 
 
 @locked

@@ -337,17 +337,27 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         }
     }
     func openChat(message: String? = nil) {
+        Task {
+            do { try await launchChat(message: message) }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    func launchChat(message: String? = nil) async throws {
+        try savePreferences()
+        // Terminal consumes the document asynchronously. Each launch has its own
+        // message, even if a different course chat opens immediately afterward.
+        let name = message == nil ? "Open MyNotes.command" : "MyNotes Chat \(UUID().uuidString).command"
+        let path = runtime.appendingPathComponent(name)
+        let cleanup = message == nil ? "" : "/bin/rm -f -- \"$0\"\n"
+        let script = "#!/bin/zsh\n" + cleanup + "export MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
         do {
-            try savePreferences()
-            let path = runtime.appendingPathComponent("Open MyNotes.command")
-            let script = "#!/bin/zsh\nexport MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
-            Task {
-                do { try await ChatTerminal.open(script: path, directory: runtime) }
-                catch { self.error = error.localizedDescription }
-            }
-        } catch { self.error = error.localizedDescription }
+            try await ChatTerminal.open(script: path, directory: runtime)
+        } catch {
+            if message != nil { try? FileManager.default.removeItem(at: path) }
+            throw error
+        }
     }
     func openLogin() {
         loginPending = true

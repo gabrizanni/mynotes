@@ -3,6 +3,17 @@ import AppKit
 import SwiftUI
 import Combine
 
+@MainActor
+func recycleLibraryFile(at path: String) async throws {
+    let source = URL(fileURLWithPath: path)
+    // Use macOS's Finder-style recycle operation, including for File Provider
+    // folders such as OneDrive. Require confirmation for this specific file.
+    let moved = try await NSWorkspace.shared.recycle([source])
+    guard moved[source] != nil else {
+        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
+    }
+}
+
 @MainActor final class CaptureModel: ObservableObject {
     @Published var snapshot: CaptureSnapshot?
     @Published var busy = false

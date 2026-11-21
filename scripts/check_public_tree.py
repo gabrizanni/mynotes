@@ -86,6 +86,7 @@ PUBLIC_FILES = (
     "setup/Sources/MyNotesSetup/LibraryManagementView.swift",
     "setup/Sources/MyNotesSetup/WorkspaceModels.swift",
     "setup/Sources/MyNotesSetup/WorkspaceActivityView.swift",
+    "setup/Sources/MyNotesSetup/WorkspaceCourseProfileView.swift",
     "setup/Sources/MyNotesSetup/WorkspaceView.swift",
     "setup/Sources/MyNotesSetup/WorkspaceCalendarView.swift",
     "setup/Sources/MyNotesSetup/WorkspaceLessonDetail.swift",

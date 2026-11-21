@@ -409,7 +409,7 @@ def status(workspace):
     return {'status': 'OK', **current_settings, 'ui_open': ui_open, 'jobs': jobs, 'wait_reason': reason, 'activity_counts': counts, 'history_events': history_events}
 
 
-def enqueue(workspace, parallel=None, *, recording_id=None):
+def enqueue(workspace, parallel=None, *, recording_id=None, ready_recording_ids=None):
     from .asr import cache_identity, validate_transcript, segments_digest, write_transcript_text
     if parallel is not None and (type(parallel) is not int or not 1 <= parallel <= 4):
         raise ValueError("Choose between 1 and 4 simultaneous recordings")
@@ -418,19 +418,31 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         raise ValueError("Registrazione non trovata")
     sync(workspace)
     recordings = library(workspace)
+    added, skipped, reuse_archives, notices = 0, [], [], []
     if recording_id is not None:
         recordings = [item for item in recordings if item["id"] == recording_id]
         if not recordings:
             raise ValueError("Registrazione non trovata")
+    if ready_recording_ids is not None:
+        by_id = {item["id"]: item for item in recordings}
+        recordings = []
+        for identifier in dict.fromkeys(ready_recording_ids):
+            if identifier in by_id:
+                recordings.append(by_id[identifier])
+            else:
+                skipped.append({"recording_id": identifier, "reason": "SOURCE_MISSING",
+                                "blocking_reasons": [{"message": "Una sorgente audio non è più disponibile."}]})
     if parallel is not None:
         configure(workspace, parallel=parallel)
-    added, skipped, reuse_archives, notices = 0, [], [], []
     for item in recordings:
         state = item["transcription_status"]
         if not item.get('source_selected', True):
             skipped.append({"recording_id": item["id"], "reason": "SOURCE_SELECTION", "blocking_reasons": item["blocking_reasons"]})
             continue
-        if recording_id is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
+        if ready_recording_ids is not None and (state != "NOT_STARTED" or "enqueue" not in item["actions"]):
+            skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]})
+            continue
+        if recording_id is None and ready_recording_ids is None and (item.get('collection', 'inbox') != 'inbox' or state not in {'NOT_STARTED', 'COMPLETED'}):
             continue
         if state != "COMPLETED" and not item["can_transcribe"]:
             skipped.append({"recording_id": item["id"], "reason": state, "blocking_reasons": item["blocking_reasons"]}); continue
@@ -450,7 +462,14 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         course = profile(workspace, item)
         if item.get('context_warning'):
             notices.append({'recording_id': item['id'], 'message': item['context_warning']})
-        sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
+        try:
+            sha, signature, key, _ = cache_identity(workspace, course, Path(item["path"]))
+        except FileNotFoundError:
+            if ready_recording_ids is None:
+                raise
+            skipped.append({"recording_id": item["id"], "reason": "SOURCE_MISSING",
+                            "blocking_reasons": [{"message": "Una sorgente audio non è più disponibile."}]})
+            continue
         transcript = asr_directory(workspace, item) / "transcript.json"
         if transcript.is_file():
             saved = _read(transcript, {})
@@ -467,6 +486,11 @@ def enqueue(workspace, parallel=None, *, recording_id=None):
         now = time.time()
         with database(workspace) as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if ready_recording_ids is not None and conn.execute(
+                "SELECT 1 FROM jobs WHERE recording_id=? AND status IN ('QUEUED','RUNNING','CANCELLING')",
+                (item["id"],),
+            ).fetchone():
+                continue
             # Identical input/settings at another path are aliases, not two ASR runs.
             duplicate = conn.execute("SELECT id,status,result FROM jobs WHERE cache_key=?", (key,)).fetchone()
             if duplicate:
@@ -859,6 +883,7 @@ def add_parser(subparsers):
             target = command.add_mutually_exclusive_group(required=True)
             target.add_argument("--all-untranscribed", action="store_true")
             target.add_argument("--recording", help="enqueue only this recording ID")
+            target.add_argument("--ready-recording", action="append", help="enqueue only these ready recording IDs")
         if action in {"heartbeat", "close"}:
             command.add_argument("--session", required=True)
         if action in {"worker", "retry", "restart", "recover", "remove", "cancel"}:
@@ -929,7 +954,8 @@ def run_cli(args):
         if getattr(args, 'sync', False): sync(ws)
         value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "lessons": __import__("mynotes.lesson_registry", fromlist=["listing"]).listing(ws), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
     elif action == "enqueue":
-        value = enqueue(ws, args.parallel, recording_id=getattr(args, "recording", None)); launch_runner(ws)
+        value = enqueue(ws, args.parallel, recording_id=args.recording, ready_recording_ids=args.ready_recording)
+        launch_runner(ws)
     elif action == "status":
         value = status(ws)
     elif action == "clear":

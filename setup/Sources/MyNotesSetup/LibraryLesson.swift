@@ -1,16 +1,4 @@
-import AppKit
 import Foundation
-
-@MainActor
-func recycleLibraryFile(at path: String) async throws {
-    let source = URL(fileURLWithPath: path)
-    // Use macOS's Finder-style recycle operation, including for File Provider
-    // folders such as OneDrive. Require confirmation for this specific file.
-    let moved = try await NSWorkspace.shared.recycle([source])
-    guard moved[source] != nil else {
-        throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: path])
-    }
-}
 
 extension CaptureModel {
     func libraryRequest(_ payload: [String: Any]) async throws -> [String: Any] {
@@ -21,24 +9,14 @@ extension CaptureModel {
         }.value
         return try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
     }
-    func courseProfile(_ course: String) async throws -> [(String, String)] {
+    func courseProfile(_ course: String) async throws -> WorkspaceCourseProfile {
         let executable = context.launcher, workspace = context.workspace
         let data = try await Task.detached {
             try Self.invoke(executable, workspace, "course-profile", ["--course", course], nil, group: "transcription-queue")
         }.value
-        let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        let profile = result["course"] as? [String: Any] ?? [:]
-        let fields = [("name", "Nome"), ("code", "Codice"), ("kind", "Tipologia"), ("languages", "Lingue"), ("instructors", "Docenti"), ("modules", "Moduli"), ("assessment", "Esame"), ("context", "Contesto"), ("preparation", "Preparazione"), ("difficult_topics", "Argomenti difficili"), ("style", "Preferenze appunti"), ("folders", "Cartelle"), ("publication", "Pubblicazione")]
-        func display(_ value: Any?) -> String {
-            guard let value else { return "Non configurato" }
-            if let text = value as? String { return text.isEmpty ? "Non configurato" : text }
-            if let list = value as? [String] { return list.isEmpty ? "Non configurato" : list.joined(separator: ", ") }
-            if let dictionary = value as? [String: Any] {
-                return dictionary.isEmpty ? "Non configurato" : dictionary.keys.sorted().map { "\($0): \(display(dictionary[$0]))" }.joined(separator: "\n")
-            }
-            return String(describing: value)
-        }
-        return fields.map { ($0.1, display(profile[$0.0])) }
+        let result = try JSONDecoder().decode(WorkspaceCourseProfile.self, from: data)
+        guard result.course.code == course else { throw CocoaError(.fileReadCorruptFile) }
+        return result
     }
     func deleteLesson(_ lesson: LibraryLesson, files: [String]) async {
         guard !queueBusy, !busy, !isPreview else { return }
