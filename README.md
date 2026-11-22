@@ -1,23 +1,20 @@
-# MyNotes + Capture
+# MyNotes for Mac
 
-Preview **0.2.27** improves Capture calendar scheduling and organizes shared slides progressively across lessons, with separate writing and correction time allowances. It preserves real audio, completed TXT and personal Word additions. See [update notes](docs/UPDATES.md).
-
-Record lectures and turn audio, slides and personal notes into Word study handouts with editable equations. Capture is included; you do not need a separate download.
+MyNotes is an open-source study app for Apple Silicon Macs. Record lectures with the included Capture tool, transcribe audio locally, and turn recordings, slides, and personal notes into Word study handouts with editable equations.
 
 English | [Italiano](README.it.md)
 
 ## Get MyNotes for Mac
 
-**Mac with Apple Silicon (M1 or newer), macOS 14+, internet for setup, and a usable Codex, Agy or Claude Code CLI account.**
+**[Download MyNotes 0.4 for Apple Silicon](https://github.com/gabrizanni/mynotes/releases/download/v0.4.0/MyNotes-0.4.0-macOS-arm64.dmg)** · [Preview release and checksums](https://github.com/gabrizanni/mynotes/releases/tag/v0.4.0) · [All releases](https://github.com/gabrizanni/mynotes/releases)
 
-**MyNotes 0.2.27 is available as a prerelease for continued testing.**
-[Download the Apple Silicon DMG](https://github.com/gabrizanni/mynotes/releases/download/v0.2.27/MyNotes-0.2.27-macOS-arm64.dmg) · [Release notes, checksums and known limitations](https://github.com/gabrizanni/mynotes/releases/tag/v0.2.27).
+MyNotes 0.4 is a public preview for **Macs with Apple Silicon (M1 or newer) and macOS 14 or later**. The initial setup uses an internet connection. AI-generated handouts require access to Codex, Antigravity (Agy), or Claude Code through its CLI. Recording and transcription run locally.
 
 1. Open the downloaded `.dmg`.
 2. Drag **MyNotes** into **Applications**.
-3. Open **MyNotes**, follow setup, and click **Open chat**.
+3. Open **MyNotes** and follow setup. From the sidebar, open the external chat to work with your selected agent.
 
-If Warp is installed, chat opens in a new Warp tab. Otherwise, the default terminal is used.
+MyNotes opens the selected agent in macOS Terminal. [What's new in 0.4](docs/UPDATES.md#040--shared-chat-startup)
 
 The setup prepares Python, local transcription and the Word tools for you. You do not need Python, Homebrew or Xcode beforehand. Choose Codex, Agy or Claude Code; if it is missing, MyNotes opens its official installation guide and lets you retry. Provider access and any subscription are managed by that provider.
 
