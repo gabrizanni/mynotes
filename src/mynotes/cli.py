@@ -467,6 +467,8 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--workspace", help="private workspace path")
     doctor.add_argument("--json", action="store_true", help="component readiness and repair actions")
     doctor.add_argument("--provider", choices=("codex", "agy", "claude"), help="inspect another agent without changing the selected default")
+    verify_renderer = subparsers.add_parser("verify-word-renderer", help="render a generated Word document and verify the local renderer")
+    verify_renderer.add_argument("--json", action="store_true", help="emit the verification result as JSON")
     migrate = subparsers.add_parser("migrate", help="inventory or copy a legacy installation")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     legacy = migrate_subparsers.add_parser("legacy", help="migrate a legacy local installation")
@@ -1229,6 +1231,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Optional recording/rendering components should not block read-only
             # course/style tasks. The agent checks the components needed by a task.
             return 0 if workspace.is_initialized() else 1
+        if arguments.command == "verify-word-renderer":
+            from .onboarding import verify_word_renderer
+            proof = verify_word_renderer()
+            if arguments.json:
+                print(json.dumps({"status": "VERIFIED", **proof}, ensure_ascii=False))
+            else:
+                print(f"Word rendering verified ({proof['word_pages']} page(s)).")
+            return 0
         if arguments.command is None:
             workspace = Workspace.from_value()
             from .onboarding import prepare_conversation, setup_cli

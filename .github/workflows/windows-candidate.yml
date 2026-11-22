@@ -71,7 +71,7 @@ jobs:
           & $launcher init --workspace $workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
-          & "$app/runtime/python.exe" -I -c "from mynotes.onboarding import verify_word_renderer; print(verify_word_renderer()['word_pages'])"
+          & $launcher verify-word-renderer --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item Env:MYNOTES_HOME
 

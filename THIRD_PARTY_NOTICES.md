@@ -58,6 +58,9 @@ the native recorder. MyNotes does not alter their license terms.
   licenses. Setup downloads an unmodified official distribution and retains its
   built-in license information. [Licenses](https://www.libreoffice.org/licenses/)
   and [source downloads](https://www.libreoffice.org/download/download-libreoffice/).
+  The Windows candidate includes LibreOffice 26.8.3 from its x64 MSI. The
+  corresponding unmodified source is available from the
+  [LibreOffice source archive](https://download.documentfoundation.org/libreoffice/src/26.8.3/).
 
 Provider CLIs are external installations managed by their publishers. They are
 not bundled into MyNotes, and their terms are separate from the MyNotes MIT
