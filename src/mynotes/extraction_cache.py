@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-import fcntl
+from . import file_lock
 import hashlib
 import importlib.metadata
 import json
@@ -141,7 +141,7 @@ def extract_cached(source: Path, cache_dir: Path, *, visual_dir: Path | None = N
             'chunks': len(result[0]), 'visuals': len(result[1]), 'provider_invoked': False})
         return result
     with (cache_dir / (key + ".lock")).open("a+") as lease:
-        fcntl.flock(lease.fileno(), fcntl.LOCK_EX)
+        file_lock.flock(lease.fileno(), file_lock.LOCK_EX)
         if file_sha256(source) != source_hash or extractor_identity(source.suffix.casefold(), render_visuals=visual_dir is not None) != identity:
             raise extraction.ExtractionError("Source or extractor changed while waiting for extraction; retry preparation")
         cached = _read(entry, key)

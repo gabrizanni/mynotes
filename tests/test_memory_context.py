@@ -199,7 +199,7 @@ def test_startup_is_small_and_never_reads_source_libraries(tmp_path, monkeypatch
         pytest.fail("Startup must not enumerate recordings, transcripts or Capture associations")
     for path in ("mynotes.capture_associations.pending", "mynotes.transcription_queue.library", "mynotes.transcript_library.scan", "mynotes.recording_library.discover"):
         monkeypatch.setattr(path, forbidden)
-    monkeypatch.setattr("mynotes.chat.shutil.which", lambda *a, **k: "/synthetic/" + provider)
+    monkeypatch.setattr("mynotes.chat.shutil.which", lambda name, **_: "/synthetic/" + name)
     monkeypatch.delenv("MYNOTES_CHAT_ACTIVE", raising=False)
     calls = []
     monkeypatch.setattr("mynotes.chat.subprocess.run", lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0))

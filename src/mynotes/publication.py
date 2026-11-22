@@ -19,7 +19,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
 
-import fcntl
+from . import file_lock
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
 from docx import Document
@@ -1247,6 +1247,8 @@ def _soffice() -> str | None:
     bundled = sorted((Path.home() / ".cache" / "codex-runtimes").glob("*/dependencies/bin/override/soffice"))
     from .onboarding import managed_tool
     candidates = [os.environ.get("MYNOTES_SOFFICE"), managed_tool("soffice"), shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice", *(str(item) for item in bundled)]
+    if os.name == "nt" and os.environ.get("ProgramFiles"):
+        candidates.append(str(Path(os.environ["ProgramFiles"]) / "LibreOffice/program/soffice.com"))
     return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
 
 
@@ -1435,13 +1437,13 @@ def _lock(target: Path) -> Iterator[None]:
     lock = target.with_suffix(target.suffix + ".mynotes.lock"); lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a+", encoding="utf-8") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise PublicationError(f"Another publication is active for {target}") from error
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_UN)
 
 
 def _journal(workspace: Workspace, payload: dict[str, Any]) -> Path:

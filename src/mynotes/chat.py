@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .workspace import Workspace
-from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_override_flags
+from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_executable, provider_override_flags
 
 
 class ChatError(RuntimeError):
@@ -26,7 +26,9 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     from .models import resolve_provider_options
     model, effort = resolve_provider_options(configuration, selected)
     environment = provider_environment()
-    executable = shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
+    executable = provider_executable(selected) if os.name == "nt" else (
+        shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
+    )
     if not executable:
         raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
     # Instructions belong to this private workspace, never the application source.

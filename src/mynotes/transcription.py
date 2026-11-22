@@ -12,6 +12,7 @@ from .sourcepack import transcription_course_context
 from .utils import atomic_json_write
 from .workflow import _generation_lock, parse_lecture_id, WorkflowError
 from .workspace import Workspace
+from .process_status import probe_process
 
 
 def transcription_status(workspace: Workspace, lecture_id: str | None = None, *, recording_id: str | None = None) -> dict:
@@ -50,7 +51,7 @@ def transcription_status(workspace: Workspace, lecture_id: str | None = None, *,
         return {"lecture_id": identity, **({"recording_id": recording_id} if recording_id else {}), "status": "NEEDS_REVIEW", "error": "Unreadable transcription checkpoint"}
     if state.get("status") == "RUNNING":
         try:
-            os.kill(int(state["pid"]), 0)
+            probe_process(int(state["pid"]))
         except (ProcessLookupError, ValueError, KeyError, TypeError):
             state = {**state, "status": "INTERRUPTED", "error": "Transcription process no longer exists"}
         except PermissionError:

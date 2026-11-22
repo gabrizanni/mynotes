@@ -101,26 +101,26 @@ def install_shared_chat_rules(workspace: Path) -> bool:
         if header != f"{_RULES_MARKER}{_sha(previous_body)} -->":
             return False
 
-    with NamedTemporaryFile(dir=workspace, prefix=".mynotes-rules-", delete=False) as handle:
-        temporary = Path(handle.name)
-        try:
+    handle = NamedTemporaryFile(dir=workspace, prefix=".mynotes-rules-", delete=False)
+    temporary = Path(handle.name)
+    try:
+        with handle:
             handle.write(content.encode("utf-8"))
-            handle.flush()
-            if replacing:
-                if path.is_symlink() or not path.is_file():
-                    return False
-                current = path.read_bytes()
-                if current != previous.encode("utf-8"):
-                    return current == content.encode("utf-8")
-                os.replace(temporary, path)
-            else:
-                try:
-                    # Make simultaneous first launches safe without clobbering a new file.
-                    os.link(temporary, path)
-                except FileExistsError:
-                    return not path.is_symlink() and path.is_file() and path.read_bytes() == content.encode("utf-8")
-        finally:
-            temporary.unlink(missing_ok=True)
+        if replacing:
+            if path.is_symlink() or not path.is_file():
+                return False
+            current = path.read_bytes()
+            if current != previous.encode("utf-8"):
+                return current == content.encode("utf-8")
+            os.replace(temporary, path)
+        else:
+            try:
+                # Make simultaneous first launches safe without clobbering a new file.
+                os.link(temporary, path)
+            except FileExistsError:
+                return not path.is_symlink() and path.is_file() and path.read_bytes() == content.encode("utf-8")
+    finally:
+        temporary.unlink(missing_ok=True)
     return True
 
 

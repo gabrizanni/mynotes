@@ -475,6 +475,14 @@ PROVIDER_INSTALL_URLS = {
 def provider_environment() -> dict[str, str]:
     """Give GUI launches the same supported launcher locations as a shell."""
     environment = os.environ.copy()
+    if os.name == "nt":
+        home = Path.home()
+        directories = [home / ".local/bin"]
+        if environment.get("APPDATA"):
+            directories.append(Path(environment["APPDATA"]) / "npm")
+        existing = environment.get("PATH", "").split(os.pathsep)
+        environment["PATH"] = os.pathsep.join(dict.fromkeys(existing + list(map(str, directories))))
+        return environment
     # LaunchServices may omit HOME. Restore the OS user's home for CLIs that
     # require it; do not redirect authentication or clone credentials.
     if not environment.get("HOME"):
@@ -488,6 +496,12 @@ def provider_environment() -> dict[str, str]:
 
 
 def provider_executable(provider: str) -> str | None:
+    if os.name == "nt":
+        # Batch wrappers would interpret parts of arbitrary chat prompts as shell
+        # syntax. Use the provider's standalone executable on Windows.
+        name = provider if Path(provider).suffix.lower() == ".exe" else f"{provider}.exe"
+        executable = shutil.which(name, path=provider_environment()["PATH"])
+        return executable if executable and Path(executable).suffix.lower() == ".exe" else None
     return shutil.which(provider) or shutil.which(provider, path=provider_environment()["PATH"])
 
 

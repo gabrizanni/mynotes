@@ -1,6 +1,6 @@
 """Crash-safe, bounded ASR admission shared by direct and queued requests."""
 from contextlib import contextmanager
-import fcntl
+from . import file_lock
 import json
 
 
@@ -22,11 +22,11 @@ def admission(workspace):
         # Older runtimes hold this exclusively; new runtimes share it while
         # occupying independent slots. Neither generation may over-admit the other.
         try:
-            fcntl.flock(legacy, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            file_lock.flock(legacy, file_lock.LOCK_SH | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise ASRBusyError("BUSY: a legacy transcription is running", _active(workspace)) from error
         with (root / ".asr-admission.lock").open("a+") as gate:
-            fcntl.flock(gate, fcntl.LOCK_EX)
+            file_lock.flock(gate, file_lock.LOCK_EX)
             try:
                 setting = json.loads((root / "asr-concurrency.json").read_text())
                 limit = setting["parallel"]
@@ -38,7 +38,7 @@ def admission(workspace):
             for number in range(4):
                 handle = (root / f".asr-slot-{number}.lock").open("a+")
                 try:
-                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    file_lock.flock(handle, file_lock.LOCK_EX | file_lock.LOCK_NB)
                     free.append(handle)
                 except BlockingIOError:
                     held += 1

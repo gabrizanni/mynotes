@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .utils import atomic_json_write, file_sha256
-from .workspace import Workspace
+from .workspace import Workspace, windows_data_home
 
 INSTALL_URLS = {
     "codex": "https://developers.openai.com/codex/cli/",
@@ -23,7 +23,8 @@ INSTALL_URLS = {
 
 
 def runtime_home() -> Path:
-    return Path(os.environ.get("MYNOTES_HOME", str(Path.home() / "Library/Application Support/MyNotes"))).expanduser()
+    default = windows_data_home() if os.name == "nt" else Path.home() / "Library/Application Support/MyNotes"
+    return Path(os.environ.get("MYNOTES_HOME", str(default))).expanduser()
 
 
 def _managed_registry() -> tuple[dict[str, Any], str | None]:
@@ -39,7 +40,7 @@ def _managed_registry() -> tuple[dict[str, Any], str | None]:
         return {}, "Managed component registry must be a JSON object."
     if "schema_version" in data and data["schema_version"] != 1:
         return {}, "Managed component registry uses an unsupported schema version."
-    for key in ("argmax", "soffice", "model_cache"):
+    for key in ("argmax", "whispercpp", "soffice", "model_cache"):
         if key in data and (not isinstance(data[key], str) or not data[key] or "\x00" in data[key]):
             return {}, f"Managed component registry has an invalid {key} path."
     if "execution_proof" in data and not isinstance(data["execution_proof"], dict):

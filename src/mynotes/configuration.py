@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
-import fcntl
 import json
+import os
 import re
 import shutil
 import uuid
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from . import file_lock
 from .utils import atomic_json_write, now_compact_utc
 
 ONBOARDING_GROUPS = ("personal", "paths", "courses", "style", "providers")
@@ -116,8 +117,8 @@ def course_template() -> dict[str, Any]:
             "language": "en",
             "vocabulary": [],
             "accent": "",
-            "primary_engine": "argmax",
-            "primary_model": "large-v3-v20240930_626MB",
+            "primary_engine": "whispercpp" if os.name == "nt" else "argmax",
+            "primary_model": "large-v3-turbo" if os.name == "nt" else "large-v3-v20240930_626MB",
             "secondary_engine": None,
             "secondary_model": "v2",
             "extra_pass_engine": None,
@@ -499,11 +500,11 @@ class ConfigurationStore:
         lock_path = self.path.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_EX)
             try:
                 self._persist_locked(normalized)
             finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                file_lock.flock(lock.fileno(), file_lock.LOCK_UN)
         return normalized
 
     def update(self, transform: Callable[[dict[str, Any]], dict[str, Any]], *,
@@ -516,7 +517,7 @@ class ConfigurationStore:
         lock_path = self.path.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_EX)
             try:
                 current = self.load()
                 if expected_configuration is not None and current != expected_configuration:
@@ -527,7 +528,7 @@ class ConfigurationStore:
                     self._persist_locked(normalized)
                 return normalized
             finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                file_lock.flock(lock.fileno(), file_lock.LOCK_UN)
 
     def _resolve_relative_paths(self, configuration: dict[str, Any]) -> dict[str, Any]:
         base = self.path.parent.parent

@@ -16,7 +16,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Iterator
 
-import fcntl
+from . import file_lock
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -387,13 +387,13 @@ def _publication_lock(target: Path) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise WorkflowError(f"Publication already active for: {target}") from error
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_UN)
 
 
 def _check_word_conflict(state: WorkflowState, target: Path, *, accept_current_word: bool) -> str | None:
@@ -943,13 +943,13 @@ def _generation_lock(workspace: Workspace, lecture_id: str) -> Iterator[None]:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".generation.lock").open("a+") as lease:
         try:
-            fcntl.flock(lease.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(lease.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise WorkflowError(f"Generation is already running for {lecture_id}; wait for it. No second provider call was made.") from error
         try:
             yield
         finally:
-            fcntl.flock(lease.fileno(), fcntl.LOCK_UN)
+            file_lock.flock(lease.fileno(), file_lock.LOCK_UN)
 
 
 def generate_candidate(workspace: Workspace, lecture_id: str, *, source_pack_path: Path | None = None,

@@ -146,8 +146,14 @@ class Workspace:
         return results
 
 
+def windows_data_home() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "MyNotes"
+
+
 def default_workspace_path() -> Path:
     """Use platform-local application data rather than a source checkout."""
+    if os.name == "nt":
+        return windows_data_home() / "workspace"
     if os.name == "posix" and Path("/System/Library/CoreServices").exists():
         return Path.home() / "Library" / "Application Support" / "MyNotes"
     return Path.home() / ".local" / "share" / "mynotes"

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
-import fcntl
+from . import file_lock
 import hashlib
 import json
 import os
@@ -15,6 +15,7 @@ import sys
 import time
 import uuid
 
+from .process_status import probe_process
 from .utils import atomic_json_write, file_sha256
 
 
@@ -26,7 +27,7 @@ def root(workspace):
 def database(workspace, *, readonly=False):
     path = root(workspace) / "queue.sqlite3"
     if readonly:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=10)
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
     else:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         conn = sqlite3.connect(path, timeout=10)
@@ -313,7 +314,7 @@ def _alive(pid):
     if type(pid) is not int or pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
+        probe_process(pid)
         return True
     except ProcessLookupError:
         return False
@@ -712,7 +713,7 @@ def run(workspace, *, tick=1):
     pressure_checked, pressure_hold = 0, False
     with (directory / "runner.lock").open("a+") as lease:
         try:
-            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(lease, file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError:
             return
         while True:

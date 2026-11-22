@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict
-import fcntl
+from . import file_lock
 import json
 import os
 from pathlib import Path
@@ -28,13 +28,13 @@ def _request_lock(root):
     root.mkdir(parents=True, exist_ok=True)
     with (root / '.notes.lock').open('a+') as lock:
         try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise WorkflowError('This notes request is already running; attach with batch-status. No second job was started.') from error
         try:
             yield
         finally:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_UN)
 
 
 def _candidate_hash(path):
