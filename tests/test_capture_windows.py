@@ -133,3 +133,19 @@ def test_maintenance_uses_native_result_tokens(monkeypatch, tmp_path):
 
     monkeypatch.setattr(capture_windows, "_system_tool", run)
     assert capture_windows.maintenance("quiesce", binary, tmp_path) == "ABSENT"
+
+
+def test_normal_disable_handles_stale_configuration_without_a_task(store, tmp_path, monkeypatch):
+    binary = tmp_path / "MyNotes.Capture.exe"
+    binary.touch()
+    monkeypatch.setenv("MYNOTES_CAPTURE_EXE", str(binary))
+    monkeypatch.setattr(capture_windows, "_user_sid", lambda: "S-1-5-21-100-101-102-1001")
+    monkeypatch.setattr(capture_windows, "_control_task", lambda operation, target: "ABSENT")
+    config = store.config()
+    config["enabled"] = True
+    store.save_config(config)
+    active = capture.runtime_home() / "active.json"
+    atomic_json_write(active, {"workspace": str(store.workspace.root)})
+    assert capture_windows.set_enabled(store, False) == {"status": "DISABLED"}
+    assert not active.exists()
+    assert store.config()["enabled"] is False

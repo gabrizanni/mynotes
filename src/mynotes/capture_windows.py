@@ -124,7 +124,7 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
                 config = store.config()
                 if not active and not config["enabled"]:
                     return {"status": "DISABLED"}
-                _require_task(_task("/Delete", name, "/F"), "remove")
+                maintenance("remove", executable(), home)
                 config["enabled"] = False
                 store.save_config(config)
             active_path.unlink(missing_ok=True)
@@ -174,7 +174,15 @@ if ($null -eq $task) {
     exit 0
 }
 
-$actions = $task.Definition.Actions
+$definition = $task.Definition
+$principal = $definition.Principal.UserId
+$currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if ($principal -notmatch '^S-[0-9]+(?:-[0-9]+)+$') {
+    $account = [Security.Principal.NTAccount]::new($principal)
+    $principal = $account.Translate([Security.Principal.SecurityIdentifier]).Value
+}
+if ($principal -ne $currentSid) { throw 'The Capture task belongs to a different Windows user' }
+$actions = $definition.Actions
 if ($actions.Count -ne 1) { throw 'The Capture task has unexpected actions' }
 $action = $actions.Item(1)
 if ($action.Type -ne 0 -or -not [IO.Path]::IsPathRooted($action.Path) -or
