@@ -334,8 +334,8 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
         if not isinstance(record, dict) or not isinstance(record.get("path"), str):
             raise ValueError("Invalid Capture microphone test evidence; run and confirm a new test.")
         audio = Path(record["path"])
-        from .capture import app_path
-        binary = app_path() / "Contents/MacOS/MyNotesCapture"
+        from .capture import capture_executable
+        binary = capture_executable()
         if record.get("audible_confirmed") is True and record.get("validated") is True and audio.is_file() and record.get("sha256") == file_sha256(audio) and record.get("capture_binary_sha256") == file_sha256(binary):
             checks["capture"] = {"status": "ready", "action": "Capture microphone test verified and audibility confirmed.", "path": str(audio)}
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -362,11 +362,16 @@ def confirm_capture_audio(workspace: Workspace, audio: Path, *, audible: bool) -
             continue
     if not verified_session:
         raise ValueError("Select the completed microphone test from Capture status; ordinary recordings cannot confirm readiness.")
-    checked = subprocess.run(["/usr/bin/afinfo", str(audio)], capture_output=True, text=True, timeout=15)
-    if checked.returncode or not audio.is_file() or audio.stat().st_size == 0:
+    if os.name == "nt":
+        from .capture_windows import valid_audio
+        audio_is_valid = valid_audio(audio)
+    else:
+        checked = subprocess.run(["/usr/bin/afinfo", str(audio)], capture_output=True, text=True, timeout=15)
+        audio_is_valid = checked.returncode == 0 and audio.is_file() and audio.stat().st_size > 0
+    if not audio_is_valid:
         raise ValueError("Microphone test is missing or is not valid audio.")
-    from .capture import app_path
-    binary = app_path() / "Contents/MacOS/MyNotesCapture"
+    from .capture import capture_executable
+    binary = capture_executable()
     evidence = {"path": str(audio), "validated": True, "audible_confirmed": True, "sha256": file_sha256(audio), "capture_binary_sha256": file_sha256(binary)}
     atomic_json_write(workspace.state_dir / "capture/audio-readiness.json", evidence)
     return evidence
