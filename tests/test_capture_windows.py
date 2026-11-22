@@ -84,3 +84,52 @@ def test_export_converts_multiple_wavs_and_preserves_final_output(store):
     with pytest.raises(FileExistsError):
         capture_windows.export(store, session_id)
     assert capture_windows.valid_audio(temporary)
+
+
+def test_installer_quiesce_reports_owned_task_state_and_checks_worker(monkeypatch, tmp_path):
+    binary = tmp_path / "MyNotes.Capture.exe"
+    calls = []
+
+    def control(operation, target):
+        calls.append((operation, target))
+        return {"quiesce": "ENABLED", "resume": "RESUMED"}[operation]
+
+    def still_running(home):
+        raise capture.CaptureError(f"Still running in {home}")
+
+    monkeypatch.setattr(capture_windows, "_control_task", control)
+    monkeypatch.setattr(capture_windows, "_verify_worker_stopped", still_running)
+    with pytest.raises(capture.CaptureError, match="Still running"):
+        capture_windows.maintenance("quiesce", binary, tmp_path)
+    assert calls == [("quiesce", binary), ("resume", binary)]
+
+
+@pytest.mark.parametrize(("prior", "expected"), [("ABSENT", "ABSENT"), ("DISABLED", "REMOVED")])
+def test_installer_remove_is_idempotent_for_absent_task(monkeypatch, tmp_path, prior, expected):
+    binary = tmp_path / "MyNotes.Capture.exe"
+    calls = []
+
+    def control(operation, target):
+        assert target == binary
+        calls.append(operation)
+        return {"quiesce": prior, "remove": "REMOVED"}[operation]
+
+    monkeypatch.setattr(capture_windows, "_control_task", control)
+    assert capture_windows.maintenance("remove", binary, tmp_path) == expected
+    assert calls == (["quiesce"] if prior == "ABSENT" else ["quiesce", "remove"])
+    assert not list(tmp_path.iterdir())
+
+
+def test_maintenance_uses_native_result_tokens(monkeypatch, tmp_path):
+    binary = tmp_path / "MyNotes.Capture.exe"
+    monkeypatch.setattr(capture_windows, "_user_sid", lambda: "S-1-5-21-100-101-102-1001")
+
+    def run(tool, *args, environment):
+        assert tool.endswith("powershell.exe")
+        assert environment["MYNOTES_INSTALLER_CAPTURE_OPERATION"] == "quiesce"
+        assert environment["MYNOTES_INSTALLER_CAPTURE_TASK"] == "MyNotes Capture S-1-5-21-100-101-102-1001"
+        assert environment["MYNOTES_INSTALLER_CAPTURE_EXE"] == str(binary)
+        return subprocess.CompletedProcess([tool, *args], 0, "ABSENT\n", "")
+
+    monkeypatch.setattr(capture_windows, "_system_tool", run)
+    assert capture_windows.maintenance("quiesce", binary, tmp_path) == "ABSENT"

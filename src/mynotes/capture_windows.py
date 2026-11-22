@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import os
 import re
@@ -37,11 +38,12 @@ def installed() -> bool:
     return True
 
 
-def _system_tool(name: str, *arguments: str) -> subprocess.CompletedProcess:
+def _system_tool(name: str, *arguments: str, environment: dict | None = None) -> subprocess.CompletedProcess:
     command = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / name
     try:
         return subprocess.run([str(command), *arguments], capture_output=True, text=True,
-                              errors="replace", timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+                              errors="replace", timeout=30, env=environment,
+                              creationflags=subprocess.CREATE_NO_WINDOW)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise CaptureError(f"Could not run {name}: {error}") from error
 
@@ -154,6 +156,130 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
     return {"status": "ENABLED", "audioReadinessVerified": False}
 
 
+# The installer holds the recording/export lease while it calls this command.
+# Read and mutate the same task through Task Scheduler's COM interface. Native
+# return values avoid depending on the system language or parsing task output.
+_INSTALLER_TASK_CONTROL = r"""
+$ErrorActionPreference = 'Stop'
+$operation = $env:MYNOTES_INSTALLER_CAPTURE_OPERATION
+$name = $env:MYNOTES_INSTALLER_CAPTURE_TASK
+$expectedPath = $env:MYNOTES_INSTALLER_CAPTURE_EXE
+$service = New-Object -ComObject Schedule.Service
+$service.Connect()
+$folder = $service.GetFolder('\')
+$task = @($folder.GetTasks(1) | Where-Object { $_.Name -eq $name }) | Select-Object -First 1
+if ($null -eq $task) {
+    if ($operation -eq 'resume') { throw 'The Capture task to resume is missing' }
+    [Console]::WriteLine('ABSENT')
+    exit 0
+}
+
+$actions = $task.Definition.Actions
+if ($actions.Count -ne 1) { throw 'The Capture task has unexpected actions' }
+$action = $actions.Item(1)
+if ($action.Type -ne 0 -or -not [IO.Path]::IsPathRooted($action.Path) -or
+    -not [string]::Equals([IO.Path]::GetFullPath($action.Path),
+        [IO.Path]::GetFullPath($expectedPath), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The Capture task targets a different application'
+}
+
+$enabled = $task.Enabled
+if ($operation -eq 'resume') {
+    try {
+        $task.Enabled = $true
+        $null = $task.Run($null)
+    } catch {
+        $task.Enabled = $enabled
+        throw
+    }
+    [Console]::WriteLine('RESUMED')
+    exit 0
+}
+
+$wasRunning = $task.GetInstances(0).Count -gt 0
+try {
+    $task.Enabled = $false
+    if ($task.GetInstances(0).Count -gt 0) { $task.Stop(0) }
+    for ($attempt = 0; $attempt -lt 40 -and $task.GetInstances(0).Count -gt 0; $attempt++) {
+        Start-Sleep -Milliseconds 100
+    }
+    if ($task.GetInstances(0).Count -gt 0) { throw 'The Capture worker did not stop' }
+    if ($operation -eq 'remove') {
+        $folder.DeleteTask($name, 0)
+        [Console]::WriteLine('REMOVED')
+    } elseif ($enabled) {
+        [Console]::WriteLine('ENABLED')
+    } else {
+        [Console]::WriteLine('DISABLED')
+    }
+} catch {
+    $failure = $_
+    try {
+        $task.Enabled = $enabled
+        if ($enabled -and $wasRunning -and $task.GetInstances(0).Count -eq 0) {
+            $null = $task.Run($null)
+        }
+    } catch {
+        throw "Capture maintenance failed and its task could not be restored: $failure / $_"
+    }
+    throw $failure
+}
+"""
+
+
+def _control_task(operation: str, binary: Path) -> str:
+    results = {
+        "quiesce": {"ENABLED", "DISABLED", "ABSENT"},
+        "remove": {"REMOVED", "ABSENT"},
+        "resume": {"RESUMED"},
+    }
+    env = dict(os.environ, MYNOTES_INSTALLER_CAPTURE_OPERATION=operation,
+               MYNOTES_INSTALLER_CAPTURE_TASK=task_name(_user_sid()),
+               MYNOTES_INSTALLER_CAPTURE_EXE=str(binary))
+    encoded = base64.b64encode(_INSTALLER_TASK_CONTROL.encode("utf-16-le")).decode("ascii")
+    result = _system_tool(r"WindowsPowerShell\v1.0\powershell.exe", "-NoLogo", "-NoProfile",
+                          "-NonInteractive", "-EncodedCommand", encoded, environment=env)
+    _require_task(result, operation)
+    status = result.stdout.strip()
+    if status not in results[operation]:
+        raise CaptureError("Unexpected Capture maintenance result")
+    return status
+
+
+def _verify_worker_stopped(home: Path) -> None:
+    # An instance started outside Task Scheduler owns the same app lease, and
+    # cannot be replaced while its executable is in use.
+    try:
+        lease = (home / "app.lock").open("r+b")
+    except FileNotFoundError:
+        return
+    with lease:
+        try:
+            file_lock.flock(lease.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
+        except BlockingIOError as error:
+            raise CaptureError("An instance of MyNotes Capture is still running") from error
+
+
+def maintenance(operation: str, binary: Path, home: Path) -> str:
+    """Stop or remove the owned task under the installer lease, or resume it after release."""
+    if not binary.is_absolute() or binary.name.casefold() != "mynotes.capture.exe" or not home.is_absolute():
+        raise CaptureError("Expected absolute Capture executable and runtime paths")
+    if operation == "resume":
+        return _control_task(operation, binary)
+    if operation not in {"quiesce", "remove"}:
+        raise CaptureError("Unknown Capture maintenance operation")
+    original = _control_task("quiesce", binary)
+    try:
+        _verify_worker_stopped(home)
+        if operation == "remove" and original != "ABSENT":
+            return _control_task(operation, binary)
+    except (OSError, CaptureError):
+        if original == "ENABLED":
+            _control_task("resume", binary)
+        raise
+    return original
+
+
 def valid_audio(path: Path) -> bool:
     import av
 
@@ -228,14 +354,22 @@ def export(store: CaptureStore, session_id: str) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["export"])
-    parser.add_argument("--workspace", required=True)
-    parser.add_argument("--session", required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    encode = commands.add_parser("export")
+    encode.add_argument("--workspace", required=True)
+    encode.add_argument("--session", required=True)
+    maintain = commands.add_parser("maintenance")
+    maintain.add_argument("operation", choices=["quiesce", "resume", "remove"])
+    maintain.add_argument("--capture-exe", required=True, type=Path)
+    maintain.add_argument("--capture-home", required=True, type=Path)
     arguments = parser.parse_args()
     try:
-        print(export(CaptureStore(Workspace.from_value(arguments.workspace)), arguments.session))
+        if arguments.command == "maintenance":
+            print(maintenance(arguments.operation, arguments.capture_exe, arguments.capture_home))
+        else:
+            print(export(CaptureStore(Workspace.from_value(arguments.workspace)), arguments.session))
     except (OSError, ValueError, KeyError, IndexError) as error:
-        parser.exit(1, f"Capture export failed: {error}\n")
+        parser.exit(1, f"Capture {arguments.command} failed: {error}\n")
 
 
 if __name__ == "__main__":
