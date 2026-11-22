@@ -1,0 +1,91 @@
+"""Build an internal Windows x64 installer using only pinned build inputs."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import platform
+import shutil
+import struct
+import subprocess
+import tempfile
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+PYTHON_VERSION = "3.12.14"
+
+
+def run(*args: str | Path, env: dict[str, str] | None = None) -> None:
+    subprocess.run(list(map(str, args)), cwd=ROOT, env=env, check=True)
+
+
+def publish(project: Path, destination: Path, *properties: str) -> None:
+    run("dotnet", "publish", project, "--configuration", "Release",
+        "--runtime", "win-x64", "--self-contained", "true",
+        "--output", destination, *properties)
+
+
+def stage_runtime(build: Path, stage: Path) -> None:
+    env = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(build / "python"))
+    run("uv", "python", "install", PYTHON_VERSION, env=env)
+    managed = subprocess.check_output(
+        ["uv", "python", "find", "--managed-python", PYTHON_VERSION],
+        cwd=ROOT, env=env, text=True,
+    ).strip()
+    runtime = stage / "runtime"
+    shutil.copytree(Path(managed).parent, runtime)
+    python = runtime / "python.exe"
+    run(python, "-I", "-c",
+        "import struct, sys; assert sys.platform == 'win32' and struct.calcsize('P') == 8")
+    requirements = build / "requirements.txt"
+    run("uv", "export", "--locked", "--no-dev", "--no-emit-project", "--output-file", requirements)
+    run("uv", "build", "--wheel", "--out-dir", build / "wheel")
+    wheel, = (build / "wheel").glob("mynotes-*.whl")
+    lib = runtime / "Lib" / "site-packages"
+    run("uv", "pip", "install", "--python", python, "--target", lib,
+        "--require-hashes", "--no-deps", "-r", requirements)
+    run("uv", "pip", "install", "--python", python, "--target", lib, "--no-deps", wheel)
+    publish(ROOT / "windows/launcher/MyNotes.Cli.csproj", build / "launcher",
+            "-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true")
+    shutil.copyfile(build / "launcher/mynotes.exe", runtime / "mynotes.exe")
+    # Smoke test using the copied runtime, not the development venv.
+    run(runtime / "mynotes.exe", "--version")
+    run(runtime / "mynotes.exe", "init", "--workspace", build / "workspace")
+
+
+def build_candidate(output: Path, iscc: Path) -> Path:
+    if platform.system() != "Windows" or platform.machine().upper() != "AMD64" or struct.calcsize("P") != 8:
+        raise RuntimeError("The Windows installer must be built on an x64 Windows runner")
+    if not iscc.is_file():
+        raise FileNotFoundError("Pass the pinned Inno Setup compiler with --iscc")
+    output.mkdir(parents=True, exist_ok=True)
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    with tempfile.TemporaryDirectory(prefix="mynotes-windows-") as temporary:
+        build = Path(temporary)
+        stage = build / "stage"
+        stage.mkdir()
+        stage_runtime(build, stage)
+        publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop", "-p:Platform=x64")
+        publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture")
+        for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+            shutil.copyfile(ROOT / name, stage / name)
+        run(iscc, f"/DStageDir={stage}", f"/DOutputFolder={output}", f"/DMyNotesVersion={version}",
+            ROOT / "windows/setup/MyNotes.iss")
+    installer = output / "MyNotes-Setup-x64-internal.exe"
+    with installer.open("rb") as source:
+        digest = hashlib.file_digest(source, "sha256").hexdigest()
+    installer.with_suffix(".exe.sha256").write_text(f"{digest}  {installer.name}\n", encoding="utf-8")
+    return installer
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--iscc", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    print(build_candidate(args.output.resolve(), args.iscc.resolve()))
+
+
+if __name__ == "__main__":
+    main()

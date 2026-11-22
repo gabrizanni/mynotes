@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import hashlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -195,8 +197,35 @@ def validate(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def validate_windows_source(root: Path = ROOT) -> list[str]:
+    """Audit Windows Git sources without adding them to the macOS installer."""
+    tracked = subprocess.check_output(["git", "ls-files", "-z", "--", "windows/"], cwd=root)
+    suffixes = {".cs", ".csproj", ".props", ".targets", ".xaml", ".resw", ".manifest",
+                ".xml", ".md", ".json", ".iss", ".py", ".ps1", ".sln", ".slnx"}
+    private_profile = re.compile(r"[a-z]:[\\/]users[\\/]", re.IGNORECASE)
+    errors = []
+    for name in filter(None, tracked.decode("utf-8").split("\0")):
+        path = root / name
+        if path.is_symlink() or path.suffix.lower() not in suffixes:
+            errors.append(f"unexpected Windows public artifact: {name}")
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            errors.append(f"unreadable Windows public source: {name}")
+            continue
+        if PRIVATE_REFERENCE.search(content) or private_profile.search(content):
+            errors.append(f"private reference in Windows public source: {name}")
+    return errors
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--windows-source", action="store_true")
+    arguments = parser.parse_args()
     issues = validate()
+    if arguments.windows_source:
+        issues += validate_windows_source()
     if issues:
         print("\n".join(issues), file=sys.stderr)
         raise SystemExit(1)

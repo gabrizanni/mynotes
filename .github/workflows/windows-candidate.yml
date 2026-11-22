@@ -1,0 +1,81 @@
+name: Windows internal candidate
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ['windows/**', 'src/**', 'uv.lock', 'pyproject.toml', '.github/workflows/windows-candidate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64-package:
+    runs-on: windows-2025
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12.14"
+
+      - name: Audit Windows source
+        run: uv run --locked python scripts/check_public_tree.py --windows-source
+
+      - name: Install checked Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $setup
+          $sha = (Get-FileHash $setup -Algorithm SHA256).Hash
+          if ($sha -ne '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0') { throw 'Inno Setup checksum mismatch' }
+          $install = Join-Path $env:RUNNER_TEMP 'Inno'
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Inno Setup exited $($result.ExitCode)" }
+          "MYNOTES_INNO=$install" >> $env:GITHUB_ENV
+
+      - name: Build and verify unsigned candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'mynotes-candidate'
+          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --output $out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
+
+      - name: Smoke-test installation and uninstall as the runner user
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs/MyNotes'
+          $workspace = Join-Path $env:RUNNER_TEMP 'MyNotes workspace'
+          $log = Join-Path $env:RUNNER_TEMP 'mynotes-install.log'
+          $setup = Join-Path $env:MYNOTES_WINDOWS_ARTIFACT 'MyNotes-Setup-x64-internal.exe'
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { Get-Content $log; throw "Installation failed: $($result.ExitCode)" }
+          $launcher = Join-Path $app 'runtime/mynotes.exe'
+          & $launcher init --workspace $workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $result = Start-Process (Join-Path $app 'unins000.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Uninstall failed: $($result.ExitCode)" }
+          if (!(Test-Path "$workspace/config/settings.json") -or (Test-Path $launcher)) {
+              throw 'Uninstall did not preserve the workspace and remove the runtime'
+          }
+
+      - name: Upload internal unsigned candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mynotes-windows-x64-internal
+          path: ${{ env.MYNOTES_WINDOWS_ARTIFACT }}/MyNotes-Setup-x64-internal.exe*
+          if-no-files-found: error
