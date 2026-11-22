@@ -1,6 +1,6 @@
 # Versioned updates and recovery
 
-## 0.3.12 · Shared chat startup
+## 0.4.0 · Shared chat startup
 
 - Codex, Antigravity and Claude Code load the same MyNotes workspace instructions
   and receive the same compact startup prompt and localized greeting.
