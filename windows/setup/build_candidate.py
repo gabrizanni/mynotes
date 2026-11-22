@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON_VERSION = "3.12.14"
+LIBREOFFICE_SHA256 = "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94"
 
 
 def run(*args: str | Path, env: dict[str, str] | None = None) -> None:
@@ -54,7 +55,25 @@ def stage_runtime(build: Path, stage: Path) -> None:
     run(runtime / "mynotes.exe", "init", "--workspace", build / "workspace")
 
 
-def build_candidate(output: Path, iscc: Path) -> Path:
+def stage_office(build: Path, stage: Path, msi: Path) -> None:
+    with msi.open("rb") as source:
+        if hashlib.file_digest(source, "sha256").hexdigest() != LIBREOFFICE_SHA256:
+            raise ValueError("LibreOffice MSI checksum mismatch")
+    extracted = build / "LibreOffice image"
+    msiexec = Path(os.environ["SystemRoot"]) / "System32" / "msiexec.exe"
+    run(msiexec, "/a", msi, "/qn", "/norestart", f"TARGETDIR={extracted}")
+    renderer, = extracted.rglob("soffice.com")
+    shutil.move(renderer.parent.parent, stage / "office")
+    python = stage / "runtime" / "python.exe"
+    env = dict(os.environ, MYNOTES_HOME=str(build / "renderer proof"))
+    env.pop("MYNOTES_SOFFICE", None)
+    run(python, "-I", "-c",
+        "from mynotes.onboarding import verify_word_renderer; "
+        "print(verify_word_renderer()['word_pages'])",
+        env=env)
+
+
+def build_candidate(output: Path, iscc: Path, libreoffice_msi: Path) -> Path:
     if platform.system() != "Windows" or platform.machine().upper() != "AMD64" or struct.calcsize("P") != 8:
         raise RuntimeError("The Windows installer must be built on an x64 Windows runner")
     if not iscc.is_file():
@@ -66,6 +85,7 @@ def build_candidate(output: Path, iscc: Path) -> Path:
         stage = build / "stage"
         stage.mkdir()
         stage_runtime(build, stage)
+        stage_office(build, stage, libreoffice_msi)
         publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop", "-p:Platform=x64")
         publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture")
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
@@ -83,8 +103,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--iscc", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--libreoffice-msi", type=Path, required=True)
     args = parser.parse_args()
-    print(build_candidate(args.output.resolve(), args.iscc.resolve()))
+    print(build_candidate(args.output.resolve(), args.iscc.resolve(), args.libreoffice_msi.resolve()))
 
 
 if __name__ == "__main__":

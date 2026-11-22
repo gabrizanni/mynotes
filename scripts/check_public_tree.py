@@ -203,10 +203,17 @@ def validate_windows_source(root: Path = ROOT) -> list[str]:
     suffixes = {".cs", ".csproj", ".props", ".targets", ".xaml", ".resw", ".manifest",
                 ".xml", ".md", ".json", ".iss", ".py", ".ps1", ".sln", ".slnx"}
     private_profile = re.compile(r"[a-z]:[\\/]users[\\/]", re.IGNORECASE)
+    brand_icons = {
+        "windows/desktop/MyNotes.ico": "522755e72d192044af7abd6013e45b2e440e1da1264ccf96abff9a4df204e3ea",
+    }
     errors = []
     for name in filter(None, tracked.decode("utf-8").split("\0")):
         path = root / name
-        if path.is_symlink() or path.suffix.lower() not in suffixes:
+        if name in brand_icons and path.is_file() and not path.is_symlink():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != brand_icons[name]:
+                errors.append(f"changed Windows public brand asset: {name}")
+            continue
+        if path.is_symlink() or (path.suffix.lower() not in suffixes and path.name != ".gitignore"):
             errors.append(f"unexpected Windows public artifact: {name}")
             continue
         try:

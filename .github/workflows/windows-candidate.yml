@@ -21,7 +21,7 @@ jobs:
       - name: Install .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: '10.0.404'
 
       - name: Install uv and Python
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
@@ -50,11 +50,14 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'mynotes-candidate'
-          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --output $out
+          $office = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.3_Win_x86-64.msi'
+          curl.exe --fail --location --retry 3 "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" --output $office
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --output $out
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
 
-      - name: Smoke-test installation and uninstall as the runner user
+      - name: Smoke-test installation, update, and uninstall as the runner user
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -67,10 +70,37 @@ jobs:
           $launcher = Join-Path $app 'runtime/mynotes.exe'
           & $launcher init --workspace $workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          & "$app/runtime/python.exe" -I -c "from mynotes.onboarding import verify_word_renderer; print(verify_word_renderer()['word_pages'])"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:MYNOTES_HOME
+
+          $captureExe = Join-Path $app 'capture/MyNotes.Capture.exe'
+          $captureHome = Join-Path $env:LOCALAPPDATA 'MyNotes/Capture'
+          $lease = [System.IO.File]::Open((Join-Path $captureHome 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+          $lease.Lock(0, 1)
+          try {
+              $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
+              if ($result.ExitCode -ne 7) { throw "Expected a busy update exit (7), got $($result.ExitCode)" }
+          } finally {
+              $lease.Dispose()
+          }
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $taskName = "MyNotes Capture $sid"
+          $action = New-ScheduledTaskAction -Execute $captureExe
+          Register-ScheduledTask -TaskName $taskName -Action $action -User $sid -Force | Out-Null
+          Disable-ScheduledTask -TaskName $taskName | Out-Null
+
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { Get-Content $log; throw "Idle update failed: $($result.ExitCode)" }
+          if (!(Test-Path "$workspace/config/settings.json") -or (Get-ScheduledTask -TaskName $taskName).State -ne 'Disabled') {
+              throw 'Update did not preserve the workspace and the disabled Capture task'
+          }
           $result = Start-Process (Join-Path $app 'unins000.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
           if ($result.ExitCode -ne 0) { throw "Uninstall failed: $($result.ExitCode)" }
-          if (!(Test-Path "$workspace/config/settings.json") -or (Test-Path $launcher)) {
-              throw 'Uninstall did not preserve the workspace and remove the runtime'
+          if (!(Test-Path "$workspace/config/settings.json") -or (Test-Path $launcher) -or
+              (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+              throw 'Uninstall did not preserve the workspace and remove the runtime and Capture task'
           }
 
       - name: Upload internal unsigned candidate
