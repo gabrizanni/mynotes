@@ -214,9 +214,11 @@ def test_startup_is_small_and_never_reads_source_libraries(tmp_path, monkeypatch
         from pathlib import Path
         core = Path(calls[0][calls[0].index("--append-system-prompt-file") + 1]).read_text()
     elif provider == "agy":
-        core = (ws.root / ".agents/plugins/mynotes/agents/mynotes.md").read_text()
+        core = (ws.root / "AGENTS.md").read_text()
+        assert CORE not in (ws.root / ".agents/plugins/mynotes/agents/mynotes.md").read_text()
     else:
-        core = (ws.root / ".agents/skills/mynotes/SKILL.md").read_text()
+        core = (ws.root / "AGENTS.md").read_text()
+        assert CORE not in (ws.root / ".agents/skills/mynotes/SKILL.md").read_text()
     assert (prompt + core).count(CORE) == 1
     assert len((prompt + core).split()) < 1000
 
