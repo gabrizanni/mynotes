@@ -1,5 +1,12 @@
 # Versioned updates and recovery
 
+## 0.4.0 · Shared chat startup
+
+- Codex, Antigravity and Claude Code load the same MyNotes workspace instructions
+  and receive the same compact startup prompt and localized greeting.
+- Existing custom workspace instructions and provider permissions are preserved.
+  Start a new chat to apply the update.
+
 ## 0.3.11 · Lesson management and transcription activities
 
 - Edit course, lesson number, title, date and timezone from the lesson detail.
