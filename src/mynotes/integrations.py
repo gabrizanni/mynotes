@@ -33,7 +33,7 @@ description: Coordinate MyNotes courses, preferences, evidence, notes and safe W
 
 """
 CLAUDE_SKILL = SKILL_HEADER + CORE
-CODEX_SKILL = SKILL_HEADER + """The MyNotes launcher supplies the common coordination rules.
+CHAT_SKILL = SKILL_HEADER + """The MyNotes launcher supplies the common coordination rules.
 If MYNOTES_CHAT_ACTIVE is not set, include --include-core in the first context
 command to bootstrap a session started directly in the provider.
 For each new task use `mynotes context --activity ACTIVITY` with --course CODE
@@ -127,10 +127,10 @@ def install_shared_chat_rules(workspace: Path) -> bool:
 def _layout(platform: str, target: Path, *, shared_chat_rules: bool) -> tuple[Path, dict[Path, str]]:
     if platform == "codex":
         root = target / ".agents" / "skills" / "mynotes"
-        return root, {Path("SKILL.md"): CODEX_SKILL}
+        return root, {Path("SKILL.md"): CHAT_SKILL}
     if platform == "claude":
         root = target / ".claude" / "skills" / "mynotes"
-        return root, {Path("SKILL.md"): CLAUDE_SKILL}
+        return root, {Path("SKILL.md"): CHAT_SKILL if shared_chat_rules else CLAUDE_SKILL}
     if platform == "agy":
         root = target / ".agents" / "plugins" / "mynotes"
         plugin = {"$schema": "https://antigravity.google/schemas/v1/plugin.json", "name": "mynotes", "description": "Local MyNotes coordination without private data."}

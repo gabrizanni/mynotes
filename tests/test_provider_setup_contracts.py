@@ -121,7 +121,7 @@ def test_chat_launches_defaults_in_private_workspace_with_managed_instructions(t
     root = workspace.root / (".claude/skills" if provider == "claude" else ".agents/plugins" if provider == "agy" else ".agents/skills") / "mynotes"
     assert root.is_dir()
     if provider == "claude":
-        assert command[command.index("--append-system-prompt-file") + 1] == str(root / "SKILL.md")
+        assert command[command.index("--append-system-prompt-file") + 1] == str(workspace.root / "AGENTS.md")
 
 
 def test_chat_keeps_large_profile_and_paths_out_of_startup_message(tmp_path, monkeypatch):
@@ -238,11 +238,11 @@ def test_doctor_provider_override_does_not_change_saved_selection(tmp_path, monk
 
 
 def test_source_exports_match_current_managed_generic_instructions():
-    from mynotes.integrations import CODEX_SKILL, AGY_AGENT, _verify_managed
+    from mynotes.integrations import CHAT_SKILL, AGY_AGENT, _verify_managed
     repository = Path(__file__).resolve().parents[1]
     for relative in (".agents/skills/mynotes", ".agents/plugins/mynotes"):
         root = repository / relative
         _verify_managed(root, json.loads((root / ".mynotes-integration.json").read_text()))
-    assert (repository / ".agents/skills/mynotes/SKILL.md").read_text() == CODEX_SKILL
+    assert (repository / ".agents/skills/mynotes/SKILL.md").read_text() == CHAT_SKILL
     assert (repository / ".agents/plugins/mynotes/agents/mynotes.md").read_text() == AGY_AGENT
-    assert "explicit user approval" in CODEX_SKILL and "explicit user approval" in AGY_AGENT
+    assert "explicit user approval" in CHAT_SKILL and "explicit user approval" in AGY_AGENT

@@ -31,7 +31,7 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
     # Instructions belong to this private workspace, never the application source.
     from .integrations import install_integration, install_shared_chat_rules
-    shared_rules = selected in {"codex", "agy"} and install_shared_chat_rules(workspace.root)
+    shared_rules = install_shared_chat_rules(workspace.root)
     integration = install_integration(selected, workspace.root, shared_chat_rules=shared_rules)
     repository = workspace.root
     courses = ", ".join(course["code"] for course in configuration.get("courses", [])) or "none"
@@ -93,7 +93,7 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     if selected == "agy":
         command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
     elif selected == "claude":
-        instructions = Path(integration["path"]) / "SKILL.md"
+        instructions = workspace.root / "AGENTS.md" if shared_rules else Path(integration["path"]) / "SKILL.md"
         command = [executable, "--permission-mode", "acceptEdits", "--append-system-prompt-file", str(instructions)] + overrides + [prompt]
     else:
         # The private workspace is already the working root. Adding it again

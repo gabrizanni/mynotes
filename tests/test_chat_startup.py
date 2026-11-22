@@ -115,7 +115,7 @@ def test_codex_chat_scopes_writes_and_receives_shared_instructions(tmp_path, mon
     assert CORE in agent
 
 
-def test_codex_and_agy_share_rules_and_startup_prompt(tmp_path, monkeypatch):
+def test_all_providers_share_rules_and_startup_prompt(tmp_path, monkeypatch):
     workspace, configuration = _setup(tmp_path)
     configuration["personal"]["interface_language"] = "it"
     prior_integration = install_integration("agy", workspace.root)
@@ -128,7 +128,8 @@ def test_codex_and_agy_share_rules_and_startup_prompt(tmp_path, monkeypatch):
 
     assert launch_chat(workspace, configuration, "codex") == 0
     assert launch_chat(workspace, configuration, "agy") == 0
-    assert calls[0][-1] == calls[1][-1]
+    assert launch_chat(workspace, configuration, "claude") == 0
+    assert calls[0][-1] == calls[1][-1] == calls[2][-1]
     assert "Ciao! Sono pronto ad aiutarti con MyNotes." in calls[0][-1]
     assert CORE not in calls[0][-1]
     assert CORE in (workspace.root / "AGENTS.md").read_text()
@@ -137,6 +138,8 @@ def test_codex_and_agy_share_rules_and_startup_prompt(tmp_path, monkeypatch):
     assert "AGENTS.md" in agent_text
     assert "commandExecutionPolicy: sandbox" in agent_text
     assert "--mode" in calls[1] and "accept-edits" in calls[1]
+    assert calls[2][calls[2].index("--append-system-prompt-file") + 1] == str(workspace.root / "AGENTS.md")
+    assert calls[2][calls[2].index("--permission-mode") + 1] == "acceptEdits"
 
 
 @pytest.mark.parametrize("name", ["AGENTS.md", "AGENTS.override.md", "GEMINI.md"])
@@ -151,9 +154,13 @@ def test_custom_workspace_rules_keep_legacy_startup(tmp_path, monkeypatch, name)
 
     assert launch_chat(workspace, configuration, "codex") == 0
     assert launch_chat(workspace, configuration, "agy") == 0
+    assert launch_chat(workspace, configuration, "claude") == 0
     assert custom.read_text() == "# Local guidance\n"
     assert CORE in calls[0][-1]
     assert CORE in (workspace.root / ".agents/plugins/mynotes/agents/mynotes.md").read_text()
+    fallback = workspace.root / ".claude/skills/mynotes/SKILL.md"
+    assert calls[2][calls[2].index("--append-system-prompt-file") + 1] == str(fallback)
+    assert CORE in fallback.read_text()
 
 
 def test_shared_rules_upgrade_and_preserve_local_edits(tmp_path, monkeypatch):
