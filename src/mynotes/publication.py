@@ -31,7 +31,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Inches, Pt, RGBColor
 
 from .configuration import effective_style
-from .office import OfficeError, convert_to_pdf
+from .office import OfficeError, convert_to_pdf, find_soffice
 from .utils import atomic_json_write, file_sha256, now_compact_utc
 from .workspace import Workspace
 
@@ -1244,12 +1244,8 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
 
 
 def _soffice() -> str | None:
-    bundled = sorted((Path.home() / ".cache" / "codex-runtimes").glob("*/dependencies/bin/override/soffice"))
     from .onboarding import managed_tool
-    candidates = [os.environ.get("MYNOTES_SOFFICE"), managed_tool("soffice"), shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice", *(str(item) for item in bundled)]
-    if os.name == "nt" and os.environ.get("ProgramFiles"):
-        candidates.append(str(Path(os.environ["ProgramFiles"]) / "LibreOffice/program/soffice.com"))
-    return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
+    return find_soffice(managed_tool("soffice"))
 
 
 def _render_and_validate(docx: Path, output_dir: Path, *, timeout_seconds: float = 300) -> dict[str, Any]:

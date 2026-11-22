@@ -9,13 +9,14 @@ import hashlib
 import json
 import os
 import re
-import selectors
-import shutil
 import signal
 import subprocess
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+from .provider_process import SelectablePipes, ThreadedPipes, WindowsJob, write_windows_pipe
 
 
 class DiscoveryError(Exception):
@@ -46,7 +47,8 @@ def context_key(provider: str, env: dict | None = None) -> str:
     names = {"codex": ("auth.json", "config.toml"),
              "agy": ("oauth_creds.json", "antigravity-cli/settings.json"),
              "claude": (".credentials.json", "settings.json")}
-    parts = [provider, str(roots[provider]), shutil.which(provider, path=env["PATH"]) or "missing"]
+    from .providers import provider_executable
+    parts = [provider, str(roots[provider]), provider_executable(provider, path=env["PATH"]) or "missing"]
     for name in names[provider]:
         path = roots[provider] / name
         try:
@@ -74,32 +76,45 @@ class Channel:
     """A dedicated process group; bounded pipes, deadline and owned cleanup."""
     def __init__(self, command: list[str], env: dict, deadline: float):
         self.deadline = deadline
-        self.process = subprocess.Popen(command, env=env, cwd=Path(os.getenv("TMPDIR", "/tmp")),
-                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                        start_new_session=True, bufsize=0)
-        self.selector = selectors.DefaultSelector()
-        self.selector.register(self.process.stdout, selectors.EVENT_READ, "out")
-        self.selector.register(self.process.stderr, selectors.EVENT_READ, "err")
+        self.command = command
+        self.job = WindowsJob() if os.name == "nt" else None
+        options = dict(env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        if self.job:
+            try:
+                self.process = self.job.start(command, cwd=tempfile.gettempdir(), **options)
+            except BaseException:
+                self.job.close()
+                raise
+            read_pipes = ThreadedPipes
+        else:
+            self.process = subprocess.Popen(command, cwd=Path(os.getenv("TMPDIR", "/tmp")),
+                                            start_new_session=True, **options)
+            read_pipes = SelectablePipes
+        self.pipes = read_pipes({"out": self.process.stdout, "err": self.process.stderr})
         self.buffer = b""; self.errors = b""; self.received = 0
 
     def send(self, value: dict) -> None:
-        self.process.stdin.write((json.dumps(value) + "\n").encode())
-        self.process.stdin.flush()
+        payload = (json.dumps(value) + "\n").encode()
+        if self.job:
+            write_windows_pipe(self.process.stdin, payload, command=self.command, deadline=self.deadline)
+        else:
+            self.process.stdin.write(payload)
+            self.process.stdin.flush()
 
     def pump(self) -> bool:
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise DiscoveryError("error", "Tempo di aggiornamento scaduto. Riprova.")
-        for key, _ in self.selector.select(min(remaining, 0.25)):
-            chunk = os.read(key.fileobj.fileno(), 65536)
-            if not chunk:
-                self.selector.unregister(key.fileobj); continue
+        chunks = self.pipes.read(min(remaining, 0.25))
+        if self.job and not chunks and self.process.poll() is not None:
+            self.job.close()
+        for pipe, chunk in chunks:
             self.received += len(chunk)
             if self.received > 2_000_000:
                 raise DiscoveryError("incompatible", "Il catalogo della CLI supera i limiti supportati.")
-            if key.data == "out": self.buffer += chunk
+            if pipe == "out": self.buffer += chunk
             else: self.errors = (self.errors + chunk)[-8192:]
-        return bool(self.selector.get_map())
+        return bool(self.pipes.active)
 
     def response(self, identifier, *, claude: bool = False) -> dict:
         while True:
@@ -137,6 +152,19 @@ class Channel:
         return (self.buffer + (self.errors if include_stderr else b"")).decode(errors="replace")
 
     def close(self):
+        if self.job:
+            self.job.close()
+            try:
+                self.process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            self._close_posix()
+        self.pipes.close()
+        for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
+            if pipe and not pipe.closed: pipe.close()
+
+    def _close_posix(self):
         if self.process.poll() is None:
             try: os.killpg(self.process.pid, signal.SIGTERM)
             except ProcessLookupError: pass
@@ -148,9 +176,6 @@ class Channel:
         # Also reap any owned language-server children after their parent exits.
         try: os.killpg(self.process.pid, signal.SIGTERM)
         except ProcessLookupError: pass
-        self.selector.close()
-        for pipe in (self.process.stdin, self.process.stdout, self.process.stderr):
-            if pipe and not pipe.closed: pipe.close()
 
 
 def run(command: list[str], env: dict, deadline: float, *, include_stderr: bool = False) -> str:
@@ -261,7 +286,8 @@ def claude(executable: str, env: dict, deadline: float) -> dict:
 
 def discover(provider: str, timeout: float = 20, env: dict | None = None) -> dict:
     env = env or environment()
-    executable = shutil.which(provider, path=env["PATH"])
+    from .providers import provider_executable
+    executable = provider_executable(provider, path=env["PATH"])
     if not executable: raise DiscoveryError("not_installed", "Installa l’agente per leggere il suo catalogo.")
     result = {"codex": codex, "agy": agy, "claude": claude}[provider](executable, env, time.monotonic() + max(0.1, min(20, timeout)))
     unique = {}

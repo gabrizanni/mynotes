@@ -9,6 +9,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .provider_limits import CommandSizeError, validate_command_size
+from .provider_process import run_windows_job
 from .workspace import Workspace
 from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_executable, provider_override_flags
 
@@ -105,4 +107,10 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         command = [executable, "-C", str(repository), "--sandbox", "workspace-write"] + overrides + [prompt]
     environment["MYNOTES_WORKSPACE"] = str(workspace.root)
     environment["MYNOTES_CHAT_ACTIVE"] = "1"
+    if os.name == "nt":
+        try:
+            validate_command_size(command, environment)
+            return run_windows_job(command, timeout=None, env=environment, cwd=repository, console=True).returncode
+        except (CommandSizeError, OSError) as error:
+            raise ChatError(f"Unable to launch {selected}: {error}") from error
     return subprocess.run(command, env=environment, cwd=repository, check=False).returncode

@@ -13,7 +13,6 @@ import math
 import os
 from pathlib import Path
 import re
-import selectors
 import signal
 import sqlite3
 import subprocess
@@ -32,6 +31,7 @@ from .providers import (ProviderError, ProviderCancelledError, ProviderQuotaErro
                         provider_override_flags)
 from .utils import atomic_json_write, file_sha256
 from .provider_limits import validate_command_size
+from .provider_process import SelectablePipes, ThreadedPipes, WindowsJob, write_windows_pipe
 from .execution import AttemptStart, SleepMonitor, prevent_idle_sleep
 from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout, SOFT_PROGRESS_MESSAGE
 
@@ -253,8 +253,17 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
     """One process/conversation; separate stderr, bounded turns, group cleanup."""
     from .review_dispatch import cancel_event
     outputs = [bytearray(), bytearray()]
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               cwd=cwd, env=env, start_new_session=True)
+    job = WindowsJob() if os.name == "nt" else None
+    options = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=env)
+    try:
+        process = job.start(command, bufsize=0, **options) if job else subprocess.Popen(
+            command, start_new_session=True, **options)
+    except BaseException:
+        if job:
+            job.close()
+        raise
+    pipe_reader = ThreadedPipes if job else SelectablePipes
+    pipes = pipe_reader({0: process.stdout, 1: process.stderr})
     previous = None
     if threading.current_thread() is threading.main_thread():
         def interrupted(_sig, _frame): raise ProviderCancelledError('Note generation interrupted by user')
@@ -264,6 +273,9 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
     log_position = 0; failure_tail = ''; transport_steps = set(); error_steps = set()
 
     def signal_group(signum):
+        if job:
+            job.close()
+            return
         try:
             os.killpg(process.pid, signum)
         except ProcessLookupError:
@@ -292,114 +304,138 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                 return
         if abort_errors and re.search(r'output token limit|response was cut off|stream reading error|unexpected EOF|stream idle timeout|The stream was interrupted|Unclassified native provider error|attempt \d+ failed.*retrying', message, re.I):
             raise ProviderError('Provider interrupted or truncated this unit; no internal restart permitted: ' + message[:500])
+    def check_cancelled():
+        cancellation = cancel_event.get()
+        if cancellation is not None and cancellation.is_set():
+            raise ProviderCancelledError('Review stopped after another blocking packet')
+
+    def send(text):
+        if job:
+            write_windows_pipe(process.stdin, _wire(text), command=command,
+                               deadline=started + total_seconds, check_cancelled=check_cancelled)
+        else:
+            process.stdin.write(_wire(text))
+            process.stdin.flush()
+
     try:
-        process.stdin.write(_wire(prompt)); process.stdin.flush()
-        with selectors.DefaultSelector() as selector:
-            selector.register(process.stdout, selectors.EVENT_READ, 0)
-            selector.register(process.stderr, selectors.EVENT_READ, 1)
-            while selector.get_map():
-                cancellation = cancel_event.get()
-                if cancellation is not None and cancellation.is_set():
-                    raise ProviderCancelledError('Review stopped after another blocking packet')
-                now = time.monotonic()
-                if abort_errors and log_file is not None and log_file.is_file():
-                    with log_file.open() as native_log:
-                        native_log.seek(log_position); recent = native_log.read(); log_position = native_log.tell()
-                    provider_failure(recent)
-                slept = sleep.poll()
-                if slept:
-                    error = ProviderSuspendedError(f'System suspended for {slept:.0f}s; old transport closed')
-                    error.suspended_seconds = slept
-                    raise error
-                if (not finished and not nudged and now-turn_started > turn_limit
-                        and now-started <= total_seconds):
-                    # stream-json queues another model turn; it cannot steer a
-                    # running one. Report the reminder without starting paid work.
-                    if on_event is not None:
-                        on_event({'event':'progress_reminder', 'message':SOFT_PROGRESS_MESSAGE})
-                    nudged = True
-                if now-started > total_seconds or (finished and now-turn_started > turn_limit):
-                    total_expired = now-started > total_seconds
-                    error = subprocess.TimeoutExpired(command, total_seconds if total_expired else turn_limit)
-                    error.budget_kind = "phase" if total_expired else "useful-progress"
-                    error.elapsed_seconds = now-started if total_expired else now-turn_started
-                    raise error
-                ready = selector.select(timeout=min(.25, max(.01,total_seconds-(now-started))))
-                if finished and process.poll() is not None and not ready:
-                    # Agy descendants may retain pipe handles after its parent
-                    # has exited. Require the actual parent status, not EOF.
-                    break
-                for key, _ in ready:
-                    data = os.read(key.fd, 65536)
-                    if not data:
-                        selector.unregister(key.fileobj); continue
-                    outputs[key.data].extend(data)
-                    if key.data:
-                        provider_failure(data.decode(errors='replace')); continue
-                    pending += data
-                    while b'\n' in pending:
-                        line, pending = pending.split(b'\n',1)
-                        if not line.strip(): continue
-                        try: event = json.loads(line)
-                        except (ValueError, UnicodeError) as error: raise ProviderError('Invalid Agy streaming event') from error
-                        if on_event is not None: on_event(event)
-                        step = event.get('step_update', {})
-                        if abort_errors and step.get('step_type') == 'error_message' and step.get('state') == 'DONE':
-                            identity = (step.get('conversation_id'), step.get('step_index'))
-                            if identity not in error_steps:
-                                error_steps.add(identity)
-                                diagnostic = native_error_message(step)
-                                if 'The stream was interrupted' in diagnostic:
-                                    transport_steps.add(identity)
-                                provider_failure(diagnostic)
-                        if event.get('event') == 'error' or step.get('step_type') == 'error':
-                            provider_failure(json.dumps(event))
-                        progress = (step.get('step_index'), step.get('step_type'))
-                        initialization = ('init', event.get('conversation_id'))
-                        useful_step = (event.get('event') == 'step_update' and step.get('state') == 'DONE'
-                                       and step.get('step_type') in {'tool','agent_response'} and progress not in useful)
-                        if useful_step and step.get('tool_name') in {'view_file', 'read_file'}:
-                            read_key=json.dumps(step.get('tool_info',{}).get('parameters',{}),sort_keys=True)
-                            useful_step=read_key not in read_requests
-                            read_requests.add(read_key)
-                        if ((event.get('event') == 'init' and initialization not in useful) or useful_step):
-                            useful.add(initialization if event.get('event') == 'init' else progress)
-                            turn_started = time.monotonic(); nudged = False
-                        if event.get('event') != 'result': continue
-                        if finished: raise ProviderError('Agy emitted another result after final completion')
-                        result = event.get('result')
-                        if not isinstance(result, dict): raise ProviderError('Agy result is not an object')
-                        next_prompt = accept(result)
-                        if next_prompt is None:
-                            process.stdin.close(); process.stdin = None; finished = True
-                            turn_limit = 5; turn_started = time.monotonic()
-                        else:
-                            process.stdin.write(_wire(next_prompt)); process.stdin.flush()
-                            turn_started = time.monotonic(); turn_limit = next_seconds; nudged = False
-            code = process.wait(timeout=3)
-            signal_group(signal.SIGTERM)
-            if not finished or pending.strip(): raise ProviderError('Agy stream ended without a complete terminal result')
-            return subprocess.CompletedProcess(command,code,outputs[0].decode(errors='replace'),outputs[1].decode(errors='replace'))
+        send(prompt)
+        while pipes.active:
+            check_cancelled()
+            now = time.monotonic()
+            if abort_errors and log_file is not None and log_file.is_file():
+                with log_file.open(encoding="utf-8", errors="replace") as native_log:
+                    native_log.seek(log_position); recent = native_log.read(); log_position = native_log.tell()
+                provider_failure(recent)
+            slept = sleep.poll()
+            if slept:
+                error = ProviderSuspendedError(f'System suspended for {slept:.0f}s; old transport closed')
+                error.suspended_seconds = slept
+                raise error
+            if (not finished and not nudged and now-turn_started > turn_limit
+                    and now-started <= total_seconds):
+                # stream-json queues another model turn; it cannot steer a
+                # running one. Report the reminder without starting paid work.
+                if on_event is not None:
+                    on_event({'event':'progress_reminder', 'message':SOFT_PROGRESS_MESSAGE})
+                nudged = True
+            if now-started > total_seconds or (finished and now-turn_started > turn_limit):
+                total_expired = now-started > total_seconds
+                error = subprocess.TimeoutExpired(command, total_seconds if total_expired else turn_limit)
+                error.budget_kind = "phase" if total_expired else "useful-progress"
+                error.elapsed_seconds = now-started if total_expired else now-turn_started
+                raise error
+            ready = pipes.read(timeout=min(.25, max(.01,total_seconds-(now-started))))
+            if finished and process.poll() is not None and not ready:
+                # Agy descendants may retain pipe handles after its parent
+                # has exited. Require the actual parent status, not EOF.
+                break
+            for stream, data in ready:
+                outputs[stream].extend(data)
+                if stream:
+                    provider_failure(data.decode(errors='replace')); continue
+                pending += data
+                while b'\n' in pending:
+                    line, pending = pending.split(b'\n',1)
+                    if not line.strip(): continue
+                    try: event = json.loads(line)
+                    except (ValueError, UnicodeError) as error: raise ProviderError('Invalid Agy streaming event') from error
+                    if on_event is not None: on_event(event)
+                    step = event.get('step_update', {})
+                    if abort_errors and step.get('step_type') == 'error_message' and step.get('state') == 'DONE':
+                        identity = (step.get('conversation_id'), step.get('step_index'))
+                        if identity not in error_steps:
+                            error_steps.add(identity)
+                            diagnostic = native_error_message(step)
+                            if 'The stream was interrupted' in diagnostic:
+                                transport_steps.add(identity)
+                            provider_failure(diagnostic)
+                    if event.get('event') == 'error' or step.get('step_type') == 'error':
+                        provider_failure(json.dumps(event))
+                    progress = (step.get('step_index'), step.get('step_type'))
+                    initialization = ('init', event.get('conversation_id'))
+                    useful_step = (event.get('event') == 'step_update' and step.get('state') == 'DONE'
+                                   and step.get('step_type') in {'tool','agent_response'} and progress not in useful)
+                    if useful_step and step.get('tool_name') in {'view_file', 'read_file'}:
+                        read_key=json.dumps(step.get('tool_info',{}).get('parameters',{}),sort_keys=True)
+                        useful_step=read_key not in read_requests
+                        read_requests.add(read_key)
+                    if ((event.get('event') == 'init' and initialization not in useful) or useful_step):
+                        useful.add(initialization if event.get('event') == 'init' else progress)
+                        turn_started = time.monotonic(); nudged = False
+                    if event.get('event') != 'result': continue
+                    if finished: raise ProviderError('Agy emitted another result after final completion')
+                    result = event.get('result')
+                    if not isinstance(result, dict): raise ProviderError('Agy result is not an object')
+                    next_prompt = accept(result)
+                    if next_prompt is None:
+                        process.stdin.close(); process.stdin = None; finished = True
+                        turn_limit = 5; turn_started = time.monotonic()
+                    else:
+                        send(next_prompt)
+                        turn_started = time.monotonic(); turn_limit = next_seconds; nudged = False
+        code = process.wait(timeout=3)
+        signal_group(signal.SIGTERM)
+        if not finished or pending.strip(): raise ProviderError('Agy stream ended without a complete terminal result')
+        return subprocess.CompletedProcess(command,code,outputs[0].decode(errors='replace'),outputs[1].decode(errors='replace'))
     except BaseException as error:
         signal_group(signal.SIGTERM)
         if process.stdin is not None:
             try: process.stdin.close()
             except (OSError,ValueError): pass
             process.stdin = None
-        try: out,err = process.communicate(timeout=3)
-        except subprocess.TimeoutExpired:
-            signal_group(signal.SIGKILL)
+        if job:
+            drain_deadline = time.monotonic() + 3
+            while pipes.active and time.monotonic() < drain_deadline:
+                try:
+                    for stream, data in pipes.read(timeout=0.1):
+                        outputs[stream].extend(data)
+                except OSError:
+                    break
             try:
-                out,err = process.communicate(timeout=3)
-            except subprocess.TimeoutExpired as drain_error:
-                # A surviving descendant can keep the pipes open even when
-                # both process-group signals are unavailable.
-                out,err = drain_error.output,drain_error.stderr
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+            out = err = None
+        else:
+            try: out,err = process.communicate(timeout=3)
+            except subprocess.TimeoutExpired:
+                signal_group(signal.SIGKILL)
+                try:
+                    out,err = process.communicate(timeout=3)
+                except subprocess.TimeoutExpired as drain_error:
+                    # A surviving descendant can keep the pipes open even when
+                    # both process-group signals are unavailable.
+                    out,err = drain_error.output,drain_error.stderr
         error.output = bytes(outputs[0])+(out or b''); error.stderr = bytes(outputs[1])+(err or b'')
         raise
     finally:
         if previous is not None: signal.signal(signal.SIGTERM,previous)
-        for pipe in (process.stdout,process.stderr): pipe.close()
+        if job:
+            job.close()
+        pipes.close()
+        for pipe in (process.stdin, process.stdout, process.stderr):
+            if pipe is not None:
+                pipe.close()
 
 
 def _writing_identity(request, schema):

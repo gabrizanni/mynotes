@@ -1,4 +1,4 @@
-"""Isolated Office conversions with a macOS launch preflight."""
+"""Locate LibreOffice and render documents with an isolated profile."""
 from __future__ import annotations
 
 import ctypes
@@ -9,9 +9,30 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .provider_process import run_windows_job
+
 
 class OfficeError(RuntimeError):
     """A conversion cannot be run or did not produce a fresh PDF."""
+
+
+def find_soffice(managed: str | None = None) -> str | None:
+    override = os.environ.get("MYNOTES_SOFFICE")
+    if os.name == "nt":
+        installed = [str(Path(os.environ[variable]) / "LibreOffice/program/soffice.com")
+                     for variable in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)")
+                     if os.environ.get(variable)]
+        path = [Path(folder.strip('"')) for folder in os.environ.get("PATH", "").split(os.pathsep)]
+        bundled = str(Path(sys.executable).parent.parent / "office/program/soffice.com")
+        candidates = [override, managed, bundled, *installed,
+                      *(str(directory / name) for directory in path if directory.is_absolute()
+                        for name in ("soffice.com", "soffice.exe"))]
+        return next((str(item) for item in candidates if item and Path(item).is_absolute()
+                     and Path(item).suffix.lower() in {".com", ".exe"} and Path(item).is_file()), None)
+    bundled = sorted((Path.home() / ".cache" / "codex-runtimes").glob("*/dependencies/bin/override/soffice"))
+    candidates = [override, managed, shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                  *(str(item) for item in bundled)]
+    return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
 
 
 def macos_launch_restriction() -> str | None:
@@ -62,7 +83,10 @@ def convert_to_pdf(executable: str, source: Path, output_dir: Path, *, timeout: 
                    "--headless", "--nologo", "--nodefault", "--nofirststartwizard",
                    "--norestore", "--convert-to", "pdf", "--outdir", str(converted), str(source)]
         try:
-            completed = subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
+            if os.name == "nt":
+                completed = run_windows_job(command, timeout=timeout)
+            else:
+                completed = subprocess.run(command, text=True, capture_output=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired as error:
             raise OfficeError(f"LibreOffice conversion timed out after {timeout}s; no automatic retry") from error
         except OSError as error:

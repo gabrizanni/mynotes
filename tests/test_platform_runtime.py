@@ -85,8 +85,14 @@ def test_windows_defaults_keep_private_data_inside_local_appdata(tmp_path, monke
 def test_windows_provider_rejects_shell_shims(tmp_path, monkeypatch):
     from mynotes.providers import provider_executable
 
-    shim = tmp_path / "claude.cmd"
-    monkeypatch.setattr("mynotes.providers.shutil.which", lambda name, **_: str(shim))
-    assert provider_executable("claude") is None
-    monkeypatch.setattr("mynotes.providers.shutil.which", lambda name, **_: str(tmp_path / name))
-    assert provider_executable("claude") == str(tmp_path / "claude.exe")
+    provider_dir = tmp_path / "Official app"
+    provider_dir.mkdir()
+    (tmp_path / "claude.exe").touch()
+    (provider_dir / "claude.cmd").touch()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", f".{os.pathsep}{provider_dir}")
+    # Use the explicit search path to exclude software installed on the runner.
+    assert provider_executable("claude", path=os.environ["PATH"]) is None
+    executable = provider_dir / "claude.exe"
+    executable.touch()
+    assert provider_executable("claude", path=os.environ["PATH"]) == str(executable)
