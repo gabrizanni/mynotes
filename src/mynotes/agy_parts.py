@@ -262,6 +262,19 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
     started = turn_started = time.monotonic(); turn_limit = first_seconds
     pending = b''; finished = False; nudged = False; useful = set(); read_requests = set(); sleep = SleepMonitor()
     log_position = 0; failure_tail = ''; transport_steps = set(); error_steps = set()
+
+    def signal_group(signum):
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        except PermissionError:
+            if process.poll() is None:
+                try:
+                    process.send_signal(signum)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
     def provider_failure(message):
         nonlocal failure_tail
         # Native telemetry is independent of the generation transport. Keep its
@@ -364,22 +377,24 @@ def run_session(command: list[str], prompt: str, accept: Callable[[dict], str | 
                             process.stdin.write(_wire(next_prompt)); process.stdin.flush()
                             turn_started = time.monotonic(); turn_limit = next_seconds; nudged = False
             code = process.wait(timeout=3)
-            try: os.killpg(process.pid,signal.SIGTERM)
-            except ProcessLookupError: pass
+            signal_group(signal.SIGTERM)
             if not finished or pending.strip(): raise ProviderError('Agy stream ended without a complete terminal result')
             return subprocess.CompletedProcess(command,code,outputs[0].decode(errors='replace'),outputs[1].decode(errors='replace'))
     except BaseException as error:
-        try: os.killpg(process.pid,signal.SIGTERM)
-        except ProcessLookupError: pass
+        signal_group(signal.SIGTERM)
         if process.stdin is not None:
             try: process.stdin.close()
             except (OSError,ValueError): pass
             process.stdin = None
         try: out,err = process.communicate(timeout=3)
         except subprocess.TimeoutExpired:
-            try: os.killpg(process.pid,signal.SIGKILL)
-            except ProcessLookupError: pass
-            out,err = process.communicate()
+            signal_group(signal.SIGKILL)
+            try:
+                out,err = process.communicate(timeout=3)
+            except subprocess.TimeoutExpired as drain_error:
+                # A surviving descendant can keep the pipes open even when
+                # both process-group signals are unavailable.
+                out,err = drain_error.output,drain_error.stderr
         error.output = bytes(outputs[0])+(out or b''); error.stderr = bytes(outputs[1])+(err or b'')
         raise
     finally:

@@ -96,6 +96,19 @@ for n,line in enumerate(sys.stdin):
     assert 'diagnostic 1' in result.stderr and 'diagnostic' not in result.stdout
 
 
+def test_session_preserves_provider_error_when_group_signal_is_denied(tmp_path, monkeypatch):
+    def denied(*_args):
+        raise PermissionError("group signal denied")
+
+    monkeypatch.setattr(a.os, "killpg", denied)
+    command = [sys.executable, "-u", "-c",
+               "import sys; sys.stdin.readline(); print('unexpected EOF', file=sys.stderr, flush=True)"]
+    with pytest.raises(a.ProviderError, match="interrupted or truncated") as failure:
+        a.run_session(command, "test", lambda _: None, cwd=str(tmp_path),
+                      env=dict(os.environ), abort_errors=True, total_seconds=3)
+    assert b"unexpected EOF" in failure.value.stderr
+
+
 def test_session_timeout_stops_child_group_and_retains_accepted_prefix(tmp_path):
     pid=tmp_path/'child.pid'
     code='''import subprocess,sys,json,pathlib,time
