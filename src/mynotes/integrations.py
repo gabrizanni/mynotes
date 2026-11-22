@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from .context import CORE, instruction_module
@@ -46,7 +48,7 @@ For an operational task load `mynotes context --activity ACTIVITY` with
 --course CODE when known, then follow that task module and current memory.
 Do not load unrelated modules, repeat onboarding, or call a provider for context.
 """
-AGY_AGENT = """---
+AGY_AGENT_HEADER = """---
 name: mynotes
 description: MyNotes agent for private course setup, preferences and safe Word delivery.
 mainAgent: true
@@ -65,14 +67,64 @@ tools:
 ---
 # MyNotes agent
 
-""" + CORE
+"""
+AGY_AGENT = AGY_AGENT_HEADER + CORE
+AGY_SHARED_AGENT = AGY_AGENT_HEADER + "Follow the shared MyNotes instructions loaded from the workspace AGENTS.md.\n"
+
+_RULES_MARKER = "<!-- MyNotes managed chat instructions: "
 
 
 def _sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _layout(platform: str, target: Path) -> tuple[Path, dict[Path, str]]:
+def install_shared_chat_rules(workspace: Path) -> bool:
+    """Publish the common entrypoint without replacing user-owned instructions."""
+    path = workspace / "AGENTS.md"
+    alternatives = (workspace / "AGENTS.override.md", workspace / "GEMINI.md")
+    if any(item.exists() or item.is_symlink() for item in alternatives) or path.is_symlink():
+        return False
+
+    body = "# MyNotes\n\n" + CORE
+    content = f"{_RULES_MARKER}{_sha(body)} -->\n{body}"
+    replacing = path.exists()
+    if replacing:
+        if not path.is_file():
+            return False
+        try:
+            previous = path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        if previous == content:
+            return True
+        header, _, previous_body = previous.partition("\n")
+        if header != f"{_RULES_MARKER}{_sha(previous_body)} -->":
+            return False
+
+    with NamedTemporaryFile(dir=workspace, prefix=".mynotes-rules-", delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(content.encode("utf-8"))
+            handle.flush()
+            if replacing:
+                if path.is_symlink() or not path.is_file():
+                    return False
+                current = path.read_bytes()
+                if current != previous.encode("utf-8"):
+                    return current == content.encode("utf-8")
+                os.replace(temporary, path)
+            else:
+                try:
+                    # Make simultaneous first launches safe without clobbering a new file.
+                    os.link(temporary, path)
+                except FileExistsError:
+                    return not path.is_symlink() and path.is_file() and path.read_bytes() == content.encode("utf-8")
+        finally:
+            temporary.unlink(missing_ok=True)
+    return True
+
+
+def _layout(platform: str, target: Path, *, shared_chat_rules: bool) -> tuple[Path, dict[Path, str]]:
     if platform == "codex":
         root = target / ".agents" / "skills" / "mynotes"
         return root, {Path("SKILL.md"): CODEX_SKILL}
@@ -82,7 +134,8 @@ def _layout(platform: str, target: Path) -> tuple[Path, dict[Path, str]]:
     if platform == "agy":
         root = target / ".agents" / "plugins" / "mynotes"
         plugin = {"$schema": "https://antigravity.google/schemas/v1/plugin.json", "name": "mynotes", "description": "Local MyNotes coordination without private data."}
-        return root, {Path("plugin.json"): json.dumps(plugin, indent=2) + "\n", Path("skills/mynotes/SKILL.md"): AGY_SKILL, Path("agents/mynotes.md"): AGY_AGENT}
+        agent = AGY_SHARED_AGENT if shared_chat_rules else AGY_AGENT
+        return root, {Path("plugin.json"): json.dumps(plugin, indent=2) + "\n", Path("skills/mynotes/SKILL.md"): AGY_SKILL, Path("agents/mynotes.md"): agent}
     raise IntegrationError("Supported integrations are codex, agy and claude")
 
 
@@ -97,8 +150,9 @@ def _verify_managed(root: Path, manifest: dict[str, Any]) -> None:
             raise IntegrationError(f"Managed integration was edited locally; refusing to overwrite/remove: {path}")
 
 
-def install_integration(platform: str, destination: Path, *, action: str = "install") -> dict[str, Any]:
-    target = destination.expanduser().resolve(); root, files = _layout(platform, target)
+def install_integration(platform: str, destination: Path, *, action: str = "install", shared_chat_rules: bool = False) -> dict[str, Any]:
+    target = destination.expanduser().resolve()
+    root, files = _layout(platform, target, shared_chat_rules=shared_chat_rules)
     manifest_path = root / ".mynotes-integration.json"; existing = None
     if manifest_path.is_file():
         try:

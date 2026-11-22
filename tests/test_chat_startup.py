@@ -6,7 +6,7 @@ import pytest
 
 from mynotes.chat import ChatError, launch_chat
 from mynotes.cli import main
-from mynotes.integrations import install_integration
+from mynotes.integrations import install_integration, install_shared_chat_rules
 from mynotes.workspace import Workspace
 from mynotes.context import CORE, instruction_module, task_context
 
@@ -105,13 +105,68 @@ def test_codex_chat_scopes_writes_and_receives_shared_instructions(tmp_path, mon
     assert command[command.index("--model") + 1] == "gpt-6.1-terra"
     assert 'model_reasoning_effort="medium"' in command
     assert not any("dangerously" in flag for flag in command)
-    assert CORE in command[-1]
+    assert CORE not in command[-1]
+    assert CORE in (workspace.root / "AGENTS.md").read_text()
     assert "load the relevant activity context first" in command[-1]
     assert options["env"]["MYNOTES_CHAT_ACTIVE"] == "1"
     assert options["env"]["MYNOTES_WORKSPACE"] == str(workspace.root)
     integration = install_integration("agy", tmp_path / "comparison")
     agent = (Path(integration["path"]) / "agents/mynotes.md").read_text()
     assert CORE in agent
+
+
+def test_codex_and_agy_share_rules_and_startup_prompt(tmp_path, monkeypatch):
+    workspace, configuration = _setup(tmp_path)
+    configuration["personal"]["interface_language"] = "it"
+    prior_integration = install_integration("agy", workspace.root)
+    agent = Path(prior_integration["path"]) / "agents/mynotes.md"
+    assert CORE in agent.read_text()
+    calls = []
+    monkeypatch.setattr("mynotes.chat.shutil.which", lambda name: f"/bin/{name}")
+    monkeypatch.setattr("mynotes.chat.subprocess.run", lambda command, **kwargs:
+                        calls.append(command) or type("Done", (), {"returncode": 0})())
+
+    assert launch_chat(workspace, configuration, "codex") == 0
+    assert launch_chat(workspace, configuration, "agy") == 0
+    assert calls[0][-1] == calls[1][-1]
+    assert "Ciao! Sono pronto ad aiutarti con MyNotes." in calls[0][-1]
+    assert CORE not in calls[0][-1]
+    assert CORE in (workspace.root / "AGENTS.md").read_text()
+    agent_text = agent.read_text()
+    assert CORE not in agent_text
+    assert "AGENTS.md" in agent_text
+    assert "commandExecutionPolicy: sandbox" in agent_text
+    assert "--mode" in calls[1] and "accept-edits" in calls[1]
+
+
+@pytest.mark.parametrize("name", ["AGENTS.md", "AGENTS.override.md", "GEMINI.md"])
+def test_custom_workspace_rules_keep_legacy_startup(tmp_path, monkeypatch, name):
+    workspace, configuration = _setup(tmp_path)
+    custom = workspace.root / name
+    custom.write_text("# Local guidance\n")
+    calls = []
+    monkeypatch.setattr("mynotes.chat.shutil.which", lambda provider: f"/bin/{provider}")
+    monkeypatch.setattr("mynotes.chat.subprocess.run", lambda command, **kwargs:
+                        calls.append(command) or type("Done", (), {"returncode": 0})())
+
+    assert launch_chat(workspace, configuration, "codex") == 0
+    assert launch_chat(workspace, configuration, "agy") == 0
+    assert custom.read_text() == "# Local guidance\n"
+    assert CORE in calls[0][-1]
+    assert CORE in (workspace.root / ".agents/plugins/mynotes/agents/mynotes.md").read_text()
+
+
+def test_shared_rules_upgrade_and_preserve_local_edits(tmp_path, monkeypatch):
+    assert install_shared_chat_rules(tmp_path)
+    rules = tmp_path / "AGENTS.md"
+    monkeypatch.setattr("mynotes.integrations.CORE", "New common rules.\n")
+    assert install_shared_chat_rules(tmp_path)
+    assert rules.read_text().endswith("New common rules.\n")
+
+    edited = rules.read_text() + "Personal rule.\n"
+    rules.write_text(edited)
+    assert not install_shared_chat_rules(tmp_path)
+    assert rules.read_text() == edited
 
 
 def test_prepare_reuses_transcript_without_recording_discovery(tmp_path, monkeypatch) -> None:

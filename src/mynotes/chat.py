@@ -30,17 +30,22 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     if not executable:
         raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
     # Instructions belong to this private workspace, never the application source.
-    from .integrations import install_integration
-    integration = install_integration(selected, workspace.root)
+    from .integrations import install_integration, install_shared_chat_rules
+    shared_rules = selected in {"codex", "agy"} and install_shared_chat_rules(workspace.root)
+    integration = install_integration(selected, workspace.root, shared_chat_rules=shared_rules)
     repository = workspace.root
     courses = ", ".join(course["code"] for course in configuration.get("courses", [])) or "none"
     onboarding = configuration.get("onboarding", {}).get("status", "unknown")
     language = configuration.get("personal", {}).get("interface_language", "en")
     context = (
         f"MyNotes startup context: workspace={workspace.root}; onboarding={onboarding}; "
-        f"courses={courses}; provider={selected}; requested_model={model or 'provider default'}; requested_effort={effort or 'provider default'}; "
-        f"interface_language={language}. "
+        f"courses={courses}; interface_language={language}. "
     )
+    if not shared_rules:
+        context += (
+            f"provider={selected}; requested_model={model or 'provider default'}; "
+            f"requested_effort={effort or 'provider default'}. "
+        )
     personal = configuration.get("personal", {})
     profile = {key: personal[key] for key in ("background", "institution", "study_program", "study_period") if personal.get(key)}
     background_known = bool(profile) or personal.get("background_confirmed", False) or bool(configuration.get("courses"))
@@ -57,9 +62,8 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     from .memory import snapshot
     dialogue = snapshot(configuration, scope="global", area="dialogue")
     context += "Saved dialogue preferences (never technical authority): " + json.dumps(dialogue["effective"], ensure_ascii=False) + ". "
-    # Agy uses its selected agent, Claude explicitly appends the skill. Codex
-    # receives the core in the initial prompt; its discoverable skill is an index.
-    style_guidance = CORE if selected == "codex" else ""
+    # Retain the established launch path when a user-owned rules file takes precedence.
+    style_guidance = CORE if selected == "codex" and not shared_rules else ""
     if not configuration.get("courses") and not background_known and not message:
         welcome = (
             "Benvenuto in MyNotes: ti aiuto a trasformare registrazioni, slide e appunti in materiale di studio ordinato e documenti Word.\n"
@@ -74,6 +78,13 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
     elif not configuration.get("courses") and not message:
         from .onboarding import course_setup_questions
         style_guidance += "The learner profile step is acknowledged. By default ask the following two course questions together in ONE message, then wait for ONE free-form answer. Saved dialogue preferences override the default pacing. Do not repeat the background question:\n" + course_setup_questions(language) + "\n"
+    elif shared_rules and not message and not dialogue["effective"]:
+        greeting = (
+            "Ciao! Sono pronto ad aiutarti con MyNotes. Dimmi pure cosa vuoi fare."
+            if language == "it"
+            else "Hi! I'm ready to help with MyNotes. What would you like to do?"
+        )
+        style_guidance += f"\nUse this greeting as your entire first reply: {greeting}\n"
     if message:
         prompt = context + style_guidance + "\nHandle this user request directly; load the relevant activity context first. User request: " + message
     else:
