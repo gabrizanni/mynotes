@@ -496,6 +496,12 @@ def provider_environment() -> dict[str, str]:
 
 
 def provider_executable(provider: str) -> str | None:
+    if os.name == "nt":
+        # Batch wrappers would interpret parts of arbitrary chat prompts as shell
+        # syntax. Use the provider's standalone executable on Windows.
+        name = provider if Path(provider).suffix.lower() == ".exe" else f"{provider}.exe"
+        executable = shutil.which(name, path=provider_environment()["PATH"])
+        return executable if executable and Path(executable).suffix.lower() == ".exe" else None
     return shutil.which(provider) or shutil.which(provider, path=provider_environment()["PATH"])
 
 

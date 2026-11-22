@@ -40,7 +40,7 @@ def _managed_registry() -> tuple[dict[str, Any], str | None]:
         return {}, "Managed component registry must be a JSON object."
     if "schema_version" in data and data["schema_version"] != 1:
         return {}, "Managed component registry uses an unsupported schema version."
-    for key in ("argmax", "soffice", "model_cache"):
+    for key in ("argmax", "whispercpp", "soffice", "model_cache"):
         if key in data and (not isinstance(data[key], str) or not data[key] or "\x00" in data[key]):
             return {}, f"Managed component registry has an invalid {key} path."
     if "execution_proof" in data and not isinstance(data["execution_proof"], dict):

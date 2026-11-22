@@ -1247,6 +1247,8 @@ def _soffice() -> str | None:
     bundled = sorted((Path.home() / ".cache" / "codex-runtimes").glob("*/dependencies/bin/override/soffice"))
     from .onboarding import managed_tool
     candidates = [os.environ.get("MYNOTES_SOFFICE"), managed_tool("soffice"), shutil.which("soffice"), "/Applications/LibreOffice.app/Contents/MacOS/soffice", *(str(item) for item in bundled)]
+    if os.name == "nt" and os.environ.get("ProgramFiles"):
+        candidates.append(str(Path(os.environ["ProgramFiles"]) / "LibreOffice/program/soffice.com"))
     return next((str(Path(item)) for item in candidates if item and Path(item).is_file()), None)
 
 

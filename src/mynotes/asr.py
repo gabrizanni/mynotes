@@ -201,10 +201,11 @@ def _run(command: list[str], *, timeout: int = 7200) -> subprocess.CompletedProc
     paths = {name: log_dir / f"{prefix}.{name}.log" for name in ("stdout", "stderr")}
     buffers = {name: bytearray() for name in paths}
     try:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   start_new_session=os.name != "nt")
     except OSError as error:
         raise ASRError(f"ENGINE_START: {Path(command[0]).name}: {error}") from error
-    is_engine = len(command) > 1 and command[1] == "transcribe"
+    is_engine = len(command) > 1 and (command[1] == "transcribe" or "--output-json-full" in command)
     update(None, subprocess_pid=process.pid, **({"engine_pid": process.pid, "engine_running": True, "engine_started_at": time.time()} if is_engine else {}))
     def drain(name, stream):
         with paths[name].open("wb") as handle:
@@ -231,15 +232,20 @@ def _run(command: list[str], *, timeout: int = 7200) -> subprocess.CompletedProc
                     raise ASRError(f"TIMEOUT: {Path(command[0]).name} exceeded {timeout} seconds")
     except BaseException:
         # Only terminate the dedicated group created by this invocation.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=2)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        if os.name == "nt":
+            # The native whisper-cli worker performs inference in this process.
+            process.kill()
             process.wait()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=2)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
         raise
     finally:
         if is_engine:
@@ -679,12 +685,74 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
     return {"status": "completed", "professor_identified": professor_label is not None, "turns": len(turns)}
 
 
+class WhisperCppEngine:
+    """CPU inference with a local GGML model and the upstream CLI JSON report."""
+
+    name = "whispercpp"
+    timestamp_mode = "segment"
+    decoder_prompt = "none"
+
+    def __init__(self, executable: str, model_dir: Path) -> None:
+        self.executable = executable
+        self.model_dir = model_dir
+
+    def transcribe(self, audio: Path, output_dir: Path, *, model: str, language: str,
+                   vocabulary: list[str], prompt: str, clips: list[tuple[float, float]] | None = None) -> EngineResult:
+        if clips:
+            raise ASRError("Whisper.cpp selective clip replay is not available")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", model):
+            raise ASRError("Invalid Whisper.cpp model name")
+        weights = self.model_dir / f"ggml-{model}.bin"
+        if not weights.is_file():
+            raise ASRError(f"Whisper.cpp model is not installed: {weights.name}")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        prefix = output_dir / f"whisper-{uuid.uuid4().hex}"
+        _run([self.executable, "--no-gpu", "--model", str(weights), "--file", str(audio),
+              "--language", language.split("-")[0], "--output-json-full", "--output-file", str(prefix)])
+        report = prefix.with_suffix(".json")
+        try:
+            data = json.loads(report.read_text(encoding="utf-8"))
+            items = data["transcription"]
+            if not isinstance(items, list):
+                raise ValueError("Expected a transcription array")
+            segments = []
+            for item in items:
+                start, end = item["offsets"]["from"], item["offsets"]["to"]
+                text = item["text"]
+                if type(start) is not int or type(end) is not int or not 0 <= start < end or not isinstance(text, str):
+                    raise ValueError("Invalid segment")
+                probabilities = [
+                    token["p"] for token in item.get("tokens", [])
+                    if isinstance(token.get("p"), (int, float)) and 0 <= token["p"] <= 1
+                    and not token["text"].startswith(("[_", "<|"))
+                ]
+                segment = {"start": start / 1000, "end": end / 1000, "text": text}
+                if probabilities:
+                    segment["confidence"] = sum(probabilities) / len(probabilities)
+                segments.append(segment)
+            detected = data["result"]["language"]
+            if not isinstance(detected, str):
+                raise ValueError("Invalid detected language")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
+            raise ASRError("Whisper.cpp did not produce a valid transcription report") from error
+        version = "sha256:" + file_sha256(Path(self.executable))
+        return EngineResult(self.name, model, version, parse_asr_payload(segments),
+                            timestamp_mode=self.timestamp_mode, language=detected)
+
+
 def default_engines(workspace: Workspace, settings: dict[str, Any]) -> dict[str, SpeechEngine]:
     tools = settings.get("tools", {})
     from .onboarding import managed_tools, managed_tool
     managed = managed_tools()
     data_root = Path(tools.get("model_cache") or managed.get("model_cache") or workspace.root / "local-models").expanduser()
     result: dict[str, SpeechEngine] = {}
+    if "whispercpp" in (settings.get("primary_engine"), settings.get("secondary_engine"), settings.get("extra_pass_engine")):
+        configured = tools.get("whispercpp") or managed_tool("whispercpp") or "whisper-cli"
+        executable = shutil.which(configured)
+        if executable and (os.name != "nt" or Path(executable).suffix.lower() == ".exe"):
+            result["whispercpp"] = WhisperCppEngine(executable, data_root / "whisper.cpp")
+    if os.name == "nt":
+        return result
     argmax = tools.get("argmax") or managed_tool("argmax") or shutil.which("argmax-cli")
     if argmax:
         result["argmax"] = ArgmaxEngine(argmax, data_root / "whisperkit", data_root / "tokenizers")

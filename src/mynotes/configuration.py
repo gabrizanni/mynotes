@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
-from . import file_lock
 import json
+import os
 import re
 import shutil
 import uuid
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from . import file_lock
 from .utils import atomic_json_write, now_compact_utc
 
 ONBOARDING_GROUPS = ("personal", "paths", "courses", "style", "providers")
@@ -116,8 +117,8 @@ def course_template() -> dict[str, Any]:
             "language": "en",
             "vocabulary": [],
             "accent": "",
-            "primary_engine": "argmax",
-            "primary_model": "large-v3-v20240930_626MB",
+            "primary_engine": "whispercpp" if os.name == "nt" else "argmax",
+            "primary_model": "large-v3-turbo" if os.name == "nt" else "large-v3-v20240930_626MB",
             "secondary_engine": None,
             "secondary_model": "v2",
             "extra_pass_engine": None,
