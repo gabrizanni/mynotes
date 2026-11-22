@@ -1,0 +1,49 @@
+<Window
+    x:Class="MyNotes.Desktop.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <NavigationView
+        x:Name="Navigation"
+        PaneDisplayMode="Left"
+        IsBackButtonVisible="Collapsed"
+        IsSettingsVisible="False"
+        IsTabStop="False"
+        SelectionChanged="NavigationChanged"
+        ItemInvoked="NavigationInvoked">
+        <NavigationView.PaneHeader>
+            <TextBlock Text="MyNotes" Margin="16,8" FontWeight="SemiBold" FontSize="20" />
+        </NavigationView.PaneHeader>
+        <NavigationView.MenuItems>
+            <NavigationViewItem x:Name="LibraryNavigation" AutomationProperties.AutomationId="NavLibrary" Content="Libreria" Tag="library" Icon="Library" />
+            <NavigationViewItem x:Name="CalendarNavigation" AutomationProperties.AutomationId="NavCalendar" Content="Calendario" Tag="calendar" Icon="Calendar" />
+            <NavigationViewItem x:Name="ActivityNavigation" AutomationProperties.AutomationId="NavActivity" Content="Attività" Tag="activity" Icon="Clock" />
+            <NavigationViewItem x:Name="CoursesNavigation" AutomationProperties.AutomationId="NavCourses" Content="Corsi" Tag="courses" Icon="Folder" />
+        </NavigationView.MenuItems>
+        <NavigationView.FooterMenuItems>
+            <NavigationViewItem x:Name="ChatNavigation" AutomationProperties.AutomationId="NavChat" Content="Apri agente" Tag="chat" Icon="Message" SelectsOnInvoked="False" />
+            <NavigationViewItem x:Name="SettingsNavigation" AutomationProperties.AutomationId="NavSettings" Content="Impostazioni" Tag="settings" Icon="Setting" />
+        </NavigationView.FooterMenuItems>
+        <Grid x:Name="Root" Padding="28,20,28,0" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="PageTitle" Style="{StaticResource TitleTextBlockStyle}" Text="Libreria" AutomationProperties.HeadingLevel="Level1" />
+                <Button x:Name="RefreshButton" Grid.Column="1" VerticalAlignment="Center" Content="Aggiorna" AutomationProperties.AutomationId="Refresh" Click="RefreshClicked" />
+            </Grid>
+            <StackPanel Grid.Row="1" Spacing="6">
+                <ProgressBar x:Name="Busy" IsIndeterminate="True" Visibility="Collapsed" />
+                <InfoBar x:Name="Notice" AutomationProperties.AutomationId="Notice" IsOpen="False" />
+            </StackPanel>
+            <ScrollViewer Grid.Row="2" x:Name="PageScroll" VerticalScrollBarVisibility="Auto">
+                <StackPanel x:Name="Page" Padding="0,0,12,24" Spacing="12" />
+            </ScrollViewer>
+        </Grid>
+    </NavigationView>
+</Window>
