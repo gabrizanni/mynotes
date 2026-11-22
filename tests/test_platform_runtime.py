@@ -79,3 +79,14 @@ def test_windows_defaults_keep_private_data_inside_local_appdata(tmp_path, monke
     assert runtime_home() == tmp_path / "MyNotes"
     assert capture_home() == tmp_path / "MyNotes/Capture"
     assert default_workspace_path() == tmp_path / "MyNotes/workspace"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows provider launch")
+def test_windows_provider_rejects_shell_shims(tmp_path, monkeypatch):
+    from mynotes.providers import provider_executable
+
+    shim = tmp_path / "claude.cmd"
+    monkeypatch.setattr("mynotes.providers.shutil.which", lambda name, **_: str(shim))
+    assert provider_executable("claude") is None
+    monkeypatch.setattr("mynotes.providers.shutil.which", lambda name, **_: str(tmp_path / name))
+    assert provider_executable("claude") == str(tmp_path / "claude.exe")
