@@ -203,7 +203,7 @@ def _idle(ws, rows, *, allow_renames=False):
     store = CaptureStore(ws)
     for row in rows:
         for event in row['event_ids']: _assert_editable(store, event)
-    import fcntl
+    from . import file_lock
     for state_file in ws.runs_dir.glob('_batches/*/notes-run.json'):
         try: state = json.loads(state_file.read_text())
         except (OSError, ValueError): continue
@@ -211,7 +211,7 @@ def _idle(ws, rows, *, allow_renames=False):
             lease = state_file.parent / '.notes.lock'
             if lease.exists():
                 with lease.open('r') as handle:
-                    try: fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    try: file_lock.flock(handle, file_lock.LOCK_SH | file_lock.LOCK_NB)
                     except BlockingIOError: raise ValueError('Generazione attiva: attendi la fine del lavoro')
     # Generation workers hold this same course's batch journal while running.
     # Inspect status files below instead of assuming UI idleness means no work.
@@ -221,7 +221,7 @@ def _idle(ws, rows, *, allow_renames=False):
             lease = run / '.generation.lock'
             if lease.exists():
                 with lease.open('r') as handle:
-                    try: fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    try: file_lock.flock(handle, file_lock.LOCK_SH | file_lock.LOCK_NB)
                     except BlockingIOError: raise ValueError('Generazione o pubblicazione attiva: attendi la fine del lavoro')
             for status_file in run.glob('**/status.json') if run.exists() else []:
                 try: state = json.loads(status_file.read_text())

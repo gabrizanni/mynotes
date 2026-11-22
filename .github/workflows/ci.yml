@@ -48,3 +48,27 @@ jobs:
             dist/MyNotes-*-macOS-arm64.dmg
             dist/MyNotes-*-macOS-arm64.dmg.sha256
           if-no-files-found: error
+
+  windows-x64-runtime:
+    runs-on: windows-2025
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Test the Windows x64 core
+        run: |
+          uv run python -c "import platform, struct; assert platform.system() == 'Windows' and platform.machine().upper() == 'AMD64' and struct.calcsize('P') == 8"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run pytest tests/test_platform_runtime.py tests/test_memory_context.py

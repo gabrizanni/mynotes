@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .utils import atomic_json_write, file_sha256
-from .workspace import Workspace
+from .workspace import Workspace, windows_data_home
 
 INSTALL_URLS = {
     "codex": "https://developers.openai.com/codex/cli/",
@@ -23,7 +23,8 @@ INSTALL_URLS = {
 
 
 def runtime_home() -> Path:
-    return Path(os.environ.get("MYNOTES_HOME", str(Path.home() / "Library/Application Support/MyNotes"))).expanduser()
+    default = windows_data_home() if os.name == "nt" else Path.home() / "Library/Application Support/MyNotes"
+    return Path(os.environ.get("MYNOTES_HOME", str(default))).expanduser()
 
 
 def _managed_registry() -> tuple[dict[str, Any], str | None]:

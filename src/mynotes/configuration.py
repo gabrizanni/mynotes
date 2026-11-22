@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import copy
-import fcntl
+from . import file_lock
 import json
 import re
 import shutil
@@ -499,11 +499,11 @@ class ConfigurationStore:
         lock_path = self.path.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_EX)
             try:
                 self._persist_locked(normalized)
             finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                file_lock.flock(lock.fileno(), file_lock.LOCK_UN)
         return normalized
 
     def update(self, transform: Callable[[dict[str, Any]], dict[str, Any]], *,
@@ -516,7 +516,7 @@ class ConfigurationStore:
         lock_path = self.path.with_suffix(".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+", encoding="utf-8") as lock:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            file_lock.flock(lock.fileno(), file_lock.LOCK_EX)
             try:
                 current = self.load()
                 if expected_configuration is not None and current != expected_configuration:
@@ -527,7 +527,7 @@ class ConfigurationStore:
                     self._persist_locked(normalized)
                 return normalized
             finally:
-                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+                file_lock.flock(lock.fileno(), file_lock.LOCK_UN)
 
     def _resolve_relative_paths(self, configuration: dict[str, Any]) -> dict[str, Any]:
         base = self.path.parent.parent

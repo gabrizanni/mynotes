@@ -19,7 +19,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Iterator
 
-import fcntl
+from . import file_lock
 import pypdfium2 as pdfium
 import pypdfium2.raw as pdfium_raw
 from docx import Document
@@ -1435,13 +1435,13 @@ def _lock(target: Path) -> Iterator[None]:
     lock = target.with_suffix(target.suffix + ".mynotes.lock"); lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a+", encoding="utf-8") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError as error:
             raise PublicationError(f"Another publication is active for {target}") from error
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            file_lock.flock(handle.fileno(), file_lock.LOCK_UN)
 
 
 def _journal(workspace: Workspace, payload: dict[str, Any]) -> Path:

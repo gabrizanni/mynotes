@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import contextvars
-import fcntl
+from . import file_lock
 import os
 import signal
 import threading
@@ -325,16 +325,16 @@ def _model_read_lease(model_dir, tokenizer_dir, model):
         # Nonblocking polling keeps cancellation and liveness responsive.
         while True:
             try:
-                fcntl.flock(lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                file_lock.flock(lease, file_lock.LOCK_SH | file_lock.LOCK_NB)
                 break
             except BlockingIOError:
                 time.sleep(.1)
         path = _ready_model(model_dir, tokenizer_dir, model)
         if path is None:
-            fcntl.flock(lease, fcntl.LOCK_UN)
+            file_lock.flock(lease, file_lock.LOCK_UN)
             while True:
                 try:
-                    fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    file_lock.flock(lease, file_lock.LOCK_EX | file_lock.LOCK_NB)
                     break
                 except BlockingIOError:
                     time.sleep(.1)
@@ -342,7 +342,12 @@ def _model_read_lease(model_dir, tokenizer_dir, model):
             path = _ready_model(model_dir, tokenizer_dir, model)
             if path is None:
                 raise ASRError("MODEL_NOT_READY: completa o ripara i componenti locali nel setup; nessun motore avviato")
-            fcntl.flock(lease, fcntl.LOCK_SH)
+            if os.name == "nt":
+                # Win32 locks stack on the same handle instead of converting.
+                file_lock.flock(lease, file_lock.LOCK_SH)
+                file_lock.flock(lease, file_lock.LOCK_UN)
+            else:
+                file_lock.flock(lease, file_lock.LOCK_SH)
         yield path
 
 

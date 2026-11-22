@@ -475,6 +475,14 @@ PROVIDER_INSTALL_URLS = {
 def provider_environment() -> dict[str, str]:
     """Give GUI launches the same supported launcher locations as a shell."""
     environment = os.environ.copy()
+    if os.name == "nt":
+        home = Path.home()
+        directories = [home / ".local/bin"]
+        if environment.get("APPDATA"):
+            directories.append(Path(environment["APPDATA"]) / "npm")
+        existing = environment.get("PATH", "").split(os.pathsep)
+        environment["PATH"] = os.pathsep.join(dict.fromkeys(existing + list(map(str, directories))))
+        return environment
     # LaunchServices may omit HOME. Restore the OS user's home for CLIs that
     # require it; do not redirect authentication or clone credentials.
     if not environment.get("HOME"):
