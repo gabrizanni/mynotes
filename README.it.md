@@ -1,23 +1,20 @@
-# MyNotes + Capture
+# MyNotes per Mac
 
-Versione preliminare **0.2.27**, con calendario Capture più affidabile, slide distribuite progressivamente fra lezioni e tempi separati per scrittura e correzione. Conserva audio, TXT completati e aggiunte personali nei Word. Vedi le [note di aggiornamento](docs/UPDATES.md).
-
-Registra le lezioni e trasforma audio, slide e appunti personali in dispense Word con formule modificabili. Capture è incluso: non serve scaricarlo separatamente.
+MyNotes è un’app open source per lo studio su Mac Apple Silicon. Registra le lezioni con Capture, trascrive l’audio sul Mac e trasforma registrazioni, slide e appunti personali in dispense Word con formule modificabili.
 
 Italiano | [English](README.md)
 
-## MyNotes per Mac
+## Scarica MyNotes
 
-**Mac Apple Silicon (M1 o successivo), macOS 14+, internet per il setup e un account utilizzabile con Codex, Agy o Claude Code CLI.**
+**[Scarica MyNotes 0.4 per Apple Silicon](https://github.com/gabrizanni/mynotes/releases/download/v0.4.0/MyNotes-0.4.0-macOS-arm64.dmg)** · [Versione preliminare e checksum](https://github.com/gabrizanni/mynotes/releases/tag/v0.4.0) · [Tutte le versioni](https://github.com/gabrizanni/mynotes/releases)
 
-**MyNotes 0.2.27 è disponibile come versione preliminare per proseguire i test.**
-[Scarica il DMG per Apple Silicon](https://github.com/gabrizanni/mynotes/releases/download/v0.2.27/MyNotes-0.2.27-macOS-arm64.dmg) · [Novità, checksum e problemi noti](https://github.com/gabrizanni/mynotes/releases/tag/v0.2.27).
+MyNotes 0.4 è una versione preliminare pubblica per **Mac Apple Silicon (M1 o successivo) con macOS 14 o successivo**. Per il setup iniziale serve una connessione Internet. La generazione delle dispense con l’AI richiede accesso alla CLI di Codex, Antigravity (Agy) o Claude Code. Registrazione e trascrizione avvengono sul Mac.
 
 1. Apri il file `.dmg` scaricato.
 2. Trascina **MyNotes** in **Applicazioni**.
-3. Apri **MyNotes**, segui il setup e premi **Apri la chat**.
+3. Apri **MyNotes**, segui il setup e seleziona **Apri chat esterna** nella barra laterale.
 
-Se Warp è installato, la chat si apre in una nuova scheda Warp. Altrimenti viene usato il terminale predefinito.
+MyNotes apre l’agente scelto nel Terminale di macOS. [Novità della 0.4](docs/UPDATES.md#040--shared-chat-startup)
 
 Il setup prepara Python, trascrizione locale e strumenti Word. Non devi installare prima Python, Homebrew o Xcode. Scegli Codex, Agy o Claude Code: se manca, MyNotes apre la guida ufficiale per installarlo e ti invita a ricontrollare. Accesso ed eventuale abbonamento dipendono dal provider.
 
