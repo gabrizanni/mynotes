@@ -200,9 +200,14 @@ def test_startup_is_small_and_never_reads_source_libraries(tmp_path, monkeypatch
     for path in ("mynotes.capture_associations.pending", "mynotes.transcription_queue.library", "mynotes.transcript_library.scan", "mynotes.recording_library.discover"):
         monkeypatch.setattr(path, forbidden)
     monkeypatch.setattr("mynotes.chat.shutil.which", lambda name, **_: "/synthetic/" + name)
+    monkeypatch.setattr("mynotes.chat.provider_executable", lambda name: str(tmp_path / f"{name}.exe"))
     monkeypatch.delenv("MYNOTES_CHAT_ACTIVE", raising=False)
     calls = []
-    monkeypatch.setattr("mynotes.chat.subprocess.run", lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+    def capture(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+    monkeypatch.setattr("mynotes.chat.subprocess.run", capture)
+    monkeypatch.setattr("mynotes.chat.run_windows_job", capture)
     launch_chat(ws, settings, provider)
     prompt = calls[0][-1]
     assert "Ask one question at a time." in prompt

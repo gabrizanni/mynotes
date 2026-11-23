@@ -28,14 +28,18 @@ def publish(project: Path, destination: Path, *properties: str) -> None:
 
 
 def stage_runtime(build: Path, stage: Path) -> None:
-    env = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(build / "python"))
-    run("uv", "python", "install", PYTHON_VERSION, env=env)
-    managed = subprocess.check_output(
-        ["uv", "python", "find", "--managed-python", PYTHON_VERSION],
-        cwd=ROOT, env=env, text=True,
-    ).strip()
+    distributions = build / "python"
+    env = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(distributions))
+    env.pop("VIRTUAL_ENV", None)
+    run("uv", "python", "install", "--no-bin", PYTHON_VERSION, env=env)
+    managed = Path(subprocess.check_output(
+        ["uv", "python", "find", "--no-project", "--system", "--managed-python", PYTHON_VERSION],
+        cwd=build, env=env, text=True,
+    ).strip()).resolve()
+    if not managed.is_relative_to(distributions.resolve()):
+        raise RuntimeError("uv did not select the standalone managed Python distribution")
     runtime = stage / "runtime"
-    shutil.copytree(Path(managed).parent, runtime)
+    shutil.copytree(managed.parent, runtime)
     python = runtime / "python.exe"
     run(python, "-I", "-c",
         "import struct, sys; assert sys.platform == 'win32' and struct.calcsize('P') == 8")
