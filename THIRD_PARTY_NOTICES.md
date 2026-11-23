@@ -61,6 +61,10 @@ the native recorder. MyNotes does not alter their license terms.
   The Windows candidate includes LibreOffice 26.8.3 from its x64 MSI. The
   corresponding unmodified source is available from the
   [LibreOffice source archive](https://download.documentfoundation.org/libreoffice/src/26.8.3/).
+- Windows transcription uses [whisper.cpp b5454](https://github.com/ggml-org/whisper.cpp/releases/tag/b5454).
+  The bundled CLI and CPU libraries retain the upstream MIT license. The optional
+  [Whisper large-v3-turbo weights](https://huggingface.co/openai/whisper-large-v3-turbo)
+  are distributed under MIT and downloaded separately in GGML format.
 
 Provider CLIs are external installations managed by their publishers. They are
 not bundled into MyNotes, and their terms are separate from the MyNotes MIT

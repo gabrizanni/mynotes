@@ -32,6 +32,9 @@ jobs:
       - name: Audit Windows source
         run: uv run --locked python scripts/check_public_tree.py --windows-source
 
+      - name: Test the desktop bridge
+        run: dotnet run --project windows/desktop/tests/MyNotes.Desktop.BridgeTests.csproj --configuration Release
+
       - name: Install checked Inno Setup compiler
         shell: pwsh
         run: |
@@ -51,9 +54,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'mynotes-candidate'
           $office = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.3_Win_x86-64.msi'
-          curl.exe --fail --location --retry 3 "https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi" --output $office
+          $whisper = Join-Path $env:RUNNER_TEMP 'whisper-bin-x64.zip'
+          $whisperLicense = Join-Path $env:RUNNER_TEMP 'whisper-license.txt'
+          curl.exe --fail --silent --show-error --location --retry 3 'https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi' --output $office
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --output $out
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip' --output $whisper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/LICENSE' --output $whisperLicense
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --whisper-zip $whisper --whisper-license $whisperLicense --output $out
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
 
@@ -72,6 +81,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
           & $launcher verify-word-renderer --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $models = Join-Path $env:MYNOTES_HOME 'speech-models/whisper.cpp'
+          New-Item -ItemType Directory -Path $models -Force | Out-Null
+          $weights = Join-Path $models 'ggml-tiny.bin'
+          $env:MYNOTES_TEST_WAV = Join-Path $env:RUNNER_TEMP 'jfk.wav'
+          curl.exe --fail --silent --show-error --location --retry 3 'https://huggingface.co/ggerganov/whisper.cpp/resolve/80da2d8bfee42b0e836fc3a9890373e5defc00a6/ggml-tiny.bin' --output $weights
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $weights).Hash -ne 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21') { throw 'Whisper model checksum mismatch' }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' --output $env:MYNOTES_TEST_WAV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $env:MYNOTES_TEST_WAV).Hash -ne '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e') { throw 'Speech sample checksum mismatch' }
+          & "$app/runtime/python.exe" -I -c "import os; from pathlib import Path; from mynotes.windows_speech import model_directory, verify_transcription, whisper_executable; proof = verify_transcription(whisper_executable(), model_directory(), audio=Path(os.environ['MYNOTES_TEST_WAV']), model='tiny'); print(proof['segments'])"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item Env:MYNOTES_HOME
 

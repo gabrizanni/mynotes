@@ -11,10 +11,13 @@ import subprocess
 import tempfile
 import tomllib
 from pathlib import Path
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON_VERSION = "3.12.14"
 LIBREOFFICE_SHA256 = "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94"
+WHISPER_ARCHIVE_SHA256 = "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb"
+WHISPER_LICENSE_SHA256 = "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
 
 
 def run(*args: str | Path, env: dict[str, str] | None = None) -> None:
@@ -59,10 +62,14 @@ def stage_runtime(build: Path, stage: Path) -> None:
     run(runtime / "mynotes.exe", "init", "--workspace", build / "workspace")
 
 
+def verify_input(path: Path, digest: str) -> None:
+    with path.open("rb") as source:
+        if hashlib.file_digest(source, "sha256").hexdigest() != digest:
+            raise ValueError(f"{path.name} checksum mismatch")
+
+
 def stage_office(build: Path, stage: Path, msi: Path) -> None:
-    with msi.open("rb") as source:
-        if hashlib.file_digest(source, "sha256").hexdigest() != LIBREOFFICE_SHA256:
-            raise ValueError("LibreOffice MSI checksum mismatch")
+    verify_input(msi, LIBREOFFICE_SHA256)
     extracted = build / "LibreOffice image"
     msiexec = Path(os.environ["SystemRoot"]) / "System32" / "msiexec.exe"
     run(msiexec, "/a", msi, "/qn", "/norestart", f"TARGETDIR={extracted}")
@@ -77,7 +84,23 @@ def stage_office(build: Path, stage: Path, msi: Path) -> None:
         env=env)
 
 
-def build_candidate(output: Path, iscc: Path, libreoffice_msi: Path) -> Path:
+def stage_whisper(stage: Path, archive: Path, license_file: Path) -> None:
+    verify_input(archive, WHISPER_ARCHIVE_SHA256)
+    verify_input(license_file, WHISPER_LICENSE_SHA256)
+    destination = stage / "speech" / "whisper"
+    destination.mkdir(parents=True)
+    with ZipFile(archive) as package:
+        for member in package.namelist():
+            name = Path(member).name
+            if name in {"whisper-cli.exe", "whisper.dll", "ggml.dll", "ggml-base.dll"} or (
+                    name.startswith("ggml-cpu-") and name.endswith(".dll")):
+                with package.open(member) as source, (destination / name).open("xb") as target:
+                    shutil.copyfileobj(source, target)
+    shutil.copyfile(license_file, destination / "LICENSE.txt")
+    run(destination / "whisper-cli.exe", "--help")
+
+
+def build_candidate(output: Path, iscc: Path, libreoffice_msi: Path, whisper_zip: Path, whisper_license: Path) -> Path:
     if platform.system() != "Windows" or platform.machine().upper() != "AMD64" or struct.calcsize("P") != 8:
         raise RuntimeError("The Windows installer must be built on an x64 Windows runner")
     if not iscc.is_file():
@@ -90,6 +113,7 @@ def build_candidate(output: Path, iscc: Path, libreoffice_msi: Path) -> Path:
         stage.mkdir()
         stage_runtime(build, stage)
         stage_office(build, stage, libreoffice_msi)
+        stage_whisper(stage, whisper_zip, whisper_license)
         publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop", "-p:Platform=x64")
         publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture")
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
@@ -108,8 +132,11 @@ def main() -> None:
     parser.add_argument("--iscc", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--libreoffice-msi", type=Path, required=True)
+    parser.add_argument("--whisper-zip", type=Path, required=True)
+    parser.add_argument("--whisper-license", type=Path, required=True)
     args = parser.parse_args()
-    print(build_candidate(args.output.resolve(), args.iscc.resolve(), args.libreoffice_msi.resolve()))
+    print(build_candidate(args.output.resolve(), args.iscc.resolve(), args.libreoffice_msi.resolve(),
+                          args.whisper_zip.resolve(), args.whisper_license.resolve()))
 
 
 if __name__ == "__main__":

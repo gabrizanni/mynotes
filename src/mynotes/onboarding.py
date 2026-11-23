@@ -304,24 +304,38 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
             settings = workspace.configuration_store().load()
         except Exception as error:
             config_error = str(error)
-    argmax = managed_tool("argmax") or shutil.which("argmax-cli")
-    model_cache = Path(tools.get("model_cache", workspace.root / "local-models"))
-    model_ready = any(model_cache.glob("whisperkit/**/AudioEncoder.mlmodelc"))
     proof = tools.get("execution_proof", {})
-    asr_verified = bool(argmax and proof.get("transcription") is True and proof.get("model_cache") == str(model_cache) and proof.get("argmax_sha256") == file_sha256(Path(argmax)))
     managed_soffice = managed_tool("soffice")
     if os.name == "nt":
+        from .asr import default_engines
+        from .windows_speech import DEFAULT_MODEL, current_proof
+        whisper = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+        asr_executable = whisper.executable if whisper else None
+        weights = whisper.model_dir / f"ggml-{DEFAULT_MODEL}.bin" if whisper else None
+        model_ready = bool(weights and weights.is_file())
+        asr_verified = bool(weights and current_proof(asr_executable, weights))
+        asr_action = "Repair the Windows installation to restore the speech runtime."
+        if asr_executable:
+            asr_action = ("Verify local transcription from MyNotes Settings." if model_ready
+                          else "Download the local speech model from MyNotes Settings.")
         soffice = find_soffice(managed_soffice)
         word_verified = bool(soffice and _current_word_proof(soffice))
         word_action = "Verify the Word renderer." if soffice else "Install LibreOffice for Word validation."
     else:
+        asr_executable = managed_tool("argmax") or shutil.which("argmax-cli")
+        model_cache = Path(tools.get("model_cache", workspace.root / "local-models"))
+        model_ready = any(model_cache.glob("whisperkit/**/AudioEncoder.mlmodelc"))
+        asr_verified = bool(asr_executable and proof.get("transcription") is True
+                            and proof.get("model_cache") == str(model_cache)
+                            and proof.get("argmax_sha256") == file_sha256(Path(asr_executable)))
         soffice = managed_soffice or shutil.which("soffice")
         word_verified = bool(soffice and proof.get("word") is True and proof.get("soffice_sha256") == file_sha256(Path(soffice)))
         word_action = "Open MyNotes setup to install the Word renderer."
+        asr_action = "Open MyNotes setup to download local transcription components."
     checks = {
         "installation": _check(workspace.is_initialized() and config_error is None, "Open MyNotes setup.", workspace=str(workspace.root), configuration_error=config_error),
         "agent": provider_check(provider or settings.get("providers", {}).get("default")),
-        "transcription": _check(bool(argmax and model_ready and asr_verified), "Open MyNotes setup to download local transcription components.", executable=argmax, model_present=model_ready, execution_verified=asr_verified),
+        "transcription": _check(bool(asr_executable and model_ready and asr_verified), asr_action, executable=asr_executable, model_present=model_ready, execution_verified=asr_verified),
         "word": _check(bool(soffice and word_verified), word_action, executable=soffice, execution_verified=word_verified),
         "capture": {"status": "optional", "action": "Configure Capture, record a microphone test, listen to it and confirm audibility."},
     }

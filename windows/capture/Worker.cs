@@ -658,6 +658,7 @@ internal sealed class Worker : IDisposable
             RedirectStandardOutput = redirect, RedirectStandardError = redirect
         };
         start.Environment["MYNOTES_CAPTURE_HOME"] = captureHome;
+        start.ArgumentList.Add("-I");
         start.ArgumentList.Add("-X");
         start.ArgumentList.Add("utf8");
         start.ArgumentList.Add("-m");

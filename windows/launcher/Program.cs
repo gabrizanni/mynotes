@@ -9,7 +9,7 @@ if (!File.Exists(python))
 }
 
 var start = new ProcessStartInfo(python) { UseShellExecute = false };
-foreach (var argument in new[] { "-X", "utf8", "-m", "mynotes" })
+foreach (var argument in new[] { "-I", "-X", "utf8", "-m", "mynotes" })
 {
     start.ArgumentList.Add(argument);
 }

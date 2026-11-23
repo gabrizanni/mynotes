@@ -61,6 +61,22 @@ public sealed partial class MainWindow
             }),
             ButtonFor("Apri workspace", "SettingsWorkspaceOpen", () => OpenLocalAsync(Engine.Workspace)))));
 
+        Page.Children.Add(Card("Trascrizione locale", Actions(
+            ButtonFor("Scarica modello (1,63 GB)", "SpeechModelInstall", async () =>
+            {
+                if (!await ConfirmAsync("Modello per la trascrizione", "Scaricare il modello Whisper per trascrivere sul PC?", "Scarica"))
+                    return;
+                Data(await Engine.JsonAsync(["install-speech-model"], Token, passWorkspace: false));
+                Announce("Modello per la trascrizione installato.");
+            }),
+            ButtonFor("Verifica trascrizione", "SpeechVerify", async () =>
+            {
+                var proof = Data(await Engine.JsonAsync(["verify-transcription"], Token));
+                if (!proof.Flag("transcription") || proof.Text("status") != "VERIFIED")
+                    throw new BackendException("Il motore locale non ha confermato la trascrizione di prova.");
+                Announce("Trascrizione locale verificata su un campione vocale.");
+            }))));
+
         var capture = await ReadAsync("capture", "dashboard");
         var interval = Input("Sincronizza calendari ogni (ore da 0,25 a 168)", "SettingsCaptureInterval", capture.Text("refreshHours", "1"));
         var before = Input("Secondi di registrazione prima dell’inizio (facoltativo)", "SettingsCaptureBefore");

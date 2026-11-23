@@ -48,7 +48,7 @@ internal sealed class Backend(string python, string workspace)
             startInfo.StandardErrorEncoding = Encoding.UTF8;
         }
         startInfo.Environment[WorkspaceOverride] = Workspace;
-        foreach (var arg in new[] { "-X", "utf8", "-m", "mynotes" }.Concat(args))
+        foreach (var arg in new[] { "-I", "-X", "utf8", "-m", "mynotes" }.Concat(args))
             startInfo.ArgumentList.Add(arg);
         if (passWorkspace)
         {

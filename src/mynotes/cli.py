@@ -469,6 +469,13 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--provider", choices=("codex", "agy", "claude"), help="inspect another agent without changing the selected default")
     verify_renderer = subparsers.add_parser("verify-word-renderer", help="render a generated Word document and verify the local renderer")
     verify_renderer.add_argument("--json", action="store_true", help="emit the verification result as JSON")
+    speech_model = subparsers.add_parser("install-speech-model", help="download the verified default Windows speech model (1.63 GB)")
+    speech_model.add_argument("--json", action="store_true", help="emit the model installation result as JSON")
+    verify_speech = subparsers.add_parser("verify-transcription", help="run the local Windows speech engine on a spoken sample")
+    verify_speech.add_argument("--workspace", help="private workspace path")
+    verify_speech.add_argument("--audio", type=Path, help="optional short local spoken audio sample")
+    verify_speech.add_argument("--language", choices=("en", "it"), default="en", help="language of the spoken sample")
+    verify_speech.add_argument("--json", action="store_true", help="emit the speech verification result as JSON")
     migrate = subparsers.add_parser("migrate", help="inventory or copy a legacy installation")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     legacy = migrate_subparsers.add_parser("legacy", help="migrate a legacy local installation")
@@ -1238,6 +1245,26 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(json.dumps({"status": "VERIFIED", **proof}, ensure_ascii=False))
             else:
                 print(f"Word rendering verified ({proof['word_pages']} page(s)).")
+            return 0
+        if arguments.command in {"install-speech-model", "verify-transcription"}:
+            if os.name != "nt":
+                raise ValueError("This local speech setup command is available on Windows.")
+            from .asr import default_engines
+            from .windows_speech import install_default_model, verify_transcription
+            if arguments.command == "install-speech-model":
+                model = install_default_model()
+                report = {"status": "INSTALLED", "model_path": str(model)}
+                summary = "Local speech model installed."
+            else:
+                workspace = Workspace.from_value(arguments.workspace)
+                engine = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+                if not engine:
+                    raise ValueError("The native Whisper.cpp runtime is missing. Repair the Windows installation.")
+                proof = verify_transcription(engine.executable, engine.model_dir,
+                                             audio=arguments.audio, language=arguments.language)
+                report = {"status": "VERIFIED", **proof}
+                summary = f"Local transcription verified ({proof['segments']} segment(s))."
+            print(json.dumps(report, ensure_ascii=False) if arguments.json else summary)
             return 0
         if arguments.command is None:
             workspace = Workspace.from_value()
