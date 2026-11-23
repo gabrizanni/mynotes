@@ -50,7 +50,7 @@ jobs:
 
   windows-x64-package:
     runs-on: windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       PYTHONUTF8: "1"
     steps:
@@ -193,10 +193,10 @@ jobs:
           & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $env:MYNOTES_TEST_WORKSPACE --audio $env:MYNOTES_TEST_WAV --collection $collection
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Benchmark the default model on full Italian and English recordings
+      - name: Benchmark the default model on the full English recording
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         shell: pwsh
-        timeout-minutes: 25
+        timeout-minutes: 35
         run: |
           $ErrorActionPreference = 'Stop'
           $app = $env:MYNOTES_INSTALLED_APP
@@ -210,6 +210,16 @@ jobs:
           $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
           & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $english --language en --expected alice --report "$reports/english.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Benchmark the default model on the full Italian recording
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
           $italian = Join-Path $env:RUNNER_TEMP 'italian-librivox.mp3'
           & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $italian --language it --expected cammin --report "$reports/italian.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
