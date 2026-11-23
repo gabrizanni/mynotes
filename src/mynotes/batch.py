@@ -1355,6 +1355,8 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                                 suffix = '-reference-' + reference_lineage['sha256'][:16] if reference_lineage else ''
                                 if progressive_protocol==3 and not reference_lineage:
                                     suffix='-local-'+_hash(organization_response.notes)[:16]
+                                    if active.requested.provider == 'codex':
+                                        suffix += '-placement-' + _hash(codex_placements.get(lecture, {}))[:12]
                                 organization_path = group_dir / f'organization-{lecture}{suffix}.json'
                                 if organization_path.exists() and _read(organization_path) != organization:
                                     raise WorkflowError('Saved integrated organization changed; no automatic writing retry')
