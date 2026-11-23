@@ -144,6 +144,8 @@ def build_candidate(args: argparse.Namespace) -> Path:
         print("Building the WinUI desktop and Capture worker.", flush=True)
         publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop",
                 "-p:Platform=x64", f"-p:Version={version}")
+        if not (stage / "desktop/resources.pri").is_file():
+            raise RuntimeError("WinUI publish is missing the application resource index")
         publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture", f"-p:Version={version}")
         print("Staging standalone Python and locked dependencies.", flush=True)
         stage_runtime(build, stage, version)
