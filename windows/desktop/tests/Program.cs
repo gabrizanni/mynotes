@@ -31,6 +31,9 @@ Check(command.ArgumentList.ToArray() is ["-I", "-X", "utf8", "-m", "mynotes", "t
     && value == literal && path == workspace.Path, "Arguments preserve UTF-8 and their original boundaries.");
 var chat = engine.CreateProcess(["chat", "--provider", "claude"], console: true);
 Check(!chat.UseShellExecute && !chat.RedirectStandardOutput && !chat.CreateNoWindow, "Chat keeps an interactive child console.");
+var courseChat = engine.CreateProcess(["chat", "--", "--literal course request"], console: true);
+Check(courseChat.ArgumentList.TakeLast(4).SequenceEqual(["--workspace", workspace.Path, "--", "--literal course request"]),
+    "Workspace options precede the separator without changing the chat text.");
 var json = (await engine.JsonAsync(["test", "--title", literal], CancellationToken.None)).RequireSuccess();
 Check(json.Text("workspace") == workspace.Path && json.Strings("arguments").Contains(literal), "Environment and real child argv round-trip.");
 Check(json.Strings("arguments").Contains("--json"), "JSON commands request structured output.");

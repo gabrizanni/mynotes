@@ -611,21 +611,50 @@ def ui_lease(workspace, session, *, opened=True):
         return {"status": "OK"}
 
 def _worker_command(workspace, action, identifier=None):
-    return [sys.executable, "-m", "mynotes", "transcription-queue", action, "--workspace", str(workspace.root)] + (["--job", identifier] if identifier else [])
+    python_flags = ["-I", "-X", "utf8"] if os.name == "nt" else []
+    return [sys.executable, *python_flags, "-m", "mynotes", "transcription-queue", action,
+            "--workspace", str(workspace.root)] + (["--job", identifier] if identifier else [])
 
 
 def launch_runner(workspace):
     root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
     with (root(workspace) / "runner.log").open("ab") as log:
-        subprocess.Popen(_worker_command(workspace, "run"), stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+        return subprocess.Popen(_worker_command(workspace, "run"), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **options)
+
+
+@contextmanager
+def _worker_processes():
+    children = {}
+    try:
+        yield children
+    finally:
+        for _, job in children.values():
+            if job:
+                job.close()
+
+
+def _start_worker(workspace, identifier):
+    command = _worker_command(workspace, "worker", identifier)
+    options = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if os.name == "nt":
+        from .provider_process import WindowsJob
+        job = WindowsJob()
+        try:
+            return job.start(command, **options), job
+        except BaseException:
+            job.close()
+            raise
+    return subprocess.Popen(command, start_new_session=True, **options), None
 
 
 def run_job(workspace, identifier, *, engines=None):
     from .asr import ASRBusyError, ASRReviewError, ASRError, ArgmaxEngine, cache_identity, transcribe_audio
-    try:
-        os.nice(10)
-    except OSError:
-        pass
+    if hasattr(os, "nice"):
+        try:
+            os.nice(10)
+        except OSError:
+            pass
     with database(workspace) as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (identifier,)).fetchone()
@@ -709,21 +738,31 @@ def run(workspace, *, tick=1):
     from .capture import CaptureStore, capture_status
     directory = root(workspace)
     directory.mkdir(parents=True, exist_ok=True)
-    children = {}
     pressure_checked, pressure_hold = 0, False
-    with (directory / "runner.lock").open("a+") as lease:
+    with (directory / "runner.lock").open("a+") as lease, _worker_processes() as children:
         try:
             file_lock.flock(lease, file_lock.LOCK_EX | file_lock.LOCK_NB)
         except BlockingIOError:
             return
         while True:
-            for key, child in list(children.items()):
+            for key, (child, job) in list(children.items()):
                 if child.poll() is not None:
+                    if job:
+                        job.close()
                     del children[key]
                     with database(workspace) as conn:
-                        conn.execute("UPDATE jobs SET status='INTERRUPTED',error='Worker stopped before completion',pid=NULL,updated=? WHERE id=? AND status='RUNNING'", (time.time(), key))
+                        conn.execute(
+                            "UPDATE jobs SET status=CASE status WHEN 'CANCELLING' THEN 'CANCELLED' ELSE 'INTERRUPTED' END,"
+                            "error=CASE status WHEN 'CANCELLING' THEN NULL ELSE 'Worker stopped before completion' END,"
+                            "pid=NULL,updated=? WHERE id=? AND pid=? AND status IN ('RUNNING','CANCELLING')",
+                            (time.time(), key, child.pid),
+                        )
             with database(workspace) as conn:
                 for row in conn.execute("SELECT id,status,pid FROM jobs WHERE status IN ('RUNNING','CANCELLING')").fetchall():
+                    if row["status"] == "CANCELLING" and row["id"] in children:
+                        child, job = children[row["id"]]
+                        if job and child.pid == row["pid"]:
+                            job.close()
                     if not _alive(row['pid']):
                         conn.execute('UPDATE jobs SET status=?,pid=NULL,updated=? WHERE id=? AND pid IS ?', ('CANCELLED' if row['status'] == 'CANCELLING' else 'INTERRUPTED', time.time(), row['id'], row['pid']))
             snapshot = status(workspace)
@@ -732,7 +771,7 @@ def run(workspace, *, tick=1):
                 return
             recorder = capture_status(CaptureStore(workspace))
             blocked = False  # Independent stable audio may transcribe while the microphone records.
-            if time.monotonic() - pressure_checked >= 15:
+            if sys.platform == "darwin" and time.monotonic() - pressure_checked >= 15:
                 pressure_checked = time.monotonic()
                 try:
                     import re
@@ -766,13 +805,12 @@ def run(workspace, *, tick=1):
                         if not owned or owned['status'] != 'QUEUED':
                             continue
                         # The child waits for the parent to commit its claim.
-                        child = subprocess.Popen(_worker_command(workspace, "worker", pending["id"]), stdin=subprocess.DEVNULL,
-                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                        child, job = _start_worker(workspace, pending["id"])
+                        children[pending["id"]] = (child, job)
                         from .asr_progress import continuous_time
                         payload = json.loads(owned['payload'])
                         payload.update(_claim=uuid.uuid4().hex, started_at=time.time(), started_clock=continuous_time())
                         conn.execute("UPDATE jobs SET status='RUNNING',pid=?,updated=?,payload=? WHERE id=? AND status='QUEUED'", (child.pid, time.time(), json.dumps(payload), pending["id"]))
-                        children[pending["id"]] = child
                 elif not children:
                     return
             time.sleep(tick)
@@ -796,6 +834,8 @@ def change_job(workspace, identifier, action):
         row = conn.execute('SELECT * FROM jobs WHERE id=?', (identifier,)).fetchone()
         if row is None:
             raise ValueError('Lavoro non trovato')
+        if action == "cancel" and row["status"] not in {"QUEUED", "RUNNING", "CANCELLING"}:
+            return {"status": "OK", "message": "Il tentativo è già terminato."}
         live = row['pid'] and _alive(row['pid'])
         if action == 'remove' and row['status'] == 'CANCELLED':
             return {'status':'OK', 'message':'Registrazione già rimossa dalla coda; audio conservato.'}
@@ -845,11 +885,17 @@ def change_job(workspace, identifier, action):
             conn.execute("INSERT INTO queue_events(job_id,action,created,detail) VALUES (?,?,?,?)",
                          (identifier, action, time.time(), row['payload']))
             conn.execute('UPDATE jobs SET status=?,error=NULL,updated=? WHERE id=?', (state, time.time(), identifier))
-    if pid:
+    if pid and os.name != "nt":
         # The worker's SIGTERM handler tears down only its own dedicated ASR group.
         try: os.kill(pid, signal.SIGTERM)
         except ProcessLookupError: pass
-    return {'status': 'OK', 'message': 'Interruzione richiesta; audio conservato.' if pid else 'Registrazione rimossa dalla coda; audio conservato.' if action == 'remove' else 'Nuovo tentativo aggiunto alla coda.'}
+    if action == "cancel":
+        message = "Interruzione richiesta; audio conservato." if pid else "Tentativo annullato; audio conservato."
+    elif action == "remove":
+        message = "Registrazione rimossa dalla coda; audio conservato."
+    else:
+        message = "Nuovo tentativo aggiunto alla coda."
+    return {"status": "OK", "message": message}
 
 
 def add_parser(subparsers):

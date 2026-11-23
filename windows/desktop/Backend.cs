@@ -48,13 +48,14 @@ internal sealed class Backend(string python, string workspace)
             startInfo.StandardErrorEncoding = Encoding.UTF8;
         }
         startInfo.Environment[WorkspaceOverride] = Workspace;
-        foreach (var arg in new[] { "-I", "-X", "utf8", "-m", "mynotes" }.Concat(args))
-            startInfo.ArgumentList.Add(arg);
+        var arguments = new List<string>(args);
         if (passWorkspace)
         {
-            startInfo.ArgumentList.Add("--workspace");
-            startInfo.ArgumentList.Add(Workspace);
+            var separator = arguments.IndexOf("--");
+            arguments.InsertRange(separator < 0 ? arguments.Count : separator, ["--workspace", Workspace]);
         }
+        foreach (var arg in new[] { "-I", "-X", "utf8", "-m", "mynotes" }.Concat(arguments))
+            startInfo.ArgumentList.Add(arg);
         return startInfo;
     }
 

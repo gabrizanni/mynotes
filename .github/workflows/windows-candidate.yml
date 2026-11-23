@@ -118,6 +118,11 @@ jobs:
           if (@($report.segments.speaker | Sort-Object -Unique).Count -ne 2 -or $report.professor) {
               throw 'Sherpa did not distinguish the two speakers in the official audio sample'
           }
+          $env:MYNOTES_USER_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes test home'
+          $collection = Join-Path $env:RUNNER_TEMP 'MyNotes audio fixture'
+          & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $workspace --audio $env:MYNOTES_TEST_WAV --collection $collection
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item Env:MYNOTES_USER_HOME
           Remove-Item Env:MYNOTES_HOME
 
           $captureExe = Join-Path $app 'capture/MyNotes.Capture.exe'
