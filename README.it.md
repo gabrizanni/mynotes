@@ -63,6 +63,8 @@ Registrazione e trascrizione avvengono sul Mac. La generazione può inviare test
 
 ## Per sviluppatori
 
+La versione per Windows 11 x64 è in collaudo. La [matrice di accettazione Windows](windows/PARITY.md) elenca le verifiche su app, installer e funzioni da completare prima della pubblicazione per PC Intel e AMD a 64 bit.
+
 ```sh
 git clone https://github.com/gabrizanni/mynotes.git
 cd mynotes

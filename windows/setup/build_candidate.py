@@ -152,7 +152,7 @@ def build_candidate(args: argparse.Namespace) -> Path:
         stage_diarization(stage, args.segmentation_tar, args.embedding_model, args.embedding_license)
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
             shutil.copyfile(ROOT / name, stage / name)
-        run(iscc, f"/DStageDir={stage}", f"/DOutputFolder={output}", f"/DMyNotesVersion={version}",
+        run(iscc, "--quiet-progress", f"/DStageDir={stage}", f"/DOutputFolder={output}", f"/DMyNotesVersion={version}",
             ROOT / "windows/setup/MyNotes.iss", timeout=720)
     installer = output / "MyNotes-Setup-x64-internal.exe"
     with installer.open("rb") as source:

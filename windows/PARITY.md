@@ -37,6 +37,11 @@ same candidate commit and both Windows and macOS CI checks are green.
 - Sherpa identified two speakers and matched a reference excerpt locally with the
   upstream English fixture. Qualify the versions in the packaged Windows build
   and on the shared Italian and English comparison set before marking this row.
+- The installed macOS 0.4 reference used Argmax/WhisperKit
+  `large-v3-v20240930_626MB` to transcribe the 11.00 s public JFK fixture in
+  2.04 s and the 5.09 s Italian system-voice fixture in 1.73 s. These are
+  individual engine calls on the development Mac. Record the Windows timings
+  for the same samples and the longer lesson fixtures separately.
 
 ## Interactive Windows acceptance
 
@@ -57,6 +62,7 @@ update with a personal edit already in the document. Record live Codex, Agy,
 and Claude Code outcomes separately.
 
 For the published build, download `MyNotes-Setup-x64.exe` and its checksum in a
-signed-out browser. Verify the downloaded file with `Get-FileHash -Algorithm
-SHA256` and `signtool verify /pa /all /tw`, and check the expected publisher's
-certificate and timestamp. Install the downloaded copy in the clean VM.
+signed-out browser. Verify the downloaded files on a clean Windows computer
+with `windows/setup/verify_release.ps1`, supplying the publisher certificate
+thumbprint from the signing identity via a trusted channel. Install the
+downloaded copy in the clean VM after the signature and SHA-256 pass.

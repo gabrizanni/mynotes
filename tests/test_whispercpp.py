@@ -87,7 +87,8 @@ def test_whispercpp_transcription_uses_existing_validation_and_cache(tmp_path, m
     monkeypatch.setattr("mynotes.asr._run", run)
     course = course_template()
     course.update(code="TEST", name="Test")
-    course["transcription"].update(primary_engine="whispercpp", primary_model="large-v3-turbo", language="it")
+    course["transcription"].update(primary_engine="whispercpp", primary_model="large-v3-turbo",
+                                   language="it", diarization_engine=None)
     engines = {"whispercpp": WhisperCppEngine(str(exe), models)}
     transcript = transcribe_audio(workspace, "TEST-L01", course, audio, engines=engines)
     assert transcript["status"] == "COMPLETED"
