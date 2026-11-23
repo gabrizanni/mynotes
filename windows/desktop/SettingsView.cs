@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 
@@ -14,16 +15,26 @@ public sealed partial class MainWindow
     {
         var config = await ReadAsync("config", "show");
         var preference = config.Field("providers");
-        var savedProvider = preference.Text("default", "codex");
+        var savedProvider = preference.Text("default");
         var profile = config.Field("personal");
         var savedLanguage = profile.Text("interface_language", "it");
-        var provider = Options("Agente", "SettingsProvider", ["codex", "agy", "claude"], savedProvider);
+        var provider = Options("Agente", "SettingsProvider", ["codex", "agy", "claude"], savedProvider.Length == 0 ? "codex" : savedProvider);
         var language = Options("Lingua della conversazione", "SettingsLanguage", ["it", "en"], savedLanguage);
-        Page.Children.Add(Card("Agente e modello", Label(Join(savedProvider,
+        Page.Children.Add(Card("Agente e modello", Label(savedProvider.Length == 0 ? "Scegli l’agente e la lingua per iniziare." : Join(savedProvider,
                 preference.Field("configured").Field(savedProvider).Text("model"),
                 preference.Field("configured").Field(savedProvider).Text("effort"))),
             provider, language, Actions(
-                ButtonFor("Scegli modello", "SettingsModel", () => SelectModelAsync(Selected(provider), Selected(language), preference, false), primary: true),
+                ButtonFor("Salva agente e lingua", "SettingsProviderSave", async () =>
+                {
+                    var selected = Selected(provider);
+                    var configured = preference.Field("configured").Field(selected);
+                    Data(await Engine.RunAsync(["preferences", "--provider", selected, "--model", configured.Text("model"),
+                        "--effort", configured.Text("effort"), "--language", Selected(language)], Token));
+                    await DisplayPageAsync();
+                    Announce("Agente e lingua salvati.");
+                }, primary: true),
+                ButtonFor("Installa CLI", "SettingsProviderInstall", () => OpenProviderInstallationAsync(Selected(provider))),
+                ButtonFor("Scegli modello", "SettingsModel", () => SelectModelAsync(Selected(provider), Selected(language), preference, false)),
                 ButtonFor("Aggiorna modelli", "SettingsModelRefresh", () => SelectModelAsync(Selected(provider), Selected(language), preference, true)),
                 ButtonFor("Verifica installazione", "SettingsDiagnostics", () => DiagnosticsAsync(Selected(provider))),
                 ButtonFor("Verifica rendering Word", "SettingsWordVerify", async () =>
@@ -115,6 +126,19 @@ public sealed partial class MainWindow
                 (await Engine.RequestAsync(["style", "edit"], new { freeform_preferences = learnerStyle.Text.Trim() }, Token, json: false)).RequireSuccess();
                 Announce("Preferenze di scrittura salvate.");
             }))));
+    }
+
+    private static Task OpenProviderInstallationAsync(string provider)
+    {
+        var url = provider switch
+        {
+            "codex" => "https://developers.openai.com/codex/cli/",
+            "agy" => "https://antigravity.google/download",
+            "claude" => "https://code.claude.com/docs/en/setup",
+            _ => throw new BackendException("Scegli un agente per vedere le istruzioni di installazione."),
+        };
+        using var process = Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        return Task.CompletedTask;
     }
 
     private async Task SelectModelAsync(string provider, string language, JsonElement settings, bool refresh)

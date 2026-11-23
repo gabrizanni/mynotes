@@ -342,10 +342,15 @@ public sealed partial class MainWindow : Window
         return Task.CompletedTask;
     }
 
-    private Task LaunchChatAsync()
+    private async Task LaunchChatAsync()
     {
+        var config = await ReadAsync("config", "show");
+        if (config.Field("providers").Text("default").Length == 0)
+        {
+            Navigation.SelectedItem = SettingsNavigation;
+            return;
+        }
         Engine.OpenConsole("chat");
         Announce("Terminale MyNotes avviato.", InfoBarSeverity.Informational);
-        return Task.CompletedTask;
     }
 }

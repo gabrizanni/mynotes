@@ -86,7 +86,7 @@ internal sealed class Backend(string python, string workspace)
             throw;
         }
 
-        return new BackendResult(process.ExitCode, standardOutput.Result);
+        return new BackendResult(process.ExitCode, standardOutput.Result, standardError.Result);
     }
 
     public Task<BackendResult> JsonAsync(IEnumerable<string> args, CancellationToken cancellationToken, bool passWorkspace = true) =>
@@ -122,7 +122,7 @@ internal sealed class Backend(string python, string workspace)
     }
 }
 
-internal sealed class BackendResult(int exitCode, string output)
+internal sealed class BackendResult(int exitCode, string output, string error = "")
 {
     public int ExitCode { get; } = exitCode;
     public JsonElement Data { get; } = ReadJson(output);
@@ -133,9 +133,17 @@ internal sealed class BackendResult(int exitCode, string output)
     {
         var status = Data.Text("status").ToUpperInvariant();
         if (ExitCode != 0 || status is "ERROR" or "BLOCKED" or "FAILED" or "CONFLICT" or "UNAVAILABLE" or "REJECTED" or "SYNC_FAILED" or "INTERRUPTED")
+        {
+            var detail = Data.Text("message");
+            if (detail.Length == 0)
+                detail = (output.Length > 0 ? output : error).Split('\n')
+                    .LastOrDefault(line => line.StartsWith("mynotes:", StringComparison.Ordinal))?.Trim() ?? "";
+            if (detail.Length > 0)
+                throw new BackendException(detail[..Math.Min(350, detail.Length)]);
             throw new BackendException(status.Length > 0
                 ? $"MyNotes ha restituito lo stato {status} (codice {ExitCode})."
                 : $"MyNotes ha restituito un errore (codice {ExitCode}).");
+        }
         return Data;
     }
 
