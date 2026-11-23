@@ -218,6 +218,7 @@ dependencies = [
     { name = "python-docx" },
     { name = "python-pptx" },
     { name = "recurring-ical-events" },
+    { name = "sherpa-onnx", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -235,6 +236,7 @@ requires-dist = [
     { name = "python-docx", specifier = "==1.2.0" },
     { name = "python-pptx", specifier = "==1.0.2" },
     { name = "recurring-ical-events", specifier = ">=3.8,<4" },
+    { name = "sherpa-onnx", marker = "platform_machine == 'AMD64' and sys_platform == 'win32'", specifier = "==2.0.3" },
 ]
 
 [package.metadata.requires-dev]
@@ -448,6 +450,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b9/f5/898abd8fbb25766ec6cb17b244730ebf192f47963c71eeacd61aadd903a1/recurring_ical_events-3.8.2.tar.gz", hash = "sha256:e731af31d0b7dec5cd47a1defacd8549e2f36fab1c1995e8b9f042822a0acf8e", size = 604992, upload-time = "2026-04-30T19:21:46.2Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/f7/d3eb4f545baf5d6daaa5881694517626fb7ad04036d94168197a4f021384/recurring_ical_events-3.8.2-py3-none-any.whl", hash = "sha256:9ad605e27b4fbeb70ee1c66205ade32550be15a57cedc579606522f1c67aef6d", size = 241358, upload-time = "2026-04-30T19:21:44.079Z" },
+]
+
+[[package]]
+name = "sherpa-onnx"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sherpa-onnx-core" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9c/9c/6485733d9509f9a06893f97dd0af941686c633819da4d6cd82751363982d/sherpa_onnx-2.0.3.tar.gz", hash = "sha256:e94bdc0fdb901fa22b8ae277fd8ce2caecb8ce1164c2acd6e4465e9bdc484fb1", size = 1204890, upload-time = "2026-11-22T11:28:32.291Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fa/ce/98bf6f1defe9aab41776f8d1c76ccae650d1e0ab89264933c49e7a54976c/sherpa_onnx-2.0.3-cp312-cp312-win_amd64.whl", hash = "sha256:3bb7862b9e02c78deda2d201d56e1dacc203a1519d4b800782a471e1f0a9a18e", size = 2474655, upload-time = "2026-11-22T12:02:12.005Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/fd/7d0cc54be0e809019745739cef60e1967c3b9db78ee44f31bbdd3c018ae2/sherpa_onnx-2.0.3-cp313-cp313-win_amd64.whl", hash = "sha256:472329ad2f8ca5e2d0e517cba279d61c86c23729060920abe6a5816fb6e50fab", size = 2474590, upload-time = "2026-11-22T11:38:17.708Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/b7/3e4bb810d0cd2f59be838bcd7ed8241e485d67ce3143596380cfb13318d1/sherpa_onnx-2.0.3-cp314-cp314-win_amd64.whl", hash = "sha256:8fd88f9758ff544095a0eed8a991acbf8ae97b696afcd4de453d1db810c4c733", size = 2548384, upload-time = "2026-11-22T12:01:00.186Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/12/dee0d979bfe7c394020d0cc4866ea3382b41e4af6f2cd84c478391756d44/sherpa_onnx-2.0.3-cp315-cp315-win_amd64.whl", hash = "sha256:4b4812a7c11810065d68f8bc010248a147bdcafe6f0bfbc121b12697d856c165", size = 2548243, upload-time = "2026-11-22T11:59:05.625Z" },
+]
+
+[[package]]
+name = "sherpa-onnx-core"
+version = "2.0.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/60/267823e104a5856b38601784ae6ca388cd00f219b49c8e78de380ceb63b0/sherpa_onnx_core-2.0.3-py3-none-win_amd64.whl", hash = "sha256:798ba3803b6461bac9eca5a7f3927f04e7a54173155e3f0479e6abd89bb4bc59", size = 17216593, upload-time = "2026-11-22T11:08:33.55Z" },
 ]
 
 [[package]]

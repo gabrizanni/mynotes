@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -485,30 +486,42 @@ class FluidAudioEngine:
         return EngineResult(self.name, model, _tool_version(self.executable), segments, "word", verified_empty)
 
 
+def _normalize_with_pyav(source: Path, destination: Path) -> None:
+    import av
+
+    with av.open(str(source)) as input_container, av.open(str(destination), mode="w") as output_container:
+        output_stream = output_container.add_stream("pcm_s16le", rate=16000)
+        output_stream.layout = "mono"
+        resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
+        for frame in input_container.decode(audio=0):
+            for converted in resampler.resample(frame):
+                for packet in output_stream.encode(converted):
+                    output_container.mux(packet)
+        for converted in resampler.resample(None):
+            for packet in output_stream.encode(converted):
+                output_container.mux(packet)
+        for packet in output_stream.encode(None):
+            output_container.mux(packet)
+
+
 def normalize_audio(source: Path, destination: Path, *, afconvert: str = "/usr/bin/afconvert") -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    if source.suffix.casefold() == ".wav":
+    if source.suffix.casefold() == ".wav" and os.name != "nt":
         shutil.copy2(source, destination)
+        return destination
+    if os.name == "nt":
+        try:
+            _normalize_with_pyav(source, destination)
+        except Exception as error:
+            raise ASRError(f"Audio normalization failed with PyAV: {error}") from error
+        if not destination.is_file():
+            raise ASRError("Audio normalization did not create the expected WAV file")
         return destination
     try:
         _run([afconvert, "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(source), str(destination)], timeout=1800)
     except ASRError as native_error:
         try:
-            import av
-
-            with av.open(str(source)) as input_container, av.open(str(destination), mode="w") as output_container:
-                output_stream = output_container.add_stream("pcm_s16le", rate=16000)
-                output_stream.layout = "mono"
-                resampler = av.AudioResampler(format="s16", layout="mono", rate=16000)
-                for frame in input_container.decode(audio=0):
-                    for converted in resampler.resample(frame):
-                        for packet in output_stream.encode(converted):
-                            output_container.mux(packet)
-                for converted in resampler.resample(None):
-                    for packet in output_stream.encode(converted):
-                        output_container.mux(packet)
-                for packet in output_stream.encode(None):
-                    output_container.mux(packet)
+            _normalize_with_pyav(source, destination)
         except Exception as fallback_error:
             raise ASRError(
                 f"Audio normalization failed with afconvert and PyAV: {fallback_error}"
@@ -621,6 +634,21 @@ def _parse_turns(payload: Any) -> list[dict[str, Any]]:
 
 
 def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_dir: Path, settings: dict[str, Any], transcript: list[dict[str, Any]]) -> dict[str, Any]:
+    if settings.get("diarization_engine") == "sherpa-onnx":
+        from .speaker_diarization import model_paths
+        segmentation, embedding = model_paths(settings)
+        output = run_dir / "diarization.json"
+        command = [sys.executable, "-I", "-m", "mynotes.speaker_diarization",
+                   "--audio", str(audio), "--segmentation", str(segmentation),
+                   "--embedding", str(embedding), "--output", str(output)]
+        if settings.get("professor_reference"):
+            command.extend(["--reference", settings["professor_reference"]])
+        _run(command)
+        try:
+            report = json.loads(output.read_text(encoding="utf-8"))
+            return _apply_speaker_turns(report["segments"], report["professor"], transcript)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise ASRError("Sherpa did not produce a usable speaker report") from error
     if settings.get("diarization_engine") != "fluidaudio":
         return {"status": "disabled"}
     executable = settings.get("tools", {}).get("fluidaudio") or shutil.which("fluidaudio") or shutil.which("fluidaudiocli")
@@ -658,6 +686,10 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             cluster, score = max(scores.items(), key=lambda item: item[1])
             if score >= 0.75:
                 professor_label = f"S{cluster + 1}"
+    return _apply_speaker_turns(turns, professor_label, transcript)
+
+
+def _apply_speaker_turns(turns: list[dict], professor_label: str | None, transcript: list[dict]) -> dict:
     speakers: dict[str, str] = {}
     for segment in transcript:
         best = max(
@@ -669,7 +701,8 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             max(0.0, min(segment["end_seconds"], best["end"]) - max(segment["start_seconds"], best["start"]))
             if best else 0.0
         )
-        if not best or overlap <= 0 or best["confidence"] < 0.5:
+        confidence = best.get("confidence") if best and overlap > 0 else None
+        if not best or overlap <= 0 or (confidence is not None and confidence < 0.5):
             segment["speaker"] = "UNKNOWN"
         elif professor_label and best["speaker"] == professor_label:
             segment["speaker"] = "Professor"
@@ -681,7 +714,7 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             segment["speaker"] = speakers[best["speaker"]]
         segment["speaker_role"] = speaker_role(segment["speaker"])
         segment["speaker_role_source"] = "diarization" if segment["speaker_role"] != "UNKNOWN" else "unverified"
-        segment["speaker_role_confidence"] = round(best["confidence"], 4) if best and overlap > 0 else None
+        segment["speaker_role_confidence"] = round(confidence, 4) if confidence is not None else None
     return {"status": "completed", "professor_identified": professor_label is not None, "turns": len(turns)}
 
 
@@ -747,10 +780,17 @@ def default_engines(workspace: Workspace, settings: dict[str, Any]) -> dict[str,
     data_root = Path(tools.get("model_cache") or managed.get("model_cache") or workspace.root / "local-models").expanduser()
     result: dict[str, SpeechEngine] = {}
     if "whispercpp" in (settings.get("primary_engine"), settings.get("secondary_engine"), settings.get("extra_pass_engine")):
-        configured = tools.get("whispercpp") or managed_tool("whispercpp") or "whisper-cli"
-        executable = shutil.which(configured)
-        if executable and (os.name != "nt" or Path(executable).suffix.lower() == ".exe"):
-            result["whispercpp"] = WhisperCppEngine(executable, data_root / "whisper.cpp")
+        configured = tools.get("whispercpp") or managed_tool("whispercpp")
+        model_dir = data_root / "whisper.cpp"
+        if os.name == "nt":
+            from .windows_speech import model_directory, whisper_executable
+            executable = whisper_executable(configured)
+            if not (tools.get("model_cache") or managed.get("model_cache") or model_dir.is_dir()):
+                model_dir = model_directory()
+        else:
+            executable = shutil.which(configured or "whisper-cli")
+        if executable:
+            result["whispercpp"] = WhisperCppEngine(executable, model_dir)
     if os.name == "nt":
         return result
     argmax = tools.get("argmax") or managed_tool("argmax") or shutil.which("argmax-cli")
@@ -824,6 +864,9 @@ def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=Fals
     relevant["cache_schema"] = 2
     relevant["engine_identity"] = identities
     relevant["configured_tools"] = settings.get("tools", {})
+    if settings.get("diarization_engine") == "sherpa-onnx":
+        from .speaker_diarization import identity
+        relevant["diarization_identity"] = identity(settings)
     reference = Path(settings["professor_reference"]) if settings.get("professor_reference") else None
     relevant["professor_reference_sha256"] = file_sha256(reference) if reference and reference.is_file() else None
     settings_hash = hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()

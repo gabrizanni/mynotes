@@ -71,4 +71,4 @@ jobs:
         run: |
           uv run python -c "import platform, struct; assert platform.system() == 'Windows' and platform.machine().upper() == 'AMD64' and struct.calcsize('P') == 8"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run pytest tests/test_platform_runtime.py tests/test_memory_context.py tests/test_whispercpp.py
+          uv run pytest tests/test_platform_runtime.py tests/test_memory_context.py tests/test_whispercpp.py tests/test_windows_speech.py tests/test_provider_windows.py tests/test_provider_limits.py tests/test_capture_windows.py

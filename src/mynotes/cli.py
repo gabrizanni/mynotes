@@ -32,7 +32,7 @@ from .ingestion import IngestionError, discover_recordings, recording_for_lectur
 from .sourcepack import SourcePackError, build_source_pack
 from .migration import MigrationError, apply_manifest, build_manifest, load_manifest, save_manifest
 from .integrations import IntegrationError, install_integration
-from .chat import ChatError, launch_chat
+from .chat import ChatError, launch_chat, login_provider
 from .publication import (
     PublicationError,
     build_word_candidate,
@@ -467,6 +467,15 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument("--workspace", help="private workspace path")
     doctor.add_argument("--json", action="store_true", help="component readiness and repair actions")
     doctor.add_argument("--provider", choices=("codex", "agy", "claude"), help="inspect another agent without changing the selected default")
+    verify_renderer = subparsers.add_parser("verify-word-renderer", help="render a generated Word document and verify the local renderer")
+    verify_renderer.add_argument("--json", action="store_true", help="emit the verification result as JSON")
+    speech_model = subparsers.add_parser("install-speech-model", help="download the verified default Windows speech model (1.63 GB)")
+    speech_model.add_argument("--json", action="store_true", help="emit the model installation result as JSON")
+    verify_speech = subparsers.add_parser("verify-transcription", help="run the local Windows speech engine on a spoken sample")
+    verify_speech.add_argument("--workspace", help="private workspace path")
+    verify_speech.add_argument("--audio", type=Path, help="optional short local spoken audio sample")
+    verify_speech.add_argument("--language", choices=("en", "it"), default="en", help="language of the spoken sample")
+    verify_speech.add_argument("--json", action="store_true", help="emit the speech verification result as JSON")
     migrate = subparsers.add_parser("migrate", help="inventory or copy a legacy installation")
     migrate_subparsers = migrate.add_subparsers(dest="migrate_command", required=True)
     legacy = migrate_subparsers.add_parser("legacy", help="migrate a legacy local installation")
@@ -490,6 +499,8 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--workspace", help="private workspace path")
     chat.add_argument("--provider", help="configured provider")
     chat.add_argument("message", nargs="?", help="optional natural-language request")
+    login = subparsers.add_parser("provider-login", help="open the selected agent's sign-in flow")
+    login.add_argument("--provider", choices=("codex", "agy", "claude"), required=True)
     return parser
 
 
@@ -1215,6 +1226,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             workspace = _workspace(arguments)
             configuration = workspace.configuration_store().load()
             return launch_chat(workspace, configuration, arguments.provider, arguments.message)
+        if arguments.command == "provider-login":
+            return login_provider(arguments.provider)
         if arguments.command == "doctor":
             from .onboarding import doctor
             workspace = Workspace.from_value(arguments.workspace)
@@ -1229,6 +1242,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             # Optional recording/rendering components should not block read-only
             # course/style tasks. The agent checks the components needed by a task.
             return 0 if workspace.is_initialized() else 1
+        if arguments.command == "verify-word-renderer":
+            from .onboarding import verify_word_renderer
+            proof = verify_word_renderer()
+            if arguments.json:
+                print(json.dumps({"status": "VERIFIED", **proof}, ensure_ascii=False))
+            else:
+                print(f"Word rendering verified ({proof['word_pages']} page(s)).")
+            return 0
+        if arguments.command in {"install-speech-model", "verify-transcription"}:
+            if os.name != "nt":
+                raise ValueError("This local speech setup command is available on Windows.")
+            from .asr import default_engines
+            from .windows_speech import install_default_model, verify_transcription
+            if arguments.command == "install-speech-model":
+                model = install_default_model()
+                report = {"status": "INSTALLED", "model_path": str(model)}
+                summary = "Local speech model installed."
+            else:
+                workspace = Workspace.from_value(arguments.workspace)
+                engine = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+                if not engine:
+                    raise ValueError("The native Whisper.cpp runtime is missing. Repair the Windows installation.")
+                proof = verify_transcription(engine.executable, engine.model_dir,
+                                             audio=arguments.audio, language=arguments.language)
+                report = {"status": "VERIFIED", **proof}
+                summary = f"Local transcription verified ({proof['segments']} segment(s))."
+            print(json.dumps(report, ensure_ascii=False) if arguments.json else summary)
+            return 0
         if arguments.command is None:
             workspace = Workspace.from_value()
             from .onboarding import prepare_conversation, setup_cli

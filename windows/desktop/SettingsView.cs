@@ -1,0 +1,223 @@
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
+
+namespace MyNotes.Desktop;
+
+public sealed partial class MainWindow
+{
+    private const string AgentDefault = "Predefinito della CLI";
+    private const string EffortDefault = "Predefinita";
+
+    private async Task SettingsAsync()
+    {
+        var config = await ReadAsync("config", "show");
+        var preference = config.Field("providers");
+        var savedProvider = preference.Text("default");
+        var profile = config.Field("personal");
+        var savedLanguage = profile.Text("interface_language", "it");
+        var provider = Options("Agente", "SettingsProvider", ["codex", "agy", "claude"], savedProvider.Length == 0 ? "codex" : savedProvider);
+        var language = Options("Lingua della conversazione", "SettingsLanguage", ["it", "en"], savedLanguage);
+        Page.Children.Add(Card("Agente e modello", Label(savedProvider.Length == 0 ? "Scegli l’agente e la lingua per iniziare." : Join(savedProvider,
+                preference.Field("configured").Field(savedProvider).Text("model"),
+                preference.Field("configured").Field(savedProvider).Text("effort"))),
+            provider, language, Actions(
+                ButtonFor("Salva agente e lingua", "SettingsProviderSave", async () =>
+                {
+                    var selected = Selected(provider);
+                    var configured = preference.Field("configured").Field(selected);
+                    Data(await Engine.RunAsync(["preferences", "--provider", selected, "--model", configured.Text("model"),
+                        "--effort", configured.Text("effort"), "--language", Selected(language)], Token));
+                    await DisplayPageAsync();
+                    Announce("Agente e lingua salvati.");
+                }, primary: true),
+                ButtonFor("Installa CLI", "SettingsProviderInstall", () => OpenProviderInstallationAsync(Selected(provider))),
+                ButtonFor("Accedi", "SettingsProviderLogin", () => LoginAsync(Selected(provider))),
+                ButtonFor("Scegli modello", "SettingsModel", () => SelectModelAsync(Selected(provider), Selected(language), preference, false)),
+                ButtonFor("Aggiorna modelli", "SettingsModelRefresh", () => SelectModelAsync(Selected(provider), Selected(language), preference, true)),
+                ButtonFor("Verifica installazione", "SettingsDiagnostics", () => DiagnosticsAsync(Selected(provider))),
+                ButtonFor("Verifica rendering Word", "SettingsWordVerify", async () =>
+                {
+                    var proof = Data(await Engine.JsonAsync(["verify-word-renderer"], Token, passWorkspace: false));
+                    if (!proof.Flag("word") || proof.Text("status") != "VERIFIED")
+                        throw new BackendException("MyNotes non ha confermato il rendering del documento Word di prova.");
+                    Announce($"Rendering verificato su un documento di prova di {proof.Text("word_pages")} pagina.");
+                }))));
+
+        var background = Input("Esperienza e obiettivi", "SettingsBackground", profile.Text("background"));
+        background.AcceptsReturn = true;
+        Page.Children.Add(Card("Profilo di studio", background, Actions(
+            ButtonFor("Salva profilo", "SettingsProfileSave", async () =>
+            {
+                if (string.IsNullOrWhiteSpace(background.Text))
+                    throw new BackendException("Inserisci il profilo o scegli Salta.");
+                Data(await Engine.RunAsync(["profile", "--background", background.Text.Trim()], Token));
+                Announce("Profilo salvato.");
+            }),
+            ButtonFor("Salta", "SettingsProfileSkip", async () =>
+            {
+                Data(await Engine.RunAsync(["profile", "--skip"], Token));
+                Announce("Passaggio completato.");
+            }))));
+
+        var collection = await ReadAsync("transcription-queue", "library");
+        var folder = collection.Text("folder");
+        Page.Children.Add(Card("File locali", Label(folder), Actions(
+            ButtonFor("Scegli cartella raccolta", "SettingsLibraryFolder", async () =>
+            {
+                var chosen = await PickFolderAsync();
+                if (chosen is not null)
+                    await ExecuteAsync("Cartella della raccolta aggiornata.", "transcription-queue", "folder", "--path", chosen);
+            }),
+            ButtonFor("Apri workspace", "SettingsWorkspaceOpen", () => OpenLocalAsync(Engine.Workspace)))));
+
+        var queue = await ReadAsync("transcription-queue", "status");
+        var parallel = Options("Trascrizioni in parallelo", "SettingsSpeechParallel", ["1", "2", "3", "4"], queue.Text("parallel", "1"));
+        Page.Children.Add(Card("Trascrizione locale", parallel, Actions(
+            ButtonFor("Salva concorrenza", "SettingsSpeechParallelSave", () => ExecuteAsync(
+                "Numero di trascrizioni in parallelo aggiornato.", "transcription-queue", "configure", "--parallel", Selected(parallel))),
+            ButtonFor("Scarica modello (1,63 GB)", "SpeechModelInstall", async () =>
+            {
+                if (!await ConfirmAsync("Modello per la trascrizione", "Scaricare il modello Whisper per trascrivere sul PC?", "Scarica"))
+                    return;
+                Data(await Engine.JsonAsync(["install-speech-model"], Token, passWorkspace: false));
+                Announce("Modello per la trascrizione installato.");
+            }),
+            ButtonFor("Verifica trascrizione", "SpeechVerify", async () =>
+            {
+                var proof = Data(await Engine.JsonAsync(["verify-transcription"], Token));
+                if (!proof.Flag("transcription") || proof.Text("status") != "VERIFIED")
+                    throw new BackendException("Il motore locale non ha confermato la trascrizione di prova.");
+                Announce("Trascrizione locale verificata su un campione vocale.");
+            }))));
+
+        var capture = await ReadAsync("capture", "dashboard");
+        var interval = Input("Sincronizza calendari ogni (ore da 0,25 a 168)", "SettingsCaptureInterval", capture.Text("refreshHours", "1"));
+        var before = Input("Secondi di registrazione prima dell’inizio", "SettingsCaptureBefore", capture.Text("recordBeforeSeconds"));
+        var after = Input("Secondi di registrazione dopo la fine", "SettingsCaptureAfter", capture.Text("recordAfterSeconds"));
+        var recordingFolder = capture.Text("outputDirectory");
+        Page.Children.Add(Card("Registrazione e calendario", interval, before, after, Label(recordingFolder), Actions(
+            ButtonFor("Salva impostazioni", "SettingsCaptureSave", async () =>
+            {
+                if ((!double.TryParse(interval.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value)
+                    && !double.TryParse(interval.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out value))
+                    || !double.IsFinite(value) || value is < 0.25 or > 168)
+                    throw new BackendException("Inserisci un intervallo da 0,25 a 168 ore.");
+                var payload = new Dictionary<string, object?> { ["refreshHours"] = value };
+                foreach (var (field, input) in new[] { ("recordBeforeSeconds", before), ("recordAfterSeconds", after) })
+                {
+                    if (string.IsNullOrWhiteSpace(input.Text))
+                        continue;
+                    if (!int.TryParse(input.Text, out var seconds) || seconds is < 0 or > 1800)
+                        throw new BackendException("Indica un margine da 0 a 1800 secondi.");
+                    payload[field] = seconds;
+                }
+                await RequestAsync("Impostazioni Capture salvate.", ["capture", "configure"], payload);
+            }),
+            ButtonFor("Apri impostazioni microfono", "SettingsMicrophonePrivacy", () =>
+            {
+                using var process = Process.Start(new ProcessStartInfo { FileName = "ms-settings:privacy-microphone", UseShellExecute = true });
+                return Task.CompletedTask;
+            }),
+            ButtonFor("Apri cartella registrazioni", "SettingsCaptureFolderOpen", () => OpenLocalAsync(recordingFolder)),
+            ButtonFor("Scegli cartella registrazioni", "SettingsCaptureFolder", async () =>
+            {
+                var chosen = await PickFolderAsync();
+                if (chosen is not null)
+                    await RequestAsync("Cartella di registrazione aggiornata.", ["capture", "configure"], new { outputDirectory = chosen });
+            }))));
+
+        var instructions = config.Field("style").Text("freeform_preferences");
+        var learnerStyle = Input("Preferenze di scrittura", "SettingsStyle", instructions);
+        learnerStyle.AcceptsReturn = true;
+        Page.Children.Add(Card("Stile degli appunti", learnerStyle, Actions(
+            ButtonFor("Salva preferenze", "SettingsStyleSave", async () =>
+            {
+                (await Engine.RequestAsync(["style", "edit"], new { freeform_preferences = learnerStyle.Text.Trim() }, Token, json: false)).RequireSuccess();
+                Announce("Preferenze di scrittura salvate.");
+            }))));
+    }
+
+    private async Task LoginAsync(string provider)
+    {
+        var report = (await Engine.JsonAsync(["doctor", "--provider", provider], Token)).RequireJson();
+        var cli = report.Field("checks").Field("agent");
+        if (cli.Text("executable").Length == 0)
+            throw new BackendException("Installa la CLI dell’agente prima di accedere.");
+        Engine.OpenConsole(["provider-login", "--provider", provider], passWorkspace: false);
+        Announce("Segui le istruzioni dell’agente nel terminale.", InfoBarSeverity.Informational);
+    }
+
+    private static Task OpenProviderInstallationAsync(string provider)
+    {
+        var url = provider switch
+        {
+            "codex" => "https://developers.openai.com/codex/cli/",
+            "agy" => "https://antigravity.google/download",
+            "claude" => "https://code.claude.com/docs/en/setup",
+            _ => throw new BackendException("Scegli un agente per vedere le istruzioni di installazione."),
+        };
+        using var process = Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        return Task.CompletedTask;
+    }
+
+    private async Task SelectModelAsync(string provider, string language, JsonElement settings, bool refresh)
+    {
+        if (provider.Length == 0 || language.Length == 0)
+            throw new BackendException("Scegli un agente e una lingua.");
+        var current = settings.Field("configured").Field(provider);
+        var args = new List<string> { "models", "--provider", provider, "--saved", current.Text("model"), "--saved-effort", current.Text("effort") };
+        if (refresh)
+            args.Add("--refresh");
+        var models = Data(await Engine.JsonAsync(args, Token, passWorkspace: false));
+        var available = models.Items("choices").Where(item => item.Flag("selectable")).ToArray();
+        var shortcuts = models.Items("presets").Where(item => item.Flag("selectable")).ToArray();
+        var choices = available.Select(item => item.Text("model")).Where(item => item.Length > 0).ToArray();
+        var model = Options("Modello", "ModelChoice", new[] { AgentDefault }.Concat(choices), current.Text("model").Length > 0 && choices.Contains(current.Text("model"))
+            ? current.Text("model") : AgentDefault);
+        var presetLabels = shortcuts.ToDictionary(item => $"{item.Text("label")} ({item.Text("default_effort")})", item => item);
+        var preset = Options("Preset", "ModelPreset", new[] { "Personalizzato" }.Concat(presetLabels.Keys));
+        var effort = Options("Intensità", "ModelEffort", [EffortDefault]);
+
+        void UpdateEffort(string preferred)
+        {
+            var reference = available.FirstOrDefault(item => item.Text("model") == Selected(model));
+            effort.Items.Clear();
+            effort.Items.Add(EffortDefault);
+            foreach (var value in reference.Strings("supported_efforts"))
+                effort.Items.Add(value);
+            effort.SelectedItem = effort.Items.Contains(preferred) ? preferred : EffortDefault;
+        }
+        model.SelectionChanged += (_, _) => UpdateEffort(available.FirstOrDefault(item => item.Text("model") == Selected(model)).Text("default_effort"));
+        preset.SelectionChanged += (_, _) =>
+        {
+            if (presetLabels.TryGetValue(Selected(preset), out var chosen))
+            {
+                model.SelectedItem = chosen.Text("model");
+                UpdateEffort(chosen.Text("default_effort"));
+            }
+        };
+        UpdateEffort(current.Text("effort"));
+        if (!await DialogAsync("Scegli agente e modello", Column(Label(models.Text("message")), preset, model, effort)))
+            return;
+        var selectedModel = Selected(model) == AgentDefault ? "" : Selected(model);
+        var selectedEffort = Selected(effort) == EffortDefault ? "" : Selected(effort);
+        var result = await Engine.RunAsync(["preferences", "--provider", provider, "--model", selectedModel, "--effort", selectedEffort, "--language", language], Token);
+        Data(result);
+        await DisplayPageAsync();
+        Announce("Preferenze dell’agente salvate.");
+    }
+
+    private async Task DiagnosticsAsync(string provider)
+    {
+        var command = new List<string> { "doctor" };
+        if (provider.Length > 0)
+            command.AddRange(["--provider", provider]);
+        var diagnostics = (await Engine.JsonAsync(command, Token)).RequireJson();
+        var checks = diagnostics.Field("checks").Members().Select(item =>
+            (UIElement)Column(Label(item.Key, heading: true), Label(Join(item.Value.Text("status"), item.Value.Text("action"))))).ToArray();
+        await DialogAsync("Diagnostica MyNotes", Column(checks), "");
+    }
+}

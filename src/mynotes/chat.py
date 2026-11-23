@@ -6,15 +6,42 @@ import os
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from .provider_limits import CommandSizeError, validate_command_size
+from .provider_process import run_windows_job
 from .workspace import Workspace
 from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_executable, provider_override_flags
 
 
 class ChatError(RuntimeError):
     pass
+
+
+def login_provider(provider: str) -> int:
+    login_arguments = {"codex": ["login"], "agy": [], "claude": ["auth", "login"]}
+    if provider not in login_arguments:
+        raise ChatError("Choose an agent: codex, agy or claude")
+    environment = provider_environment()
+    executable = provider_executable(provider)
+    if not executable:
+        raise ChatError(f"Install {provider}: {PROVIDER_INSTALL_URLS[provider]}")
+    environment.pop("MYNOTES_WORKSPACE", None)
+    # Agy starts its interactive app to authenticate. Give it an empty root.
+    with tempfile.TemporaryDirectory(prefix="mynotes-login-", ignore_cleanup_errors=True) as directory:
+        return _run_interactive(provider, [executable, *login_arguments[provider]], environment, Path(directory))
+
+
+def _run_interactive(provider: str, command: list[str], environment: dict[str, str], directory: Path) -> int:
+    if os.name == "nt":
+        try:
+            validate_command_size(command, environment)
+            return run_windows_job(command, timeout=None, env=environment, cwd=directory, console=True).returncode
+        except (CommandSizeError, OSError) as error:
+            raise ChatError(f"Unable to launch {provider}: {error}") from error
+    return subprocess.run(command, env=environment, cwd=directory, check=False).returncode
 
 
 def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: str | None, message: str | None = None) -> int:
@@ -105,4 +132,4 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         command = [executable, "-C", str(repository), "--sandbox", "workspace-write"] + overrides + [prompt]
     environment["MYNOTES_WORKSPACE"] = str(workspace.root)
     environment["MYNOTES_CHAT_ACTIVE"] = "1"
-    return subprocess.run(command, env=environment, cwd=repository, check=False).returncode
+    return _run_interactive(selected, command, environment, repository)

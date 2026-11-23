@@ -171,5 +171,6 @@ def dashboard(store) -> dict:
         courses = [{"code": c["code"], "name": c["name"], "contextPending": c.get("context_setup") == "pending"} for c in store.workspace.configuration_store().load()["courses"]]
         return {"schemaVersion": 1, "configured": store.config_path.exists(), "enabled": config["enabled"], "paused": config["paused"],
                 "running": state["running"], "processCheck": state["processCheck"], "runtime": state["runtime"],
-                "sources": sources, "events": events, "courses": courses, "refreshHours": config["refreshHours"], "responses": responses,
+                "sources": sources, "events": events, "courses": courses, "responses": responses,
+                **{key: config[key] for key in ("refreshHours", "recordBeforeSeconds", "recordAfterSeconds", "outputDirectory")},
                 "standaloneSupported": capture.standalone_supported(store), "calendarRecordingsSupported": capture.calendar_recordings_supported(store)}

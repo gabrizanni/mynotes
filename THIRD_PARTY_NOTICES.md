@@ -58,6 +58,17 @@ the native recorder. MyNotes does not alter their license terms.
   licenses. Setup downloads an unmodified official distribution and retains its
   built-in license information. [Licenses](https://www.libreoffice.org/licenses/)
   and [source downloads](https://www.libreoffice.org/download/download-libreoffice/).
+  The Windows candidate includes LibreOffice 26.8.3 from its x64 MSI. The
+  corresponding unmodified source is available from the
+  [LibreOffice source archive](https://download.documentfoundation.org/libreoffice/src/26.8.3/).
+- Windows transcription uses [whisper.cpp b5454](https://github.com/ggml-org/whisper.cpp/releases/tag/b5454).
+  The bundled CLI and CPU libraries retain the upstream MIT license. The optional
+  [Whisper large-v3-turbo weights](https://huggingface.co/openai/whisper-large-v3-turbo)
+  are distributed under MIT and downloaded separately in GGML format.
+- Windows diarization uses [sherpa-onnx 2.0.3](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.3)
+  and its ONNX Runtime dependency. The installed wheel retains their license
+  files. The bundled models retain the [Pyannote segmentation MIT license](https://huggingface.co/pyannote/segmentation-3.0)
+  and the [3D-Speaker Apache 2.0 license](https://github.com/alibaba-damo-academy/3D-Speaker/blob/main/LICENSE).
 
 Provider CLIs are external installations managed by their publishers. They are
 not bundled into MyNotes, and their terms are separate from the MyNotes MIT
