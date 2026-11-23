@@ -354,7 +354,7 @@ public sealed partial class MainWindow : Window
             Navigation.SelectedItem = SettingsNavigation;
             return;
         }
-        Engine.OpenConsole("chat");
+        Engine.OpenConsole(["chat"]);
         Announce("Terminale MyNotes avviato.", InfoBarSeverity.Informational);
     }
 }

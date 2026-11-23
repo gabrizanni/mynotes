@@ -59,10 +59,10 @@ internal sealed class Backend(string python, string workspace)
         return startInfo;
     }
 
-    public void OpenConsole(params string[] options)
+    public void OpenConsole(string[] options, bool passWorkspace = true)
     {
         EnsurePythonExists();
-        using var process = Process.Start(CreateProcess(options, console: true));
+        using var process = Process.Start(CreateProcess(options, console: true, passWorkspace: passWorkspace));
         if (process is null)
             throw new BackendException("Impossibile aprire il terminale di MyNotes.");
     }

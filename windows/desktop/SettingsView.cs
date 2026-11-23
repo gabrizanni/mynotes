@@ -34,6 +34,7 @@ public sealed partial class MainWindow
                     Announce("Agente e lingua salvati.");
                 }, primary: true),
                 ButtonFor("Installa CLI", "SettingsProviderInstall", () => OpenProviderInstallationAsync(Selected(provider))),
+                ButtonFor("Accedi", "SettingsProviderLogin", () => LoginAsync(Selected(provider))),
                 ButtonFor("Scegli modello", "SettingsModel", () => SelectModelAsync(Selected(provider), Selected(language), preference, false)),
                 ButtonFor("Aggiorna modelli", "SettingsModelRefresh", () => SelectModelAsync(Selected(provider), Selected(language), preference, true)),
                 ButtonFor("Verifica installazione", "SettingsDiagnostics", () => DiagnosticsAsync(Selected(provider))),
@@ -72,7 +73,11 @@ public sealed partial class MainWindow
             }),
             ButtonFor("Apri workspace", "SettingsWorkspaceOpen", () => OpenLocalAsync(Engine.Workspace)))));
 
-        Page.Children.Add(Card("Trascrizione locale", Actions(
+        var queue = await ReadAsync("transcription-queue", "status");
+        var parallel = Options("Trascrizioni in parallelo", "SettingsSpeechParallel", ["1", "2", "3", "4"], queue.Text("parallel", "1"));
+        Page.Children.Add(Card("Trascrizione locale", parallel, Actions(
+            ButtonFor("Salva concorrenza", "SettingsSpeechParallelSave", () => ExecuteAsync(
+                "Numero di trascrizioni in parallelo aggiornato.", "transcription-queue", "configure", "--parallel", Selected(parallel))),
             ButtonFor("Scarica modello (1,63 GB)", "SpeechModelInstall", async () =>
             {
                 if (!await ConfirmAsync("Modello per la trascrizione", "Scaricare il modello Whisper per trascrivere sul PC?", "Scarica"))
@@ -90,9 +95,10 @@ public sealed partial class MainWindow
 
         var capture = await ReadAsync("capture", "dashboard");
         var interval = Input("Sincronizza calendari ogni (ore da 0,25 a 168)", "SettingsCaptureInterval", capture.Text("refreshHours", "1"));
-        var before = Input("Secondi di registrazione prima dell’inizio (facoltativo)", "SettingsCaptureBefore");
-        var after = Input("Secondi di registrazione dopo la fine (facoltativo)", "SettingsCaptureAfter");
-        Page.Children.Add(Card("Registrazione e calendario", interval, before, after, Actions(
+        var before = Input("Secondi di registrazione prima dell’inizio", "SettingsCaptureBefore", capture.Text("recordBeforeSeconds"));
+        var after = Input("Secondi di registrazione dopo la fine", "SettingsCaptureAfter", capture.Text("recordAfterSeconds"));
+        var recordingFolder = capture.Text("outputDirectory");
+        Page.Children.Add(Card("Registrazione e calendario", interval, before, after, Label(recordingFolder), Actions(
             ButtonFor("Salva impostazioni", "SettingsCaptureSave", async () =>
             {
                 if ((!double.TryParse(interval.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var value)
@@ -110,6 +116,12 @@ public sealed partial class MainWindow
                 }
                 await RequestAsync("Impostazioni Capture salvate.", ["capture", "configure"], payload);
             }),
+            ButtonFor("Apri impostazioni microfono", "SettingsMicrophonePrivacy", () =>
+            {
+                using var process = Process.Start(new ProcessStartInfo { FileName = "ms-settings:privacy-microphone", UseShellExecute = true });
+                return Task.CompletedTask;
+            }),
+            ButtonFor("Apri cartella registrazioni", "SettingsCaptureFolderOpen", () => OpenLocalAsync(recordingFolder)),
             ButtonFor("Scegli cartella registrazioni", "SettingsCaptureFolder", async () =>
             {
                 var chosen = await PickFolderAsync();
@@ -126,6 +138,16 @@ public sealed partial class MainWindow
                 (await Engine.RequestAsync(["style", "edit"], new { freeform_preferences = learnerStyle.Text.Trim() }, Token, json: false)).RequireSuccess();
                 Announce("Preferenze di scrittura salvate.");
             }))));
+    }
+
+    private async Task LoginAsync(string provider)
+    {
+        var report = (await Engine.JsonAsync(["doctor", "--provider", provider], Token)).RequireJson();
+        var cli = report.Field("checks").Field("agent");
+        if (cli.Text("executable").Length == 0)
+            throw new BackendException("Installa la CLI dell’agente prima di accedere.");
+        Engine.OpenConsole(["provider-login", "--provider", provider], passWorkspace: false);
+        Announce("Segui le istruzioni dell’agente nel terminale.", InfoBarSeverity.Informational);
     }
 
     private static Task OpenProviderInstallationAsync(string provider)

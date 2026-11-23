@@ -36,7 +36,7 @@ public sealed partial class MainWindow
                 ButtonFor("Allegati lezione", "CourseAttachments", () => AttachLessonAsync(item)),
                 ButtonFor("Apri agente", "CourseChat", () =>
                 {
-                    Engine.OpenConsole("chat", "--", $"Apri il contesto del corso {code}. Attendi una mia richiesta prima di elaborare i contenuti.");
+                    Engine.OpenConsole(["chat", "--", $"Apri il contesto del corso {code}. Attendi una mia richiesta prima di elaborare i contenuti."]);
                     return Task.CompletedTask;
                 }),
                 ButtonFor("Genera appunti", "CourseNotes", () => NotesAsync(code), primary: true),

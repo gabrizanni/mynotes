@@ -105,12 +105,47 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not $capture.configured) {
         throw 'Capture configuration did not persist.'
     }
+    $sourcePath = Join-Path $workspace 'synthetic-calendar.json'
+    $source = @{
+        sourceID = 'synthetic-ui-source'
+        url = 'https://example.invalid/my-notes.ics'
+        label = 'Synthetic calendar'
+        timezone = 'Europe/Rome'
+        periodStart = '2030-06-01'
+        periodEnd = '2030-07-01'
+        importMode = 'mapped'
+        mappings = @(@{ match = 'Synthetic lecture'; courseCode = $config.courses[0].code; firstLesson = 1 })
+    } | ConvertTo-Json -Depth 4
+    [IO.File]::WriteAllText($sourcePath, $source)
+    & $runtime -X utf8 -m mynotes capture subscribe --file $sourcePath --workspace $workspace --json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the synthetic calendar.' }
+    Invoke-Control (Find-ById 'Refresh')
+    Invoke-Control (Find-ById 'CalendarSourceRepair')
+    $endField = Find-ById 'CalendarSourceTo'
+    if ($endField.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '2030-06-30') {
+        throw 'The repair form did not retain the calendar-local inclusive end date.'
+    }
+    $cancel = [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::NameProperty, 'Annulla')
+    Invoke-Control (Wait-Until {
+        $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $cancel)
+    } 'the Calendar cancel button')
+    $null = Wait-Until {
+        if ($window.Current.IsEnabled -and (Find-ById 'Refresh').Current.IsEnabled) { $true }
+    } 'the Calendar repair dialog to close'
 
     Invoke-Control (Find-ById 'NavActivity')
     $null = Find-ById 'QueuePause'
+    & $runtime -X utf8 -m mynotes transcription-queue configure --parallel 2 --workspace $workspace --json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the transcription preference.' }
     Invoke-Control (Find-ById 'NavSettings')
     $null = Find-ById 'SettingsProvider'
+    $null = Find-ById 'SettingsProviderLogin'
     $null = Find-ById 'SettingsWordVerify'
+    $parallel = Find-ById 'SettingsSpeechParallel'
+    $selection = $parallel.GetCurrentPattern([Windows.Automation.SelectionPattern]::Pattern).Current.GetSelection()
+    if ($selection.Count -ne 1 -or $selection[0].Current.Name -ne '2') {
+        throw 'The saved transcription preference was not reflected in Settings.'
+    }
 
 } catch {
     if (Test-Path -LiteralPath $trace) {

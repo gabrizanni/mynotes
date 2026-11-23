@@ -29,11 +29,12 @@ same candidate commit and both Windows and macOS CI checks are green.
 - The runtime baseline in [PR #19](https://github.com/gabrizanni/mynotes/pull/19)
   passed GitHub CI on macOS and Windows x64 before merging into `develop`.
 - [PR #20](https://github.com/gabrizanni/mynotes/pull/20) holds the desktop,
-  Capture, provider and installer work. The Windows Actions build compiles the
-  WinUI desktop and native Capture executable. Its release candidate workflow
-  exercises an isolated workspace, native child processes, editable equations
-  rendered by LibreOffice, and an audio fixture processed through the installed
-  queue. Read the individual job results before recording any of these as passed.
+  Capture, provider and installer work. The [first green installer run](https://github.com/gabrizanni/mynotes/actions/runs/45118709833)
+  opened the installed WinUI desktop, created a course and checked navigation,
+  rendered editable equations using LibreOffice, and exported a real transcript
+  through the installed queue. It exercised the update lock and verified idle
+  upgrade and uninstall with workspace data preserved. The hosted runner is
+  Windows Server. Record interactive acceptance on Windows 11 separately.
 - Sherpa identified two speakers and matched a reference excerpt locally with the
   upstream English fixture. Qualify the versions in the packaged Windows build
   and on the shared Italian and English comparison set before marking this row.

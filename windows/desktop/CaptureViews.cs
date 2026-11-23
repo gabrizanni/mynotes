@@ -31,6 +31,9 @@ public sealed partial class MainWindow
             if (enabled)
                 controls.Add(ButtonFor(paused ? "Riprendi pianificazione" : "Sospendi pianificazione", "CapturePause",
                     () => ExecuteAsync(paused ? "Pianificazione ripresa." : "Pianificazione sospesa.", "capture", paused ? "resume" : "pause")));
+            if (enabled && capture.Field("running").ValueKind == JsonValueKind.False)
+                controls.Add(ButtonFor("Riavvia Capture", "CaptureRestart", () =>
+                    ExecuteAsync("Riavvio di Capture richiesto.", "capture", "enable")));
             if (capture.Flag("running"))
             {
                 if (runtime.Flag("recording"))
@@ -43,6 +46,7 @@ public sealed partial class MainWindow
             }
         }
         controls.Add(ButtonFor("Collega calendario", "CalendarConnect", () => ConnectCalendarAsync()));
+        controls.Add(ButtonFor("Importa orario JSON", "CalendarImport", ImportTimetableAsync));
         if (sourceRows.Length > 0)
             controls.Add(ButtonFor("Sincronizza", "CalendarSync", () => ExecuteAsync("Richiesta di sincronizzazione elaborata.", "capture", "sync")));
         if (codes.Length > 0 || capture.Flag("standaloneSupported"))
@@ -106,6 +110,25 @@ public sealed partial class MainWindow
         return DisplayPageAsync();
     }
 
+    private async Task ImportTimetableAsync()
+    {
+        var paths = await PickFilesAsync([".json"], multiple: false);
+        if (paths.Length == 0)
+            return;
+        if (!await ConfirmAsync("Importa orario", "Il file sostituirà gli eventi del precedente orario importato. I calendari collegati restano separati.", "Importa"))
+            return;
+        try
+        {
+            using var stream = File.OpenRead(paths[0]);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: Token);
+            await RequestAsync("Orario importato.", ["capture", "import"], document.RootElement);
+        }
+        catch (JsonException)
+        {
+            throw new BackendException("Il file scelto non contiene un orario JSON leggibile.");
+        }
+    }
+
     private Border CalendarCard(JsonElement item, string[] courses, bool standalone)
     {
         var id = item.Text("id");
@@ -127,13 +150,15 @@ public sealed partial class MainWindow
     private Border CalendarSourceCard(JsonElement source)
     {
         var id = source.Text("sourceID");
-        var mode = source.Text("importMode") == "all_timed" ? "mapped" : "all_timed";
         return Card(source.Text("label", "Calendario"),
             Label(Join(source.Text("host"), source.Text("timezone"), DisplayDate(source.Text("lastSuccess")), source.Text("message"))),
             Actions(
                 ButtonFor("Sincronizza", "CalendarSourceSync", () => ExecuteAsync("Richiesta di sincronizzazione elaborata.", "capture", "sync", "--source", id)),
-                ButtonFor(mode == "mapped" ? "Usa eventi associati" : "Importa eventi con orario", "CalendarSourceMode", () =>
-                    ExecuteAsync("Modalità di importazione aggiornata.", "capture", "set-import-mode", "--source", id, "--mode", mode)),
+                ButtonFor("Correggi collegamento", "CalendarSourceRepair", async () =>
+                {
+                    var result = await ReadAsync("capture", "source", "--source", id);
+                    await ConnectCalendarAsync(result.Field("source"));
+                }),
                 ButtonFor("Scollega", "CalendarSourceDisconnect", async () =>
                 {
                     if (await ConfirmAsync("Scollega calendario", "Il calendario sarà scollegato. Le registrazioni già salvate saranno conservate.", "Scollega"))
@@ -211,38 +236,62 @@ public sealed partial class MainWindow
         await RequestAsync("Lezione programmata.", ["capture", "add-lesson"], payload);
     }
 
-    private async Task ConnectCalendarAsync()
+    private async Task ConnectCalendarAsync(JsonElement source = default)
     {
-        var label = Input("Nome del calendario", "CalendarSourceName");
-        var url = new PasswordBox { Header = "Indirizzo HTTPS o webcal" };
+        var existing = source.ValueKind == JsonValueKind.Object;
+        var label = Input("Nome del calendario", "CalendarSourceName", source.Text("label", "Calendario lezioni"));
+        var url = new PasswordBox { Header = "Link Google Calendar, HTTPS o webcal", Password = source.Text("url") };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(url, "CalendarSourceUrl");
-        var zone = Input("Fuso del calendario (IANA)", "CalendarSourceTimezone", LocalTimeZone());
-        var start = Input("Da (AAAA-MM-GG)", "CalendarSourceFrom", DateOnly.FromDateTime(DateTime.Today).ToString("yyyy-MM-dd"));
-        var end = Input("Fino a (AAAA-MM-GG)", "CalendarSourceTo", DateOnly.FromDateTime(DateTime.Today.AddMonths(12)).ToString("yyyy-MM-dd"));
-        var mappings = Input("Associazioni «testo = corso = prima lezione» (facoltative)", "CalendarSourceMappings");
+        var timezone = source.Text("timezone", LocalTimeZone());
+        var zone = Input("Fuso del calendario (IANA)", "CalendarSourceTimezone", timezone);
+        var start = Input("Da (AAAA-MM-GG)", "CalendarSourceFrom", CalendarPeriodDate(source.Text("periodStart"), timezone, DateTime.Today));
+        var end = Input("Fino a (AAAA-MM-GG)", "CalendarSourceTo", CalendarPeriodDate(source.Text("periodEnd"), timezone, DateTime.Today.AddDays(120), exclusive: true));
+        const string allTimed = "Tutti gli eventi con orario";
+        const string mappedOnly = "Solo gli eventi associati";
+        var mode = Options("Importa", "CalendarSourceMode", [allTimed, mappedOnly], source.Text("importMode") == "mapped" ? mappedOnly : allTimed);
+        var rulesText = string.Join(Environment.NewLine, source.Items("mappings").Select(rule => string.Join(" = ",
+            new[] { rule.Text("match"), rule.Text("courseCode"), rule.Text("firstLesson") }.Where(value => value.Length > 0))));
+        var mappings = Input("Associazioni «testo = corso = prima lezione»", "CalendarSourceMappings", rulesText);
         mappings.AcceptsReturn = true;
-        if (!await DialogAsync("Collega calendario iCal", Column(label, url, zone, start, end, mappings), "Collega"))
+        if (!await DialogAsync(existing ? "Correggi collegamento" : "Collega calendario iCal", Column(label, url, zone, start, end, mode, mappings), existing ? "Verifica e salva" : "Collega"))
             return;
         if (!Uri.TryCreate(url.Password.Trim(), UriKind.Absolute, out var address) || address.Scheme is not ("https" or "webcal")
             || !DateOnly.TryParseExact(start.Text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var first)
             || !DateOnly.TryParseExact(end.Text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var last)
-            || first > last)
-            throw new BackendException("Indica un indirizzo HTTPS o webcal e un intervallo di date valido.");
+            || first > last || last == DateOnly.MaxValue)
+            throw new BackendException("Indica un link HTTPS o webcal e un intervallo di date valido.");
+        var mapped = Selected(mode) == mappedOnly;
         var rules = new List<object>();
         foreach (var line in mappings.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var pair = line.Split('=', 3, StringSplitOptions.TrimEntries);
-            if (pair.Length != 3 || pair.Any(string.IsNullOrWhiteSpace) || !int.TryParse(pair[2], out var firstLesson) || firstLesson is < 1 or > 999)
+            if (pair.Length < 2 || pair.Any(string.IsNullOrWhiteSpace))
                 throw new BackendException("Scrivi ogni associazione nel formato «testo = corso = prima lezione».");
-            rules.Add(new { match = pair[0], courseCode = pair[1], firstLesson });
+            if (pair.Length == 2 && !mapped)
+                rules.Add(new { match = pair[0], courseCode = pair[1] });
+            else if (pair.Length == 3 && int.TryParse(pair[2], out var firstLesson) && firstLesson is >= 1 and <= 999)
+                rules.Add(new { match = pair[0], courseCode = pair[1], firstLesson });
+            else
+                throw new BackendException("Indica una prima lezione da 1 a 999 per l’associazione.");
         }
-        var sourceId = Guid.NewGuid().ToString("N");
-        await RequestAsync("Calendario collegato.", ["capture", "connect"], new
+        if (mapped && rules.Count == 0)
+            throw new BackendException("Aggiungi almeno un’associazione per importare solo gli eventi associati.");
+        await RequestAsync(existing ? "Collegamento calendario aggiornato." : "Calendario collegato.", ["capture", "connect"], new
         {
-            sourceID = sourceId, label = label.Text.Trim(), url = url.Password.Trim(), timezone = zone.Text.Trim(),
-            periodStart = first.ToString("yyyy-MM-dd"), periodEnd = last.ToString("yyyy-MM-dd"),
-            importMode = rules.Count == 0 ? "all_timed" : "mapped", mappings = rules,
+            sourceID = source.Text("sourceID", Guid.NewGuid().ToString("N")), label = label.Text.Trim(), url = url.Password.Trim(), timezone = zone.Text.Trim(),
+            periodStart = first.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            periodEnd = last.AddDays(1).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
+            importMode = mapped ? "mapped" : "all_timed", mappings = rules,
         });
+    }
+
+    private static string CalendarPeriodDate(string value, string timezone, DateTime fallback, bool exclusive = false)
+    {
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.None, out var instant)
+            || !TimeZoneInfo.TryFindSystemTimeZoneById(timezone, out var zone))
+            return fallback.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var boundary = TimeZoneInfo.ConvertTime(exclusive ? instant.AddTicks(-1) : instant, zone);
+        return boundary.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
     private static string LocalTimeZone() => TimeZoneInfo.TryConvertWindowsIdToIanaId(TimeZoneInfo.Local.Id, out var timezone)

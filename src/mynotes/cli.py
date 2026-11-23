@@ -32,7 +32,7 @@ from .ingestion import IngestionError, discover_recordings, recording_for_lectur
 from .sourcepack import SourcePackError, build_source_pack
 from .migration import MigrationError, apply_manifest, build_manifest, load_manifest, save_manifest
 from .integrations import IntegrationError, install_integration
-from .chat import ChatError, launch_chat
+from .chat import ChatError, launch_chat, login_provider
 from .publication import (
     PublicationError,
     build_word_candidate,
@@ -499,6 +499,8 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("--workspace", help="private workspace path")
     chat.add_argument("--provider", help="configured provider")
     chat.add_argument("message", nargs="?", help="optional natural-language request")
+    login = subparsers.add_parser("provider-login", help="open the selected agent's sign-in flow")
+    login.add_argument("--provider", choices=("codex", "agy", "claude"), required=True)
     return parser
 
 
@@ -1224,6 +1226,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             workspace = _workspace(arguments)
             configuration = workspace.configuration_store().load()
             return launch_chat(workspace, configuration, arguments.provider, arguments.message)
+        if arguments.command == "provider-login":
+            return login_provider(arguments.provider)
         if arguments.command == "doctor":
             from .onboarding import doctor
             workspace = Workspace.from_value(arguments.workspace)
