@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import base64
-import hashlib
+import http.client
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from . import file_lock
 from .utils import atomic_json_write, file_sha256
@@ -41,6 +42,28 @@ def model_directory() -> Path:
     return runtime_home() / "speech-models" / "whisper.cpp"
 
 
+def _download_model_part(staging: Path) -> None:
+    offset = staging.stat().st_size if staging.is_file() else 0
+    headers = {"Range": f"bytes={offset}-"} if offset else {}
+    with urlopen(Request(MODEL_URL, headers=headers), timeout=60) as source:
+        if source.status == 206:
+            expected_range = f"bytes {offset}-{MODEL_SIZE - 1}/{MODEL_SIZE}"
+            if not offset or source.headers.get("Content-Range") != expected_range:
+                staging.unlink(missing_ok=True)
+                raise ValueError("The model server returned an unexpected byte range.")
+        elif source.status == 200:
+            offset = 0
+        else:
+            raise ValueError(f"The model server returned HTTP {source.status}.")
+        with staging.open("ab" if offset else "wb") as target:
+            size = offset
+            while chunk := source.read(1024 * 1024):
+                size += len(chunk)
+                if size > MODEL_SIZE:
+                    raise ValueError("The speech model download exceeded its expected size.")
+                target.write(chunk)
+
+
 def install_default_model() -> Path:
     directory = model_directory()
     directory.mkdir(parents=True, exist_ok=True)
@@ -54,25 +77,29 @@ def install_default_model() -> Path:
             return model
         if model.exists():
             raise ValueError(f"Unexpected model at {model}. Move it aside before downloading the verified default.")
-        if shutil.disk_usage(directory).free < MODEL_SIZE:
+        staging = model.with_suffix(".download")
+        if staging.is_symlink() or (staging.exists() and not staging.is_file()):
+            raise ValueError("The speech model download path is occupied.")
+        remaining = MODEL_SIZE - (staging.stat().st_size if staging.exists() else 0)
+        if remaining < 0:
+            staging.unlink()
+            remaining = MODEL_SIZE
+        if shutil.disk_usage(directory).free < remaining:
             raise ValueError("The speech model needs at least 1.63 GB of free disk space.")
-        with tempfile.TemporaryDirectory(prefix="download-", dir=directory) as temporary:
-            staging = Path(temporary) / model.name
-            digest = hashlib.sha256()
-            size = 0
+        for attempt in range(3):
+            if staging.is_file() and staging.stat().st_size == MODEL_SIZE:
+                break
             try:
-                with urlopen(MODEL_URL, timeout=60) as source, staging.open("xb") as target:
-                    while chunk := source.read(1024 * 1024):
-                        size += len(chunk)
-                        if size > MODEL_SIZE:
-                            raise ValueError("The speech model download exceeded its expected size.")
-                        digest.update(chunk)
-                        target.write(chunk)
-            except URLError as error:
-                raise ValueError(f"Speech model download failed: {error.reason}") from error
-            if size != MODEL_SIZE or digest.hexdigest() != MODEL_SHA256:
-                raise ValueError("The speech model download did not match its expected checksum.")
-            staging.replace(model)
+                _download_model_part(staging)
+            except (URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as error:
+                if attempt == 2:
+                    raise ValueError("The speech model download was interrupted. Retry to resume it.") from error
+        if not staging.is_file() or staging.stat().st_size != MODEL_SIZE:
+            raise ValueError("The speech model download is incomplete. Retry to resume it.")
+        if file_sha256(staging) != MODEL_SHA256:
+            staging.unlink()
+            raise ValueError("The speech model download did not match its expected checksum.")
+        staging.replace(model)
     return model
 
 
@@ -129,7 +156,7 @@ try {
 
 def verify_transcription(executable: str, model_dir: Path, *, model: str = DEFAULT_MODEL,
                          audio: Path | None = None, language: str = "en") -> dict:
-    from .asr import WhisperCppEngine, normalize_audio
+    from .asr import WhisperCppEngine, audio_duration, normalize_audio
     if audio is None and language != "en":
         raise ValueError("Supply a short audio sample to verify a language other than English.")
     weights = model_dir / f"ggml-{model}.bin"
@@ -143,15 +170,20 @@ def verify_transcription(executable: str, model_dir: Path, *, model: str = DEFAU
             _generate_spoken_test(normalized)
         else:
             normalize_audio(audio, normalized)
+        duration = audio_duration(normalized)
+        started = time.monotonic()
         result = WhisperCppEngine(executable, model_dir).transcribe(
             normalized, root, model=model, language=language, vocabulary=[], prompt="",
         )
+        elapsed = time.monotonic() - started
         words = " ".join(segment["text"] for segment in result.segments).casefold()
         if not words.strip() or (audio is None and not {"audio", "study"}.issubset(words.split())):
             raise ValueError("The local engine did not recognize the expected speech sample.")
         if _identity(executable, weights) != signature:
             raise ValueError("The local speech engine or model changed during validation.")
     proof = {"identity": signature, "transcription": True, "model": model,
-             "language": result.language, "segments": len(result.segments)}
+             "language": result.language, "segments": len(result.segments),
+             "engine_seconds": round(elapsed, 3), "audio_seconds": duration,
+             "first_segment_start": result.segments[0]["start"], "last_segment_end": result.segments[-1]["end"]}
     atomic_json_write(_proof_path(), proof)
     return proof

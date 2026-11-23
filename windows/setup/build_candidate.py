@@ -35,7 +35,7 @@ def publish(project: Path, destination: Path, *properties: str) -> None:
         "--output", destination, *properties)
 
 
-def stage_runtime(build: Path, stage: Path) -> None:
+def stage_runtime(build: Path, stage: Path, version: str) -> None:
     distributions = build / "python"
     env = dict(os.environ, UV_PYTHON_INSTALL_DIR=str(distributions))
     env.pop("VIRTUAL_ENV", None)
@@ -60,7 +60,7 @@ def stage_runtime(build: Path, stage: Path) -> None:
         "--require-hashes", "--no-deps", "-r", requirements)
     run("uv", "pip", "install", "--python", python, "--target", lib, "--no-deps", wheel)
     publish(ROOT / "windows/launcher/MyNotes.Cli.csproj", build / "launcher",
-            "-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true")
+            "-p:PublishSingleFile=true", "-p:EnableCompressionInSingleFile=true", f"-p:Version={version}")
     shutil.copyfile(build / "launcher/mynotes.exe", runtime / "mynotes.exe")
     # Smoke test using the copied runtime, not the development venv.
     run(runtime / "mynotes.exe", "--version")
@@ -142,10 +142,11 @@ def build_candidate(args: argparse.Namespace) -> Path:
         stage = build / "stage"
         stage.mkdir()
         print("Building the WinUI desktop and Capture worker.", flush=True)
-        publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop", "-p:Platform=x64")
-        publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture")
+        publish(ROOT / "windows/desktop/MyNotes.Desktop.csproj", stage / "desktop",
+                "-p:Platform=x64", f"-p:Version={version}")
+        publish(ROOT / "windows/capture/MyNotes.Capture.csproj", stage / "capture", f"-p:Version={version}")
         print("Staging standalone Python and locked dependencies.", flush=True)
-        stage_runtime(build, stage)
+        stage_runtime(build, stage, version)
         print("Checking the bundled office and speech applications.", flush=True)
         stage_office(build, stage, args.libreoffice_msi, args.lessmsi_zip)
         stage_whisper(stage, args.whisper_zip, args.whisper_license)

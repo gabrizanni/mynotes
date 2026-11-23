@@ -111,6 +111,8 @@ jobs:
           $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
           & "$env:MYNOTES_INSTALLED_APP/runtime/mynotes.exe" verify-word-renderer --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:MYNOTES_TEST_SOFFICE = Join-Path $env:MYNOTES_INSTALLED_APP 'office/program/soffice.com'
+          uv run --locked pytest tests/test_office_windows.py
 
       - name: Verify installed Whisper, Sherpa and TXT export
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -129,7 +131,13 @@ jobs:
           curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' --output $env:MYNOTES_TEST_WAV
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ((Get-FileHash $env:MYNOTES_TEST_WAV).Hash -ne '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e') { throw 'Speech sample checksum mismatch' }
-          & "$app/runtime/python.exe" -I -c "import os; from pathlib import Path; from mynotes.windows_speech import model_directory, verify_transcription, whisper_executable; proof = verify_transcription(whisper_executable(), model_directory(), audio=Path(os.environ['MYNOTES_TEST_WAV']), model='tiny'); print(proof['segments'])"
+          & "$app/runtime/python.exe" -I windows/setup/smoke_speech.py --audio $env:MYNOTES_TEST_WAV --language en
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $italianSample = Join-Path $env:RUNNER_TEMP 'italian-librivox.mp3'
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 90 'https://archive.org/download/divina_commedia_inferno_2302_librivox/divinacommedialinferno_01_alighieri_128kb.mp3' --output $italianSample
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $italianSample).Hash -ne 'c1ceba6ec4b2e02e0be1de68d2251a79705daf82d4a4bcf5e5809bed0d2b38d4') { throw 'Italian speech sample checksum mismatch' }
+          & "$app/runtime/python.exe" -I windows/setup/smoke_speech.py --audio $italianSample --language it --excerpt-seconds 40
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $dialogue = Join-Path $env:RUNNER_TEMP 'two-speakers-en.wav'
           $speakers = Join-Path $env:RUNNER_TEMP 'speaker-test.json'

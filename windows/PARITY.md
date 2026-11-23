@@ -39,9 +39,12 @@ same candidate commit and both Windows and macOS CI checks are green.
   and on the shared Italian and English comparison set before marking this row.
 - The installed macOS 0.4 reference used Argmax/WhisperKit
   `large-v3-v20240930_626MB` to transcribe the 11.00 s public JFK fixture in
-  2.04 s and the 5.09 s Italian system-voice fixture in 1.73 s. These are
-  individual engine calls on the development Mac. Record the Windows timings
-  for the same samples and the longer lesson fixtures separately.
+  2.04 s and the first 40.00 s of [Filippo Gioachin's LibriVox reading of
+  Inferno, Primo Canto](https://librivox.org/la-divina-commedia-linferno-by-dante-alighieri/)
+  in 4.55 s. These are individual engine calls on the development Mac.
+  The Windows installer smoke test logs timestamp bounds and engine times for
+  those same public inputs with Whisper tiny. Use the default Windows model
+  and longer lesson fixtures for desktop acceptance.
 
 ## Interactive Windows acceptance
 
