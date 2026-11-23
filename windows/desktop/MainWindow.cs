@@ -30,7 +30,7 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
-        InitializeComponent();
+        BuildLayout();
         Title = "MyNotes";
         AppWindow.Resize(new SizeInt32(1100, 780));
         var iconPath = Path.Combine(AppContext.BaseDirectory, "MyNotes.ico");
