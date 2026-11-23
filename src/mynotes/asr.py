@@ -768,6 +768,30 @@ class WhisperCppEngine:
                 raise ValueError("Invalid detected language")
         except (OSError, ValueError, TypeError, KeyError, AttributeError) as error:
             raise ASRError("Whisper.cpp did not produce a valid transcription report") from error
+        # The upstream decoder can emit a subtitle phrase beyond EOF after
+        # near-digital silence. Reject only an emission wholly unsupported by
+        # the remaining PCM samples. Keep the upstream JSON and the evidence.
+        duration = audio_duration(audio)
+        if segments and duration is not None and segments[-1]["end"] > duration + 0.5:
+            last = segments[-1]
+            with wave.open(str(audio), "rb") as samples:
+                duration = samples.getnframes() / samples.getframerate()
+                if (samples.getsampwidth() == 2 and samples.getnchannels() == 1
+                        and 0 <= last["start"] < duration - 0.25 and last["end"] > duration + 0.5
+                        and all(segment["end"] <= last["start"] for segment in segments[:-1])):
+                    import array
+                    samples.setpos(math.floor(last["start"] * samples.getframerate()))
+                    tail = array.array("h", samples.readframes(samples.getnframes() - samples.tell()))
+                    if sys.byteorder != "little":
+                        tail.byteswap()
+                    peak = max((abs(value) for value in tail), default=32768)
+                    if peak <= 1:
+                        atomic_json_write(prefix.with_suffix(".silence.json"), {
+                            "rejected_segment": last, "audio_sha256": file_sha256(audio),
+                            "audio_seconds": duration, "tail_peak_pcm16": peak,
+                            "reason": "Out-of-range terminal emission over near-digital silence",
+                        })
+                        segments.pop()
         version = "sha256:" + file_sha256(Path(self.executable))
         return EngineResult(self.name, model, version, parse_asr_payload(segments),
                             timestamp_mode=self.timestamp_mode, language=detected)
