@@ -19,6 +19,8 @@ public sealed partial class MainWindow : Window
     private Backend? backend;
     private bool running;
     private bool heartbeatRunning;
+    private Func<Task>? refreshVisiblePage;
+    private long nextPageRefresh;
     private string section = "library";
     private string libraryQuery = "";
     private string libraryCourse = "";
@@ -71,6 +73,11 @@ public sealed partial class MainWindow : Window
         try
         {
             await Engine.RunAsync(["transcription-queue", "heartbeat", "--session", queueSession], Token);
+            if (!running && refreshVisiblePage is { } refresh && Environment.TickCount64 >= nextPageRefresh)
+            {
+                nextPageRefresh = Environment.TickCount64 + 15_000;
+                await refresh();
+            }
         }
         catch (OperationCanceledException) { }
         catch (BackendException) { }
@@ -157,6 +164,8 @@ public sealed partial class MainWindow : Window
 
     private async Task DisplayPageAsync()
     {
+        refreshVisiblePage = null;
+        nextPageRefresh = Environment.TickCount64 + 15_000;
         Page.Children.Clear();
         PageScroll.ChangeView(null, 0, null, disableAnimation: true);
         PageTitle.Text = section switch
@@ -282,6 +291,11 @@ public sealed partial class MainWindow : Window
         result.RequireSuccess();
         return result.RequireJson();
     }
+
+    private static bool FieldsChanged(JsonElement before, JsonElement after, params string[] fields) => fields.Any(field =>
+        Fingerprint(before.Field(field)) != Fingerprint(after.Field(field)));
+
+    private static string Fingerprint(JsonElement value) => value.ValueKind == JsonValueKind.Undefined ? "" : value.GetRawText();
 
     private async Task ExecuteAsync(string done, params string[] command) =>
         await CompleteAsync(await Engine.JsonAsync(command, Token), done);

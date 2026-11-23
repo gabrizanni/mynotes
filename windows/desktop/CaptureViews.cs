@@ -10,9 +10,43 @@ public sealed partial class MainWindow
     private async Task CalendarAsync()
     {
         var capture = await ReadAsync("capture", "dashboard");
+        var capturePanel = new ContentControl { Content = CapturePanel(capture), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        Page.Children.Add(capturePanel);
+
+        var month = calendarDate.ToString("MMMM yyyy", CultureInfo.CurrentCulture);
+        var picker = new DatePicker { Header = "Vai a una data", Date = new DateTimeOffset(calendarDate.ToDateTime(new TimeOnly(12, 0))) };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(picker, "CalendarDate");
+        Page.Children.Add(Card(month, picker, Actions(
+            ButtonFor("Mese precedente", "CalendarPrevious", () => ChangeMonthAsync(calendarDate.AddMonths(-1))),
+            ButtonFor("Oggi", "CalendarToday", () => ChangeMonthAsync(DateOnly.FromDateTime(DateTime.Today))),
+            ButtonFor("Mese successivo", "CalendarNext", () => ChangeMonthAsync(calendarDate.AddMonths(1))),
+            ButtonFor("Vai alla data", "CalendarGoTo", () => ChangeMonthAsync(DateOnly.FromDateTime(picker.Date.LocalDateTime))))));
+
+        var entries = new ContentControl { Content = CalendarEntries(capture), HorizontalContentAlignment = HorizontalAlignment.Stretch };
+        Page.Children.Add(entries);
+        refreshVisiblePage = RefreshCalendarAsync;
+
+        async Task RefreshCalendarAsync()
+        {
+            var updated = await ReadAsync("capture", "dashboard");
+            if (running || refreshVisiblePage != (Func<Task>)RefreshCalendarAsync)
+                return;
+            var oldRuntime = capture.Field("runtime");
+            var runtime = updated.Field("runtime");
+            if (FieldsChanged(capture, updated, "configured", "enabled", "running", "paused", "courses", "standaloneSupported", "sources")
+                || FieldsChanged(oldRuntime, runtime, "recording", "exporting", "sessions"))
+                capturePanel.Content = CapturePanel(updated);
+            if (FieldsChanged(capture, updated, "events", "sources", "courses", "standaloneSupported"))
+                entries.Content = CalendarEntries(updated);
+            capture = updated;
+        }
+    }
+
+    private StackPanel CapturePanel(JsonElement capture)
+    {
         var runtime = capture.Field("runtime");
         var codes = CourseCodes(capture);
-        var sourceRows = capture.Items("sources").ToArray();
+        var panel = Column();
         var status = capture.Field("running").ValueKind switch
         {
             JsonValueKind.True => runtime.Flag("recording") ? "Registrazione in corso" : runtime.Flag("exporting") ? "Esportazione in corso" : "Capture in esecuzione",
@@ -47,11 +81,11 @@ public sealed partial class MainWindow
         }
         controls.Add(ButtonFor("Collega calendario", "CalendarConnect", () => ConnectCalendarAsync()));
         controls.Add(ButtonFor("Importa orario JSON", "CalendarImport", ImportTimetableAsync));
-        if (sourceRows.Length > 0)
+        if (capture.Items("sources").Any())
             controls.Add(ButtonFor("Sincronizza", "CalendarSync", () => ExecuteAsync("Richiesta di sincronizzazione elaborata.", "capture", "sync")));
         if (codes.Length > 0 || capture.Flag("standaloneSupported"))
             controls.Add(ButtonFor("Programma lezione", "CalendarAdd", () => EditEventAsync(default, codes, capture.Flag("standaloneSupported"))));
-        Page.Children.Add(Card("Capture", Label(status), Actions(controls.ToArray())));
+        panel.Children.Add(Card("Capture", Label(status), Actions(controls.ToArray())));
 
         var sessions = runtime.Items("sessions").ToArray();
         foreach (var session in sessions.Where(item => item.Text("status") is "INTERRUPTED" or "FAILED" or "RECOVERABLE" || item.Flag("isTest")).Take(6))
@@ -71,18 +105,17 @@ public sealed partial class MainWindow
                             await ExecuteAsync("Prova microfono confermata.", "capture", "confirm-test", "--audio", output, "--audible-confirmed");
                     }));
             }
-            Page.Children.Add(Card(session.Flag("isTest") ? "Prova microfono" : session.Field("event").Text("title", "Registrazione"),
+            panel.Children.Add(Card(session.Flag("isTest") ? "Prova microfono" : session.Field("event").Text("title", "Registrazione"),
                 Label(Join(sessionStatus, DisplayDate(session.Text("actualStart")))), Actions(sessionActions.ToArray())));
         }
+        return panel;
+    }
 
-        var month = calendarDate.ToString("MMMM yyyy", CultureInfo.CurrentCulture);
-        var picker = new DatePicker { Header = "Vai a una data", Date = new DateTimeOffset(calendarDate.ToDateTime(new TimeOnly(12, 0))) };
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetAutomationId(picker, "CalendarDate");
-        Page.Children.Add(Card(month, picker, Actions(
-            ButtonFor("Mese precedente", "CalendarPrevious", () => ChangeMonthAsync(calendarDate.AddMonths(-1))),
-            ButtonFor("Oggi", "CalendarToday", () => ChangeMonthAsync(DateOnly.FromDateTime(DateTime.Today))),
-            ButtonFor("Mese successivo", "CalendarNext", () => ChangeMonthAsync(calendarDate.AddMonths(1))),
-            ButtonFor("Vai alla data", "CalendarGoTo", () => ChangeMonthAsync(DateOnly.FromDateTime(picker.Date.LocalDateTime))))));
+    private StackPanel CalendarEntries(JsonElement capture)
+    {
+        var panel = Column();
+        var codes = CourseCodes(capture);
+        var sourceRows = capture.Items("sources").ToArray();
         var visibleEvents = capture.Items("events").Select(item =>
         {
             var hasDate = DateTimeOffset.TryParse(item.Text("startsAt"), out var start);
@@ -91,17 +124,18 @@ public sealed partial class MainWindow
             .GroupBy(item => item.Date!.Value).OrderBy(item => item.Key).ToArray();
 
         if (visibleEvents.Length == 0)
-            Page.Children.Add(Label("Nessuna lezione programmata per questo mese."));
+            panel.Children.Add(Label("Nessuna lezione programmata per questo mese."));
         foreach (var day in visibleEvents)
         {
-            Page.Children.Add(Label(day.Key.ToString("D", CultureInfo.CurrentCulture), heading: true));
+            panel.Children.Add(Label(day.Key.ToString("D", CultureInfo.CurrentCulture), heading: true));
             foreach (var (eventItem, _) in day.OrderBy(item => item.Item.Text("startsAt")))
-                Page.Children.Add(CalendarCard(eventItem, codes, capture.Flag("standaloneSupported")));
+                panel.Children.Add(CalendarCard(eventItem, codes, capture.Flag("standaloneSupported")));
         }
         if (sourceRows.Length > 0)
-            Page.Children.Add(Label("Calendari collegati", heading: true));
+            panel.Children.Add(Label("Calendari collegati", heading: true));
         foreach (var source in sourceRows)
-            Page.Children.Add(CalendarSourceCard(source));
+            panel.Children.Add(CalendarSourceCard(source));
+        return panel;
     }
 
     private Task ChangeMonthAsync(DateOnly date)

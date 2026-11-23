@@ -16,17 +16,18 @@ public sealed partial class MainWindow
             jobCourse.Length == 0 ? "Tutti i corsi" : jobCourse);
         var idle = queue.Flag("paused");
         var parallel = Options("Trascrizioni simultanee", "QueueParallel", ["1", "2", "3", "4"], queue.Text("parallel", "1"));
-        var waiting = queue.Text("wait_reason");
-        Page.Children.Add(Card("Coda di trascrizione", Label(idle ? "In pausa" : "Attiva"),
-            Label(waiting), filteredCourse, parallel, Actions(
+        var state = Label(idle ? "In pausa" : "Attiva");
+        var waiting = Label(queue.Text("wait_reason"));
+        var pause = ButtonFor(idle ? "Riprendi coda" : "Sospendi coda", "QueuePause", () =>
+            ExecuteAsync(idle ? "Coda ripresa." : "Coda sospesa.", "transcription-queue", idle ? "resume" : "pause"));
+        Page.Children.Add(Card("Coda di trascrizione", state, waiting, filteredCourse, parallel, Actions(
                 ButtonFor("Applica filtro", "ActivityFilter", async () =>
                 {
                     jobCourse = Selected(filteredCourse) == "Tutti i corsi" ? "" : Selected(filteredCourse);
                     await DisplayPageAsync();
                 }),
                 ButtonFor("Salva limite", "QueueParallelSave", () => ExecuteAsync("Limite della coda salvato.", "transcription-queue", "configure", "--parallel", Selected(parallel))),
-                ButtonFor(idle ? "Riprendi coda" : "Sospendi coda", "QueuePause", () =>
-                    ExecuteAsync(idle ? "Coda ripresa." : "Coda sospesa.", "transcription-queue", idle ? "resume" : "pause")),
+                pause,
                 ButtonFor("Accoda audio pronti", "QueueEnqueueBatch", EnqueueReadyAsync, primary: true),
                 ButtonFor("Rimuovi in attesa", "QueueClear", async () =>
                 {
@@ -34,15 +35,35 @@ public sealed partial class MainWindow
                         await ExecuteAsync("Coda in attesa svuotata.", "transcription-queue", "clear");
                 }))));
 
-        var jobs = queue.Items("jobs").Concat(queue.Items("history_events"))
-            .Where(item => jobCourse.Length == 0 || item.Text("course_code") == jobCourse).ToArray();
-        if (jobs.Length == 0)
+        var jobList = Column();
+        Page.Children.Add(jobList);
+        RenderJobs(queue);
+        refreshVisiblePage = RefreshActivityAsync;
+
+        void RenderJobs(JsonElement snapshot)
         {
-            Page.Children.Add(Label("Nessuna attività di trascrizione per il filtro selezionato."));
-            return;
+            var jobs = snapshot.Items("jobs").Concat(snapshot.Items("history_events"))
+                .Where(item => jobCourse.Length == 0 || item.Text("course_code") == jobCourse).ToArray();
+            jobList.Children.Clear();
+            if (jobs.Length == 0)
+                jobList.Children.Add(Label("Nessuna attività di trascrizione per il filtro selezionato."));
+            foreach (var job in jobs)
+                jobList.Children.Add(JobCard(job));
         }
-        foreach (var job in jobs)
-            Page.Children.Add(JobCard(job));
+
+        async Task RefreshActivityAsync()
+        {
+            var updated = await ReadAsync("transcription-queue", "status");
+            if (running || refreshVisiblePage != (Func<Task>)RefreshActivityAsync)
+                return;
+            idle = updated.Flag("paused");
+            state.Text = idle ? "In pausa" : "Attiva";
+            waiting.Text = updated.Text("wait_reason");
+            pause.Content = idle ? "Riprendi coda" : "Sospendi coda";
+            if (FieldsChanged(queue, updated, "jobs", "history_events"))
+                RenderJobs(updated);
+            queue = updated;
+        }
     }
 
     private async Task EnqueueReadyAsync()
@@ -112,7 +133,7 @@ public sealed partial class MainWindow
                     await ExecuteAsync("Azione sulla coda elaborata.", "transcription-queue", action, "--job", id);
             }));
         }
-        var output = job.Text("export_text", job.Field("result").Text("transcript_text"));
+        var output = job.Text("export_text", job.Field("outputs").Text("transcript_text"));
         if (output.Length > 0)
             actions.Add(ButtonFor("Apri TXT", "QueueOutput", () => OpenLocalAsync(output)));
         var diagnosis = job.Text("diagnostic_path");

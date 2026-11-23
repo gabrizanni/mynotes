@@ -119,7 +119,7 @@ try {
     [IO.File]::WriteAllText($sourcePath, $source)
     & $runtime -X utf8 -m mynotes capture subscribe --file $sourcePath --workspace $workspace --json
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the synthetic calendar.' }
-    Invoke-Control (Find-ById 'Refresh')
+    # The source was added externally while this Calendar page was already open.
     Invoke-Control (Find-ById 'CalendarSourceRepair')
     $endField = Find-ById 'CalendarSourceTo'
     if ($endField.GetCurrentPattern([Windows.Automation.ValuePattern]::Pattern).Current.Value -ne '2030-06-30') {
@@ -134,7 +134,12 @@ try {
     } 'the Calendar repair dialog to close'
 
     Invoke-Control (Find-ById 'NavActivity')
-    $null = Find-ById 'QueuePause'
+    $pause = Find-ById 'QueuePause'
+    & $runtime -X utf8 -m mynotes transcription-queue pause --workspace $workspace --json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not prepare a queue status change.' }
+    $null = Wait-Until {
+        if ($pause.Current.Name -eq 'Riprendi coda') { $true }
+    } 'the Activity page to reflect the external queue pause'
     & $runtime -X utf8 -m mynotes transcription-queue configure --parallel 2 --workspace $workspace --json
     if ($LASTEXITCODE -ne 0) { throw 'Could not prepare the transcription preference.' }
     Invoke-Control (Find-ById 'NavSettings')
