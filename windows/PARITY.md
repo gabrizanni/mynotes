@@ -42,8 +42,10 @@ same candidate commit and both Windows and macOS CI checks are green.
   2.04 s and the first 40.00 s of [Filippo Gioachin's LibriVox reading of
   Inferno, Primo Canto](https://librivox.org/la-divina-commedia-linferno-by-dante-alighieri/)
   in 4.55 s. These are individual engine calls on the development Mac.
-  The Windows installer smoke test logs timestamp bounds and engine times for
-  those same public inputs with Whisper tiny. Use the default Windows model
+  On the [Windows runner](https://github.com/gabrizanni/mynotes/actions/runs/45115994661),
+  Whisper tiny transcribed those inputs in 1.50 s and 4.77 s and reported final
+  timestamps of 10.50 s and 40.08 s. The Mac reported 11.00 s and 40.00 s.
+  The runs used different hardware and models. Use the default Windows model
   and longer lesson fixtures for desktop acceptance.
 
 ## Interactive Windows acceptance

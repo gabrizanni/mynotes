@@ -112,7 +112,6 @@ try {
     $null = Find-ById 'SettingsProvider'
     $null = Find-ById 'SettingsWordVerify'
 
-    'Desktop UI smoke test passed.'
 } catch {
     if (Test-Path -LiteralPath $trace) {
         Get-Content -LiteralPath $trace
@@ -128,13 +127,25 @@ try {
 } finally {
     if ($null -ne $process -and -not $process.HasExited) {
         $null = $process.CloseMainWindow()
-        if (-not $process.WaitForExit(6000)) { $process.Kill() }
+        if (-not $process.WaitForExit(6000)) {
+            $process.Kill()
+            $null = $process.WaitForExit(3000)
+        }
     }
     $env:MYNOTES_WORKSPACE = $oldWorkspace
     $env:MYNOTES_PYTHON = $oldPython
     $env:MYNOTES_DESKTOP_TEST_TRACE = $oldTrace
     Remove-Item -LiteralPath $trace -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath $workspace) {
-        Remove-Item -LiteralPath $workspace -Recurse -Force
+    # The closing window may leave a short-lived Python child holding the
+    # workspace as its current directory. Wait for that handle before removal.
+    for ($attempt = 0; (Test-Path -LiteralPath $workspace); $attempt++) {
+        try {
+            Remove-Item -LiteralPath $workspace -Recurse -Force -ErrorAction Stop
+        } catch [IO.IOException] {
+            if ($attempt -ge 24) { throw }
+            Start-Sleep -Milliseconds 250
+        }
     }
 }
+
+'Desktop UI smoke test passed.'
