@@ -17,6 +17,7 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON_VERSION = "3.12.14"
 LIBREOFFICE_SHA256 = "0e6918c273eabbdbbd800ee0dacbbf130a14c13c2e4cec861b06dd59e015bf94"
+LESSMSI_SHA256 = "5b4e187e74b184ad3a63ccf06c3d17dae2b8c4b6c298a996dbd51a9f6db29d21"
 WHISPER_ARCHIVE_SHA256 = "6ba69e3482d7826214f90a6a9c84ca07782aec1e1d0c6a7c30c994fd5d816ccb"
 WHISPER_LICENSE_SHA256 = "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
 SEGMENTATION_ARCHIVE_SHA256 = "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488"
@@ -72,11 +73,17 @@ def verify_input(path: Path, digest: str) -> None:
             raise ValueError(f"{path.name} checksum mismatch")
 
 
-def stage_office(build: Path, stage: Path, msi: Path) -> None:
+def stage_office(build: Path, stage: Path, msi: Path, extractor: Path) -> None:
     verify_input(msi, LIBREOFFICE_SHA256)
+    verify_input(extractor, LESSMSI_SHA256)
+    tool_dir = build / "lessmsi"
+    with ZipFile(extractor) as package:
+        package.extractall(tool_dir)
+    tool, = tool_dir.rglob("lessmsi.exe")
     extracted = build / "LibreOffice image"
-    msiexec = Path(os.environ["SystemRoot"]) / "System32" / "msiexec.exe"
-    run(msiexec, "/a", msi, "/qn", "/norestart", f"TARGETDIR={extracted}", timeout=180)
+    # lessmsi uses a trailing separator to distinguish the output directory
+    # from an extracted filename. It leaves Windows Installer state untouched.
+    run(tool, "x", msi, str(extracted) + os.sep, timeout=180)
     renderer, = extracted.rglob("soffice.com")
     shutil.move(renderer.parent.parent, stage / "office")
     python = stage / "runtime" / "python.exe"
@@ -140,7 +147,7 @@ def build_candidate(args: argparse.Namespace) -> Path:
         print("Staging standalone Python and locked dependencies.", flush=True)
         stage_runtime(build, stage)
         print("Checking the bundled office and speech applications.", flush=True)
-        stage_office(build, stage, args.libreoffice_msi)
+        stage_office(build, stage, args.libreoffice_msi, args.lessmsi_zip)
         stage_whisper(stage, args.whisper_zip, args.whisper_license)
         stage_diarization(stage, args.segmentation_tar, args.embedding_model, args.embedding_license)
         for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
@@ -159,6 +166,7 @@ def main() -> None:
     parser.add_argument("--iscc", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--libreoffice-msi", type=Path, required=True)
+    parser.add_argument("--lessmsi-zip", type=Path, required=True)
     parser.add_argument("--whisper-zip", type=Path, required=True)
     parser.add_argument("--whisper-license", type=Path, required=True)
     parser.add_argument("--segmentation-tar", type=Path, required=True)

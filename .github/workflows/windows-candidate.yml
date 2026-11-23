@@ -55,12 +55,15 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $out = Join-Path $env:RUNNER_TEMP 'mynotes-candidate'
           $office = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.3_Win_x86-64.msi'
+          $lessmsi = Join-Path $env:RUNNER_TEMP 'lessmsi-v2.12.9.zip'
           $whisper = Join-Path $env:RUNNER_TEMP 'whisper-bin-x64.zip'
           $whisperLicense = Join-Path $env:RUNNER_TEMP 'whisper-license.txt'
           $segmentation = Join-Path $env:RUNNER_TEMP 'speaker-segmentation.tar.bz2'
           $embedding = Join-Path $env:RUNNER_TEMP 'speaker-embedding.onnx'
           $embeddingLicense = Join-Path $env:RUNNER_TEMP 'speaker-embedding-license.txt'
           curl.exe --fail --silent --show-error --location --retry 3 'https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi' --output $office
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/activescott/lessmsi/releases/download/v2.12.9/lessmsi-v2.12.9.zip' --output $lessmsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip' --output $whisper
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -72,7 +75,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/alibaba-damo-academy/3D-Speaker/b6ea24f428a178c02b7ef9d6900569050448c8a1/LICENSE' --output $embeddingLicense
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --whisper-zip $whisper --whisper-license $whisperLicense --segmentation-tar $segmentation --embedding-model $embedding --embedding-license $embeddingLicense --output $out
+          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --lessmsi-zip $lessmsi --whisper-zip $whisper --whisper-license $whisperLicense --segmentation-tar $segmentation --embedding-model $embedding --embedding-license $embeddingLicense --output $out
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
 
