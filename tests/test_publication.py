@@ -341,3 +341,13 @@ def test_image_policy_none_rejects_old_candidate_with_included_visual(tmp_path, 
     monkeypatch.setattr("mynotes.publication._render_and_validate", fake_render)
     with pytest.raises(PublicationError, match="Image policy is none"):
         build_word_candidate(workspace, "OPS7-L01")
+
+
+def test_named_operator_and_multiline_sum_condition_remain_editable(tmp_path):
+    document = Document()
+    append_equation(document, r'\operatorname{MSE}+\lambda\sum_{i=1}^{n}|\beta_i|')
+    append_equation(document, r'\sum_{\substack{j=1\\j\ne i}}^{K}P(C_j\mid t)')
+    path=tmp_path/'operators.docx';document.save(path)
+    with zipfile.ZipFile(path) as archive:xml=archive.read('word/document.xml')
+    assert b'<m:eqArr>' in xml and b'MSE' in xml and '≠'.encode() in xml
+    assert b'MYNOTESROWSEPARATOR' not in xml and b'substack' not in xml

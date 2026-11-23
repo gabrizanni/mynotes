@@ -242,6 +242,12 @@ def revised_response(root, plan, lectures, continuity, *, preserve_manifest=True
 def certify_response(response,request,root):
     if not response.attempt_path or not Path(response.attempt_path).is_absolute():return response
     record=json.loads(Path(response.attempt_path).read_text())
+    if record.get('requested',{}).get('provider') == 'codex' and '--json' in record.get('command', []):
+        from .codex_notes import certified
+        raw = certified(record, request)
+        # Completed checkpoints contain deterministic local projection. Always
+        # reconstruct from the immutable transport before projecting again.
+        return response if raw == response.notes else replace(response, notes=raw)
     if record.get('transport') == 'agy_local_recovery_v1':
         from .local_recovery import verify_local_receipt
         raw=verify_local_receipt(Path(response.attempt_path),root)

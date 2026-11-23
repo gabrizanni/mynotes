@@ -190,6 +190,8 @@ def _packs(workspace: Workspace, lectures: list[str], *, paths=None) -> tuple[di
         source_hashes = {}
         for source in pack["sources"]:
             source_path = Path(source["path"])
+            if not source_path.is_absolute():
+                source_path = workspace.root / source_path
             if not source_path.is_file() or file_sha256(source_path) != source["sha256"]:
                 raise WorkflowError(f"Sources changed for {lecture}; prepare again before generating")
             source_hashes[source["path"]] = source["sha256"]
@@ -646,7 +648,7 @@ def _launch_check(request: ProviderRequest) -> dict:
     prompt = _prompt(request, context=context)
     command = [request.requested.provider, *provider_override_flags(request.requested)]
     if request.requested.provider == "codex":
-        command += ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", str(request.run_dir / ("x" * 64 + ".schema.json")), "--output-last-message", str(request.run_dir / ("x" * 64 + ".final.json")), prompt]
+        command += ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "--output-schema", str(request.run_dir / ("x" * 64 + ".schema.json")), "--output-last-message", str(request.run_dir / ("x" * 64 + ".final.json")), "-" if (request.batch_context or {}).get("progressive_protocol")==3 else prompt]
     else:
         schema = _agy_schema(request.response_schema) if request.requested.provider == "agy" else request.response_schema
         command += ["--print", prompt, "--output-format", "json", "--mode" if request.requested.provider == "agy" else "--permission-mode", "plan", "--no-session-persistence", "--json-schema", json.dumps(schema, ensure_ascii=False), "--add-dir", str(request.run_dir)]
@@ -1003,10 +1005,16 @@ def _validate_group(response: ProviderResponse, plan: dict, lectures: list[str],
                 continue
             local_id = plan["inventory"][canonical]["occurrences"][lecture]
             positions = placements.get(local_id, [])
-            if plan.get('risk_policy_version',1)>=4:
+            if plan.get('risk_policy_version',1)>=4 and not (plan.get('progressive_protocol')==3 and plan['requested_model']['provider']=='codex'):
                 from .note_assembly import validate_supplement
                 validate_supplement(notes,local_id,choice.get('anchor',{}))
+            if plan.get('progressive_protocol') == 3 and plan['requested_model']['provider'] == 'codex':
+                from .codex_notes import validate_supplement
+                validate_supplement(notes, local_id, local_evidence)
+                positions = [i for i,b in enumerate(notes['blocks']) if b['kind'] in NARRATIVE_KINDS
+                             and b.get('coverage_role') in {'full','supplement','new_insight'} and local_id in b['evidence_ids']]
             for direction, anchor in choice.get("anchor", {}).items():
+                if plan.get('progressive_protocol') == 3 and plan['requested_model']['provider'] == 'codex':continue
                 if plan.get('risk_policy_version',1)>=4:continue
                 anchor_positions = placements.get(anchor, [])
                 if not anchor_positions or (direction == "before" and max(positions) >= min(anchor_positions)) or (direction == "after" and min(positions) <= max(anchor_positions)):
@@ -1042,10 +1050,13 @@ def _continuity(lecture: str, notes: dict) -> dict:
 
 
 def _unchanged(plan: dict) -> None:
+    def source_path(value):
+        path = Path(value)
+        return path if path.is_absolute() else Path(plan.get('workspace_state', str(Path.cwd() / 'state'))).parent / path
     if any(not Path(path).is_file() or file_sha256(Path(path)) != digest for path, digest in plan.get('review_assets', {}).items()):
         raise WorkflowError('An inspected source-planning image changed; retained writing preserved')
     for lecture, snapshot in {**plan["sources"], **plan.get("context_sources", {}), **plan.get("prior_publications", {})}.items():
-        if file_sha256(Path(snapshot["path"])) != snapshot["sha256"] or any(not Path(path).is_file() or file_sha256(Path(path)) != digest for path, digest in {**snapshot["sources"], **snapshot["assets"], **snapshot.get("candidate", {}), **snapshot.get("published_word", {}), **snapshot.get("manifest", {})}.items()):
+        if file_sha256(Path(snapshot["path"])) != snapshot["sha256"] or any(not source_path(path).is_file() or file_sha256(source_path(path)) != digest for path, digest in {**snapshot["sources"], **snapshot["assets"], **snapshot.get("candidate", {}), **snapshot.get("published_word", {}), **snapshot.get("manifest", {})}.items()):
             raise WorkflowError(f"Sources changed during batch generation for {lecture}; prior candidates were preserved")
 
 
@@ -1316,9 +1327,12 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             response_before_reference_review = response
                             response, reference_lineage = rectify(response, active, returned, reference_path, reference_review)
                         if progressive_protocol==3 and phase=='writing':
-                            from .simple_notes import project
+                            if active.requested.provider == 'codex':
+                                from .codex_notes import project
+                            else:
+                                from .simple_notes import project
                             proof=json.loads(Path(response.attempt_path).read_text()).get('envelope',{}) if response.attempt_path else {}
-                            response=replace(response,notes=project(active,response.notes,access=proof.get('source_access',[]) if active.requested.provider=='agy' else None,preview_sheets=proof.get('preview_sheets',[])))
+                            response=replace(response,notes=project(active,response.notes,access=proof.get('source_access',[]) if active.requested.provider=='agy' or proof.get('transport')=='codex_joint_v1' else None,preview_sheets=proof.get('preview_sheets',[])))
                         if autonomous_organization and phase == 'writing':
                             from .lesson_organization import integrate_group_decisions
                             organization_response = response if progressive_protocol==3 else (_load_generation_phase(returned, previous=None) or response)
@@ -1328,7 +1342,13 @@ def generate_batch(workspace: Workspace, course_code: str, lesson_numbers: list[
                             if reference_lineage:
                                 organization_response = response
                             ownership, organizations = integrate_group_decisions(organization_response, runtime, lectures, maps)
+                            codex_placements = {}
+                            if progressive_protocol == 3 and active.requested.provider == 'codex':
+                                from .codex_notes import narrative_placements
+                                codex_placements = narrative_placements(organization_response.notes, active.batch_context['ownership'])
                             for lecture, organization in organizations.items():
+                                if codex_placements:
+                                    organization['narrative_placements'] = codex_placements.get(lecture, {})
                                 organization.update(response_sha256=_hash(organization_response.notes), attempt_path=organization_response.attempt_path)
                                 if reference_lineage:
                                     organization['reference_review'] = reference_lineage
