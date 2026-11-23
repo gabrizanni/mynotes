@@ -37,6 +37,7 @@ jobs:
           $desktop = Join-Path $env:RUNNER_TEMP 'WinUI desktop'
           dotnet publish windows/desktop/MyNotes.Desktop.csproj -c Release -r win-x64 -p:Platform=x64 -o $desktop
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem $desktop -Recurse -Include '*.pri', '*.xbf' | ForEach-Object { $_.FullName.Substring($desktop.Length + 1) }
           if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
               Write-Host 'This runner has no interactive desktop. The Windows 11 VM UI test is still required.'
               exit 0
