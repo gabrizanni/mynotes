@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -633,6 +634,21 @@ def _parse_turns(payload: Any) -> list[dict[str, Any]]:
 
 
 def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_dir: Path, settings: dict[str, Any], transcript: list[dict[str, Any]]) -> dict[str, Any]:
+    if settings.get("diarization_engine") == "sherpa-onnx":
+        from .speaker_diarization import model_paths
+        segmentation, embedding = model_paths(settings)
+        output = run_dir / "diarization.json"
+        command = [sys.executable, "-I", "-m", "mynotes.speaker_diarization",
+                   "--audio", str(audio), "--segmentation", str(segmentation),
+                   "--embedding", str(embedding), "--output", str(output)]
+        if settings.get("professor_reference"):
+            command.extend(["--reference", settings["professor_reference"]])
+        _run(command)
+        try:
+            report = json.loads(output.read_text(encoding="utf-8"))
+            return _apply_speaker_turns(report["segments"], report["professor"], transcript)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise ASRError("Sherpa did not produce a usable speaker report") from error
     if settings.get("diarization_engine") != "fluidaudio":
         return {"status": "disabled"}
     executable = settings.get("tools", {}).get("fluidaudio") or shutil.which("fluidaudio") or shutil.which("fluidaudiocli")
@@ -670,6 +686,10 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             cluster, score = max(scores.items(), key=lambda item: item[1])
             if score >= 0.75:
                 professor_label = f"S{cluster + 1}"
+    return _apply_speaker_turns(turns, professor_label, transcript)
+
+
+def _apply_speaker_turns(turns: list[dict], professor_label: str | None, transcript: list[dict]) -> dict:
     speakers: dict[str, str] = {}
     for segment in transcript:
         best = max(
@@ -681,7 +701,8 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             max(0.0, min(segment["end_seconds"], best["end"]) - max(segment["start_seconds"], best["start"]))
             if best else 0.0
         )
-        if not best or overlap <= 0 or best["confidence"] < 0.5:
+        confidence = best.get("confidence") if best and overlap > 0 else None
+        if not best or overlap <= 0 or (confidence is not None and confidence < 0.5):
             segment["speaker"] = "UNKNOWN"
         elif professor_label and best["speaker"] == professor_label:
             segment["speaker"] = "Professor"
@@ -693,7 +714,7 @@ def _diarize_and_apply(workspace: Workspace, course_code: str, audio: Path, run_
             segment["speaker"] = speakers[best["speaker"]]
         segment["speaker_role"] = speaker_role(segment["speaker"])
         segment["speaker_role_source"] = "diarization" if segment["speaker_role"] != "UNKNOWN" else "unverified"
-        segment["speaker_role_confidence"] = round(best["confidence"], 4) if best and overlap > 0 else None
+        segment["speaker_role_confidence"] = round(confidence, 4) if confidence is not None else None
     return {"status": "completed", "professor_identified": professor_label is not None, "turns": len(turns)}
 
 
@@ -843,6 +864,9 @@ def cache_identity(workspace, course, audio, *, engines=None, legacy_timing=Fals
     relevant["cache_schema"] = 2
     relevant["engine_identity"] = identities
     relevant["configured_tools"] = settings.get("tools", {})
+    if settings.get("diarization_engine") == "sherpa-onnx":
+        from .speaker_diarization import identity
+        relevant["diarization_identity"] = identity(settings)
     reference = Path(settings["professor_reference"]) if settings.get("professor_reference") else None
     relevant["professor_reference_sha256"] = file_sha256(reference) if reference and reference.is_file() else None
     settings_hash = hashlib.sha256(json.dumps(relevant, sort_keys=True).encode()).hexdigest()

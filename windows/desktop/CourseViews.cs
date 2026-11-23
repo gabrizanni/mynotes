@@ -100,7 +100,14 @@ public sealed partial class MainWindow
         var assessment = Input("Valutazione", "CourseAssessment", course.Text("assessment"));
         var preparation = Input("Preparazione", "CoursePreparation", course.Text("preparation"));
         var publication = Options("Pubblicazione Word", "CoursePublication", ["automatic", "review"], course.Field("publication").Text("mode"));
-        if (!await DialogAsync("Modifica corso", Column(name, kind, teaching, notes, context, assessment, preparation, publication)))
+        var speech = course.Field("transcription");
+        var speechLanguage = Input("Lingua della trascrizione (it, en, auto)", "CourseSpeechLanguage", speech.Text("language", "auto"));
+        var savedDiarization = speech.Text("diarization_engine");
+        var speakers = Options("Distingui le voci", "CourseDiarization", ["sherpa-onnx", "disattivato"],
+            savedDiarization == "sherpa-onnx" ? savedDiarization : "disattivato");
+        var teacherVoice = Input("Campione audio del docente (facoltativo)", "CourseTeacherVoice", speech.Text("professor_reference"));
+        if (!await DialogAsync("Modifica corso", Column(name, kind, teaching, notes, context, assessment, preparation,
+            publication, speechLanguage, speakers, teacherVoice)))
             return;
         if (new[] { name.Text, teaching.Text, notes.Text }.Any(string.IsNullOrWhiteSpace))
             throw new BackendException("Indica il nome del corso e le lingue.");
@@ -110,6 +117,12 @@ public sealed partial class MainWindow
             assessment = assessment.Text.Trim(), preparation = preparation.Text.Trim(),
             languages = new { lesson = teaching.Text.Trim(), notes = notes.Text.Trim() },
             publication = new { mode = Selected(publication) },
+            transcription = new
+            {
+                language = speechLanguage.Text.Trim(),
+                diarization_engine = Selected(speakers) == "sherpa-onnx" ? "sherpa-onnx" : null,
+                professor_reference = teacherVoice.Text.Trim(),
+            },
         };
         await UpdateCourseAsync(course.Text("code"), patch);
     }

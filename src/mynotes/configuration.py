@@ -127,7 +127,7 @@ def course_template() -> dict[str, Any]:
             "verification_mode": "selective",
             "recovery_engine": "fluidaudio",
             "recovery_model": "v2",
-            "diarization_engine": None,
+            "diarization_engine": "sherpa-onnx" if os.name == "nt" else None,
             "professor_reference": "",
             "tools": {}
         },
