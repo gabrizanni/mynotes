@@ -10,6 +10,40 @@ permissions:
   contents: read
 
 jobs:
+  windows-x64-desktop:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.404'
+
+      - name: Install Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12.14"
+
+      - name: Smoke-test standalone WinUI startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $desktop = Join-Path $env:RUNNER_TEMP 'WinUI desktop'
+          dotnet publish windows/desktop/MyNotes.Desktop.csproj -c Release -r win-x64 -p:Platform=x64 -o $desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
+              Write-Host 'This runner has no interactive desktop. The Windows 11 VM UI test is still required.'
+              exit 0
+          }
+          powershell.exe -NoProfile -STA -File windows/desktop/tests/SmokeTest.ps1 -DesktopPath "$desktop/MyNotes.Desktop.exe" -PythonPath '.venv/Scripts/python.exe'
+          exit $LASTEXITCODE
+
   windows-x64-package:
     runs-on: windows-2025
     timeout-minutes: 28

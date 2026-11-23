@@ -57,13 +57,17 @@ if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
 $workspace = Join-Path ([IO.Path]::GetTempPath()) "MyNotes UI tests $([Guid]::NewGuid().ToString('N'))"
 $oldWorkspace = $env:MYNOTES_WORKSPACE
 $oldPython = $env:MYNOTES_PYTHON
+$oldTrace = $env:MYNOTES_DESKTOP_TEST_TRACE
+$trace = Join-Path (Split-Path $workspace -Parent) "mynotes-desktop-$([Guid]::NewGuid().ToString('N')).log"
+$startup = Get-Date
 $process = $null
 $script:pattern = $null
 
 try {
     $env:MYNOTES_WORKSPACE = $workspace
     $env:MYNOTES_PYTHON = $runtime
-    $process = Start-Process -FilePath $desktop -PassThru
+    $env:MYNOTES_DESKTOP_TEST_TRACE = $trace
+    $process = Start-Process -FilePath $desktop -WorkingDirectory (Split-Path $desktop -Parent) -PassThru
     $window = Wait-Until {
         $process.Refresh()
         if ($process.HasExited) { throw "Desktop exited with code $($process.ExitCode)." }
@@ -104,6 +108,13 @@ try {
     $null = Find-ById 'SettingsWordVerify'
 
     'Desktop UI smoke test passed.'
+} catch {
+    if (Test-Path -LiteralPath $trace) {
+        Get-Content -LiteralPath $trace
+    }
+    Get-WinEvent -FilterHashtable @{LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $startup} -ErrorAction SilentlyContinue |
+        Where-Object Message -like '*MyNotes.Desktop.exe*' | Select-Object -First 5 TimeCreated, Id, Message | Format-List
+    throw
 } finally {
     if ($null -ne $process -and -not $process.HasExited) {
         $null = $process.CloseMainWindow()
@@ -111,6 +122,8 @@ try {
     }
     $env:MYNOTES_WORKSPACE = $oldWorkspace
     $env:MYNOTES_PYTHON = $oldPython
+    $env:MYNOTES_DESKTOP_TEST_TRACE = $oldTrace
+    Remove-Item -LiteralPath $trace -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $workspace) {
         Remove-Item -LiteralPath $workspace -Recurse -Force
     }
