@@ -30,7 +30,6 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
-        BuildLayout();
         Title = "MyNotes";
         AppWindow.Resize(new SizeInt32(1100, 780));
         var iconPath = Path.Combine(AppContext.BaseDirectory, "MyNotes.ico");
@@ -42,11 +41,13 @@ public sealed partial class MainWindow : Window
         queueTimer.Tick += Heartbeat;
         Root.Loaded += Start;
         Closed += Stop;
+        BuildLayout();
     }
 
     private async void Start(object sender, RoutedEventArgs args)
     {
         Root.Loaded -= Start;
+        App.TraceStartup("Loaded the main window content.");
         await WithBusyAsync(async () =>
         {
             try { backend = Backend.Discover(AppContext.BaseDirectory); }
@@ -58,6 +59,7 @@ public sealed partial class MainWindow : Window
             queueTimer.Start();
             Heartbeat(queueTimer, null);
             await DisplayPageAsync();
+            App.TraceStartup("Rendered the library.");
         });
     }
 
@@ -262,6 +264,8 @@ public sealed partial class MainWindow : Window
 
     private void Announce(string message, InfoBarSeverity severity = InfoBarSeverity.Success)
     {
+        if (severity == InfoBarSeverity.Error)
+            App.TraceStartup(message);
         Notice.Message = message;
         Notice.Severity = severity;
         Notice.IsOpen = true;

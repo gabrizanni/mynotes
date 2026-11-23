@@ -37,7 +37,7 @@ public partial class App : Application
         }
     }
 
-    private static void TraceStartup(string message)
+    internal static void TraceStartup(string message)
     {
         var location = Environment.GetEnvironmentVariable("MYNOTES_DESKTOP_TEST_TRACE");
         if (string.IsNullOrWhiteSpace(location) || !Path.IsPathFullyQualified(location))

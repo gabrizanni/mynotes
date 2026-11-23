@@ -53,6 +53,10 @@ $runtime = if ($PythonPath) {
 if (-not (Test-Path -LiteralPath $runtime -PathType Leaf)) {
     throw 'Staged Python runtime is missing.'
 }
+& $runtime -I -X utf8 -m mynotes --version
+if ($LASTEXITCODE -ne 0) {
+    throw 'The packaged Python runtime could not launch MyNotes in isolated mode.'
+}
 
 $workspace = Join-Path ([IO.Path]::GetTempPath()) "MyNotes UI tests $([Guid]::NewGuid().ToString('N'))"
 $oldWorkspace = $env:MYNOTES_WORKSPACE
@@ -61,6 +65,7 @@ $oldTrace = $env:MYNOTES_DESKTOP_TEST_TRACE
 $trace = Join-Path (Split-Path $workspace -Parent) "mynotes-desktop-$([Guid]::NewGuid().ToString('N')).log"
 $startup = Get-Date
 $process = $null
+$window = $null
 $script:pattern = $null
 
 try {
@@ -111,6 +116,11 @@ try {
 } catch {
     if (Test-Path -LiteralPath $trace) {
         Get-Content -LiteralPath $trace
+    }
+    if ($null -ne $window -and -not $process.HasExited) {
+        $window.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition) |
+            Select-Object -First 40 |
+            ForEach-Object { "$($_.Current.AutomationId) $($_.Current.Name)" }
     }
     Get-WinEvent -FilterHashtable @{LogName = 'Application'; Id = 1000, 1001, 1026; StartTime = $startup} -ErrorAction SilentlyContinue |
         Where-Object Message -like '*MyNotes.Desktop.exe*' | Select-Object -First 5 TimeCreated, Id, Message | Format-List
