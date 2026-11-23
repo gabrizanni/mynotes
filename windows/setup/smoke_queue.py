@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from mynotes import transcription_queue as queue
-from mynotes.onboarding import add_course
+from mynotes.capture_courses import add_course
 from mynotes.recording_library import set_folder
 from mynotes.workspace import Workspace
 

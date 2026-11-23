@@ -79,7 +79,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
 
-      - name: Smoke-test installation, update, and uninstall as the runner user
+      - name: Upload internal unsigned candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mynotes-windows-x64-internal
+          path: ${{ env.MYNOTES_WINDOWS_ARTIFACT }}/MyNotes-Setup-x64-internal.exe*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Test clean per-user installation
+        id: install
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -92,14 +102,28 @@ jobs:
           $launcher = Join-Path $app 'runtime/mynotes.exe'
           & $launcher init --workspace $workspace
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MYNOTES_INSTALLED_APP=$app" >> $env:GITHUB_ENV
+          "MYNOTES_TEST_WORKSPACE=$workspace" >> $env:GITHUB_ENV
+
+      - name: Verify the installed Word renderer
+        shell: pwsh
+        run: |
           $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
-          & $launcher verify-word-renderer --json
+          & "$env:MYNOTES_INSTALLED_APP/runtime/mynotes.exe" verify-word-renderer --json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify installed Whisper, Sherpa and TXT export
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
           $models = Join-Path $env:MYNOTES_HOME 'speech-models/whisper.cpp'
           New-Item -ItemType Directory -Path $models -Force | Out-Null
           $weights = Join-Path $models 'ggml-tiny.bin'
           $env:MYNOTES_TEST_WAV = Join-Path $env:RUNNER_TEMP 'jfk.wav'
-          curl.exe --fail --silent --show-error --location --retry 3 'https://huggingface.co/ggerganov/whisper.cpp/resolve/80da2d8bfee42b0e836fc3a9890373e5defc00a6/ggml-tiny.bin' --output $weights
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 120 'https://huggingface.co/ggerganov/whisper.cpp/resolve/80da2d8bfee42b0e836fc3a9890373e5defc00a6/ggml-tiny.bin' --output $weights
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ((Get-FileHash $weights).Hash -ne 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21') { throw 'Whisper model checksum mismatch' }
           curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' --output $env:MYNOTES_TEST_WAV
@@ -120,11 +144,31 @@ jobs:
           }
           $env:MYNOTES_USER_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes test home'
           $collection = Join-Path $env:RUNNER_TEMP 'MyNotes audio fixture'
-          & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $workspace --audio $env:MYNOTES_TEST_WAV --collection $collection
+          & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $env:MYNOTES_TEST_WORKSPACE --audio $env:MYNOTES_TEST_WAV --collection $collection
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Remove-Item Env:MYNOTES_USER_HOME
-          Remove-Item Env:MYNOTES_HOME
 
+      - name: Smoke-test desktop UI when the runner has an interactive session
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
+              Write-Host 'This runner has no interactive desktop. The Windows 11 VM UI test is still required.'
+              exit 0
+          }
+          powershell.exe -NoProfile -STA -File windows/desktop/tests/SmokeTest.ps1 -DesktopPath "$env:MYNOTES_INSTALLED_APP/desktop/MyNotes.Desktop.exe"
+          exit $LASTEXITCODE
+
+      - name: Test update guard, idle upgrade and data-preserving uninstall
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $workspace = $env:MYNOTES_TEST_WORKSPACE
+          $launcher = Join-Path $app 'runtime/mynotes.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'mynotes-update.log'
+          $setup = Join-Path $env:MYNOTES_WINDOWS_ARTIFACT 'MyNotes-Setup-x64-internal.exe'
           $captureExe = Join-Path $app 'capture/MyNotes.Capture.exe'
           $captureHome = Join-Path $env:LOCALAPPDATA 'MyNotes/Capture'
           $lease = [System.IO.File]::Open((Join-Path $captureHome 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
@@ -138,11 +182,12 @@ jobs:
           $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           $taskName = "MyNotes Capture $sid"
           $action = New-ScheduledTaskAction -Execute $captureExe
-          Register-ScheduledTask -TaskName $taskName -Action $action -User $sid -Force | Out-Null
+          $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive
+          Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
           Disable-ScheduledTask -TaskName $taskName | Out-Null
 
           $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
-          if ($result.ExitCode -ne 0) { Get-Content $log; throw "Idle update failed: $($result.ExitCode)" }
+          if ($result.ExitCode -ne 0) { Get-Content $log -Tail 70; throw "Idle update failed: $($result.ExitCode)" }
           if (!(Test-Path "$workspace/config/settings.json") -or (Get-ScheduledTask -TaskName $taskName).State -ne 'Disabled') {
               throw 'Update did not preserve the workspace and the disabled Capture task'
           }
@@ -152,10 +197,3 @@ jobs:
               (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
               throw 'Uninstall did not preserve the workspace and remove the runtime and Capture task'
           }
-
-      - name: Upload internal unsigned candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mynotes-windows-x64-internal
-          path: ${{ env.MYNOTES_WINDOWS_ARTIFACT }}/MyNotes-Setup-x64-internal.exe*
-          if-no-files-found: error
