@@ -50,7 +50,7 @@ jobs:
 
   windows-x64-package:
     runs-on: windows-2025
-    timeout-minutes: 28
+    timeout-minutes: 75
     env:
       PYTHONUTF8: "1"
     steps:
@@ -192,6 +192,46 @@ jobs:
           $collection = Join-Path $env:RUNNER_TEMP 'MyNotes audio fixture'
           & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $env:MYNOTES_TEST_WORKSPACE --audio $env:MYNOTES_TEST_WAV --collection $collection
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Benchmark the default model on the full English recording
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          & "$app/runtime/python.exe" -I -m mynotes install-speech-model --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $english = Join-Path $env:RUNNER_TEMP 'english-librivox.mp3'
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 180 'https://archive.org/download/alices_adventures_1003/alices_adventures_01_carroll.mp3' --output $english
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $english).Hash -ne '42ead6b9f74aee965a31a3bdf8f4624aacb18ce2f1519f0a6da5724c091fc279') { throw 'English speech sample checksum mismatch' }
+          $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
+          & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $english --language en --expected alice --report "$reports/english.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Benchmark the default model on the full Italian recording
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
+          $italian = Join-Path $env:RUNNER_TEMP 'italian-librivox.mp3'
+          & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $italian --language it --expected cammin --report "$reports/italian.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload public-fixture speech measurements
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-default-speech-measurements
+          path: ${{ runner.temp }}/speech-benchmarks/*.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Smoke-test desktop UI when the runner has an interactive session
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

@@ -10,6 +10,36 @@ from mynotes.configuration import course_template
 from mynotes.workspace import Workspace
 
 
+@pytest.mark.parametrize("peak", [1, 2])
+def test_whispercpp_rejects_out_of_range_tail_only_with_pcm_silence_evidence(tmp_path, monkeypatch, peak):
+    import struct
+    exe = tmp_path / "whisper-cli.exe"
+    exe.write_bytes(b"fixture")
+    (tmp_path / "ggml-large-v3-turbo.bin").touch()
+    audio = tmp_path / "audio.wav"
+    with wave.open(str(audio), "wb") as sample:
+        sample.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        sample.writeframes(struct.pack("<h", 1000) * 16000 + struct.pack("<h", peak) * 32000)
+
+    def run(argv):
+        Path(argv[argv.index("--output-file") + 1]).with_suffix(".json").write_text(json.dumps({
+            "result": {"language": "it"}, "transcription": [
+                {"text": "Parlato.", "offsets": {"from": 0, "to": 1000}},
+                {"text": "Frase estranea.", "offsets": {"from": 1500, "to": 31000}},
+            ],
+        }))
+
+    monkeypatch.setattr("mynotes.asr._run", run)
+    output = tmp_path / "result"
+    result = WhisperCppEngine(str(exe), tmp_path).transcribe(
+        audio, output, model="large-v3-turbo", language="it", vocabulary=[], prompt="")
+    assert len(result.segments) == (1 if peak == 1 else 2)
+    evidence = list(output.glob("*.silence.json"))
+    assert bool(evidence) == (peak == 1)
+    raw = next(path for path in output.glob("*.json") if not path.name.endswith(".silence.json"))
+    assert len(json.loads(raw.read_text())["transcription"]) == 2
+
+
 def test_whispercpp_keeps_segment_timing_confidence_and_language(tmp_path, monkeypatch):
     exe = tmp_path / "whisper-cli.exe"
     exe.write_bytes(b"fixture")
