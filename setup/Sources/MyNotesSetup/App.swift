@@ -274,15 +274,23 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         refreshProvider()
         loadSavedModelCatalog()
     }
-    func receiptIsCurrent() -> Bool {
+    var runtimeUpdateRequired: Bool {
+        let installed = runtime.appendingPathComponent("app/current/installation.json")
+        guard FileManager.default.fileExists(atPath: installed.path),
+              let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else { return false }
+        return runtime.appendingPathComponent("app/current").resolvingSymlinksInPath().lastPathComponent != version
+    }
+    func receiptIsCurrent(expectedVersion: String? = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) -> Bool {
         guard FileManager.default.isExecutableFile(atPath: launcher.path),
               let launcherText = try? String(contentsOf: launcher, encoding: .utf8), launcherText.contains("MyNotes managed launcher"),
               let data = try? Data(contentsOf: runtime.appendingPathComponent("setup.json")),
               let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        // A local app update can retain an older setup receipt. Read the actual
-        // selected runtime rather than making an installed app look unprepared.
+        // Setup receipts can lag after a manual install. The selected runtime
+        // must match the native interface before its model-settings API is used.
         let installed = runtime.appendingPathComponent("app/current/installation.json")
-        return receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path)
+        guard receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path) else { return false }
+        guard let expectedVersion else { return true }
+        return runtime.appendingPathComponent("app/current").resolvingSymlinksInPath().lastPathComponent == expectedVersion
     }
     func readProgress() {
         guard busy, let startedAt,

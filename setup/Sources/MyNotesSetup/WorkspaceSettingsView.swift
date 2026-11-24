@@ -168,6 +168,9 @@ struct WorkspaceSettingsView: View {
     private var agents: some View {
         VStack(alignment: .leading, spacing: 24) {
             heading("Modelli per chat e note", "Il modello predefinito vale per entrambe le attività. Puoi personalizzare agente, modello ed effort per ciascuna.")
+            if setup.runtimeUpdateRequired {
+                Label("Aggiorna i componenti MyNotes prima di salvare i modelli o aprire la chat.", systemImage: "arrow.down.circle").font(.callout).foregroundStyle(.orange)
+            }
             Text("Modello predefinito").font(.headline)
             Form {
                 Picker("Agente", selection: $setup.provider) { Text("Codex").tag("codex"); Text("Agy").tag("agy"); Text("Claude Code").tag("claude") }
@@ -200,7 +203,7 @@ struct WorkspaceSettingsView: View {
                 Text("Le modifiche valgono per nuove chat e generazioni. I tentativi già avviati conservano i propri modelli.").font(.caption).foregroundStyle(.secondary)
             }.font(.callout).textSelection(.enabled)
             HStack {
-                Button("Salva impostazioni") { setup.saveSelection() }.buttonStyle(.borderedProminent).disabled(!setup.allModelsValid)
+                Button("Salva impostazioni") { setup.saveSelection() }.buttonStyle(.borderedProminent).disabled(!setup.allModelsValid || !setup.prepared)
                 Menu("Gestisci agente della chat") {
                     Button("Accedi…") { setup.openLogin() }
                     Button(setup.providerFound ? "Aggiorna CLI…" : "Installa CLI…") { NSWorkspace.shared.open(setup.installURL) }
@@ -214,7 +217,7 @@ struct WorkspaceSettingsView: View {
             HStack {
                 Label(setup.prepared ? "MyNotes installato" : "MyNotes da preparare", systemImage: setup.prepared ? "checkmark.circle" : "wrench.and.screwdriver")
                 Spacer()
-                Button(setup.prepared ? "Ricontrolla strumenti" : "Prepara MyNotes") { if setup.prepared { Task { await setup.refreshDiagnostics() } } else { setup.prepare() } }
+                Button(setup.runtimeUpdateRequired ? "Aggiorna MyNotes" : setup.prepared ? "Ricontrolla strumenti" : "Prepara MyNotes") { if setup.prepared { Task { await setup.refreshDiagnostics() } } else { setup.prepare() } }
             }
             if setup.busy { ProgressView(setup.message); Text(setup.progressDetail).font(.caption).foregroundStyle(.secondary) }
             DisclosureGroup("Stato e dettagli tecnici") { Text(setup.diagnostics.isEmpty ? setup.catalogMessage : setup.diagnostics).font(.caption).textSelection(.enabled).padding(.top, 8) }

@@ -13,6 +13,8 @@
 - Retained successful Codex responses can be revalidated locally without another
   model call. Permission denials have explicit diagnostics and included figures
   need observed full-image inspection. Agy's writing adapter/protocol is unchanged.
+- Updating the native app detects an older selected runtime and offers the
+  component update before enabling model saving or chat launch.
 - Relative source paths resolve from the workspace. Named math operators and
   stacked summation conditions remain editable in Word.
 
