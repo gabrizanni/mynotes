@@ -332,9 +332,10 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
         word_verified = bool(soffice and proof.get("word") is True and proof.get("soffice_sha256") == file_sha256(Path(soffice)))
         word_action = "Open MyNotes setup to install the Word renderer."
         asr_action = "Open MyNotes setup to download local transcription components."
+    from .models import resolve_role_selection
     checks = {
         "installation": _check(workspace.is_initialized() and config_error is None, "Open MyNotes setup.", workspace=str(workspace.root), configuration_error=config_error),
-        "agent": provider_check(provider or settings.get("providers", {}).get("default")),
+        "agent": provider_check(resolve_role_selection(settings, 'chat', provider)['provider']),
         "transcription": _check(bool(asr_executable and model_ready and asr_verified), asr_action, executable=asr_executable, model_present=model_ready, execution_verified=asr_verified),
         "word": _check(bool(soffice and word_verified), word_action, executable=soffice, execution_verified=word_verified),
         "capture": {"status": "optional", "action": "Configure Capture, record a microphone test, listen to it and confirm audibility."},

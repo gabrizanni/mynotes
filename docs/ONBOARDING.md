@@ -133,3 +133,28 @@ common coordination policy once. Later context calls need only their activity.
 Open MyNotes and select **Open chat**, or run `mynotes`. Use `mynotes codex`, `mynotes agy` or `mynotes claude` to select an agent explicitly. Saved model preferences apply to that agent. In a conversation, ask to change the model; the agent can save it with `mynotes preferences --provider PROVIDER --model MODEL`. The new choice applies to the next chat and future notes. `mynotes setup` reopens setup and `mynotes doctor --json` gives actionable component checks. These checks do not prove listening, model quality or completed classroom recording.
 
 [Installation](INSTALL.md) · [Installazione](INSTALL.it.md) · [Privacy](PRIVACY.md)
+
+## Models for chat and notes
+
+The startup screen has a shared default agent, model and effort. With **Use
+separate models for chat and notes**, either activity can inherit that default
+or select its own agent/model/effort. For example, Codex can coordinate the chat
+while Agy writes the notes. Save both choices together; disabling customization
+and saving restores inheritance for both activities.
+
+The summaries show the effective choices. Changes apply to new chats and new
+writing requests. An open chat does not change model, and resuming a saved batch
+keeps its original writing settings. Authentication and model availability are
+checked separately for each agent; no alternate provider is selected silently.
+The model catalog refreshes only on request. A writer that is not ready does not
+prevent opening an otherwise ready chat.
+
+For programmatic edits, `mynotes preferences --show` returns `default`,
+`overrides`, `effective`, `language` and a `revision`. Save `default`, `overrides`
+and `language` together using `preferences --models-json JSON
+--expected-revision REV`. Each selection has `provider`, `model` and `effort`;
+`overrides.chat` and `overrides.notes` are selections or `null` to inherit.
+An explicit empty model/effort selects that agent's automatic defaults, rather
+than inheriting the shared choice. A revision conflict preserves all existing
+settings and requires a fresh read. The legacy `--provider/--model/--effort`
+command changes the shared default while preserving explicit role overrides.

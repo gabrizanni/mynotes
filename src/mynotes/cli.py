@@ -225,13 +225,16 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("--instruction", help="natural-language preference to persist safely")
     configure.add_argument("--course", help="course code for a persistent instruction")
     configure.add_argument("--create-missing-dirs", action="store_true", help="create displayed configured folders")
-    preferences = subparsers.add_parser("preferences", help="save one model for chat and notes, and the conversation language")
+    preferences = subparsers.add_parser("preferences", help="read or save shared and activity-specific models")
     preferences.add_argument("--workspace", help="private workspace path")
-    preferences.add_argument("--provider", required=True, choices=("codex", "agy", "claude"))
-    preferences.add_argument("--model", required=True, help="model identifier; empty text uses the agent default")
+    preferences.add_argument("--provider", choices=("codex", "agy", "claude"))
+    preferences.add_argument("--model", help="model identifier; empty text uses the agent default")
     preferences.add_argument("--effort", help="supported effort; empty text restores the agent default")
     preferences.add_argument("--preset", help="preset id from mynotes models; saves model and effort together")
     preferences.add_argument("--language", choices=("it", "en"))
+    preferences.add_argument('--show', action='store_true', help='read shared, role and effective model choices')
+    preferences.add_argument('--models-json', help='atomic default/overrides/language configuration')
+    preferences.add_argument('--expected-revision', help='revision from preferences --show')
     models = subparsers.add_parser("models", help="inspect discovered models and visible presets without generation")
     models.add_argument("--provider", required=True, choices=("codex", "agy", "claude"))
     models.add_argument("--saved", default="", help="retain a saved model even if absent from the current catalog")
@@ -1089,9 +1092,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "configure":
             return _configure(arguments)
         if arguments.command == "preferences":
-            from .preferences import save_preferences
-            print(json.dumps(save_preferences(Workspace.from_value(arguments.workspace), arguments.provider, arguments.model, arguments.language,
-                                              effort=arguments.effort, preset=arguments.preset), ensure_ascii=False))
+            from .preferences import save_preferences, model_preferences, save_model_preferences
+            workspace = Workspace.from_value(arguments.workspace)
+            legacy = any(value is not None for value in (arguments.provider, arguments.model, arguments.effort, arguments.preset, arguments.language))
+            if arguments.show:
+                if legacy or arguments.models_json is not None or arguments.expected_revision is not None:
+                    raise ConfigurationError('--show cannot be combined with edits')
+                result = model_preferences(workspace)
+            elif arguments.models_json is not None:
+                if legacy:
+                    raise ConfigurationError('Structured and legacy model edits cannot be combined')
+                result = save_model_preferences(workspace, json.loads(arguments.models_json), arguments.expected_revision)
+            else:
+                if arguments.provider is None or arguments.model is None or arguments.expected_revision is not None:
+                    raise ConfigurationError('Supply --provider and --model, or --show, or --models-json with --expected-revision')
+                result = save_preferences(workspace, arguments.provider, arguments.model, arguments.language,
+                                          effort=arguments.effort, preset=arguments.preset)
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         if arguments.command == "models":
             from .models import catalog
