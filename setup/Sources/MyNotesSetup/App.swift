@@ -45,6 +45,57 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
     @Published var providerCatalog: ModelCatalog?
     @Published var selectionNotice: String?
     @Published var savingSelection = false
+    @Published var separateModels = false
+    @Published var chatOverride: ModelRoleSelection?
+    @Published var notesOverride: ModelRoleSelection?
+    @Published var chatModelValid = true
+    @Published var notesModelValid = true
+    private var modelsRevision: String?
+    var defaultModelSelection: ModelRoleSelection { ModelRoleSelection(provider: provider, model: selectedModel, effort: effortID) }
+    var chatModelSelection: ModelRoleSelection { separateModels ? chatOverride ?? defaultModelSelection : defaultModelSelection }
+    var notesModelSelection: ModelRoleSelection { separateModels ? notesOverride ?? defaultModelSelection : defaultModelSelection }
+    var allModelsValid: Bool { modelIsValid && (!separateModels || (chatModelValid && notesModelValid)) }
+    var presetsURL: URL { URL(fileURLWithPath: ProcessInfo.processInfo.environment["MYNOTES_MODEL_PRESETS"] ?? payload.appendingPathComponent("src/mynotes/resources/model-presets.json").path) }
+    func reloadModelSettings() {
+        rememberedModels = [:]; rememberedEfforts = [:]
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: workspace).appendingPathComponent("config/settings.json")),
+           let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let providers = settings["providers"] as? [String: Any], let selected = providers["default"] as? String {
+            provider = selected
+        }
+        loadModelPreferences(loadLanguage: true); refreshProvider(); loadSavedModelCatalog()
+    }
+    private func loadRoleSettings(_ data: Data) {
+        modelsRevision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let providers = settings?["providers"] as? [String: Any]
+        let roles = providers?["roles"] as? [String: Any] ?? [:]
+        func selection(_ key: String) -> ModelRoleSelection? {
+            guard let value = roles[key] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
+            return try? JSONDecoder().decode(ModelRoleSelection.self, from: data)
+        }
+        chatOverride = selection("chat"); notesOverride = selection("notes")
+        separateModels = chatOverride != nil || notesOverride != nil
+    }
+    private func modelPreferenceArguments() throws -> [String] {
+        guard allModelsValid else { throw NSError(domain: "MyNotes", code: 1, userInfo: [NSLocalizedDescriptionKey: "Scegli modelli ed effort compatibili per ogni attività."]) }
+        // Fresh setup creates the first settings file after the screen loads.
+        if modelsRevision == nil, let data = try? Data(contentsOf: URL(fileURLWithPath: workspace).appendingPathComponent("config/settings.json")) {
+            modelsRevision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        guard let revision = modelsRevision else { throw NSError(domain: "MyNotes", code: 1, userInfo: [NSLocalizedDescriptionKey: "Prepara MyNotes prima di salvare i modelli."]) }
+        let value = ModelRolesPayload(shared: defaultModelSelection, chat: separateModels ? chatOverride : nil,
+                                     notes: separateModels ? notesOverride : nil, language: interfaceLanguage)
+        let data = try JSONEncoder().encode(value)
+        return ["preferences", "--workspace", workspace, "--models-json", String(decoding: data, as: UTF8.self), "--expected-revision", revision]
+    }
+    private func acceptModelSave(_ data: Data) throws {
+        let response = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let revision = response?["revision"] as? String else { throw NSError(domain: "MyNotes", code: 1, userInfo: [NSLocalizedDescriptionKey: "Risposta del salvataggio non valida."]) }
+        modelsRevision = revision
+        rememberedModels[provider] = selectedModel; rememberedEfforts[provider] = effortID
+        selectionNotice = "Scelte salvate per le nuove chat e generazioni. I lavori già avviati mantengono i propri modelli."
+    }
     private var loginPending = false
     @Published var interfaceLanguage = Locale.preferredLanguages.first?.hasPrefix("it") == true ? "it" : "en"
     private var rememberedModels: [String: String] = [:]
@@ -104,6 +155,7 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
     }
     func loadModelPreferences(loadLanguage: Bool = false) {
         let settingsURL = URL(fileURLWithPath: workspace).appendingPathComponent("config/settings.json")
+        if loadLanguage, let data = try? Data(contentsOf: settingsURL) { loadRoleSettings(data) }
         let settings = (try? Data(contentsOf: settingsURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let providers = settings?["providers"] as? [String: Any]
         let configured = providers?["configured"] as? [String: [String: Any]]
@@ -178,7 +230,7 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
                 catalogChoices = choices; providerCatalog = catalog; catalogMessage = catalog.message
                 modelID = choices.first { $0.model == currentModel }?.id ?? currentModel
                 catalogLoading = false
-                if catalog.account.status == "connected" { agentUsable = true }
+                if catalog.account.status == "connected" && selected == chatModelSelection.provider { agentUsable = true }
             } catch {
                 guard catalogRequestID == request, !Task.isCancelled else { return }
                 catalogMessage = error is CancellationError ? "Tempo di aggiornamento scaduto. Il catalogo precedente è conservato." : error.localizedDescription
@@ -187,26 +239,25 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         }
     }
     func saveSelection() {
-        guard modelIsValid, !savingSelection else { return }
-        let executable = launcher, arguments = ["preferences", "--workspace", workspace, "--provider", provider, "--model", selectedModel, "--effort", effortID, "--language", interfaceLanguage]
-        let selected = provider, model = selectedModel, effort = effortID
+        guard allModelsValid, !savingSelection else { return }
+        let arguments: [String]
+        do { arguments = try modelPreferenceArguments() } catch { self.error = error.localizedDescription; return }
+        let executable = launcher
         savingSelection = true; selectionNotice = nil; error = nil
         Task {
             do {
-                _ = try await ModelCatalogCommand.read(executable, arguments: arguments)
-                rememberedModels[selected] = model; rememberedEfforts[selected] = effort
-                selectionNotice = "Scelta salvata per le prossime chat e generazioni."
+                let data = try await ModelCatalogCommand.read(executable, arguments: arguments)
+                try acceptModelSave(data); refreshProvider()
             } catch { self.error = error.localizedDescription }
             savingSelection = false
         }
     }
     func savePreferences() throws {
-        guard modelIsValid else { throw NSError(domain: "MyNotes", code: 1, userInfo: [NSLocalizedDescriptionKey: "Scegli un modello e un effort compatibili con il tuo agente."]) }
-        _ = try command(launcher, ["preferences", "--workspace", workspace, "--provider", provider, "--model", selectedModel, "--effort", effortID, "--language", interfaceLanguage])
-        rememberedModels[provider] = selectedModel; rememberedEfforts[provider] = effortID
+        let result = try command(launcher, modelPreferenceArguments())
+        try acceptModelSave(Data(result.output.utf8))
     }
     var installURL: URL {
-        URL(string: provider == "codex" ? "https://developers.openai.com/codex/cli" : provider == "claude" ? "https://code.claude.com/docs/en/setup" : "https://antigravity.google/docs/cli/")!
+        URL(string: chatModelSelection.provider == "codex" ? "https://developers.openai.com/codex/cli" : chatModelSelection.provider == "claude" ? "https://code.claude.com/docs/en/setup" : "https://antigravity.google/docs/cli/")!
     }
     init() {
         let environment = ProcessInfo.processInfo.environment
@@ -223,15 +274,23 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         refreshProvider()
         loadSavedModelCatalog()
     }
-    func receiptIsCurrent() -> Bool {
+    var runtimeUpdateRequired: Bool {
+        let installed = runtime.appendingPathComponent("app/current/installation.json")
+        guard FileManager.default.fileExists(atPath: installed.path),
+              let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String else { return false }
+        return runtime.appendingPathComponent("app/current").resolvingSymlinksInPath().lastPathComponent != version
+    }
+    func receiptIsCurrent(expectedVersion: String? = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) -> Bool {
         guard FileManager.default.isExecutableFile(atPath: launcher.path),
               let launcherText = try? String(contentsOf: launcher, encoding: .utf8), launcherText.contains("MyNotes managed launcher"),
               let data = try? Data(contentsOf: runtime.appendingPathComponent("setup.json")),
               let receipt = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
-        // A local app update can retain an older setup receipt. Read the actual
-        // selected runtime rather than making an installed app look unprepared.
+        // Setup receipts can lag after a manual install. The selected runtime
+        // must match the native interface before its model-settings API is used.
         let installed = runtime.appendingPathComponent("app/current/installation.json")
-        return receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path)
+        guard receipt["version"] != nil && FileManager.default.fileExists(atPath: installed.path) else { return false }
+        guard let expectedVersion else { return true }
+        return runtime.appendingPathComponent("app/current").resolvingSymlinksInPath().lastPathComponent == expectedVersion
     }
     func readProgress() {
         guard busy, let startedAt,
@@ -250,27 +309,27 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
     }
     func refreshProvider() {
         UserDefaults.standard.set(provider, forKey: "MyNotesProvider")
-        let selected = provider
+        let selected = chatModelSelection.provider
         providerFound = false; agentUsable = false; diagnostics = ""
         Task {
             let found = await Task.detached { () -> Bool in
                 let result = try? command(URL(fileURLWithPath: "/bin/zsh"), ["-lic", "command -v " + selected])
                 return result?.output.split(separator: "\n").last.map { FileManager.default.isExecutableFile(atPath: String($0)) } ?? false
             }.value
-            guard selected == provider else { return }
+            guard selected == chatModelSelection.provider else { return }
             providerFound = found
             if prepared { await refreshDiagnostics() }
         }
     }
     func refreshDiagnostics() async {
-        let executable = launcher, selected = provider
+        let executable = launcher, selected = chatModelSelection.provider
         let result = await Task.detached { () -> CommandResult? in
             var environment = ProcessInfo.processInfo.environment
             let login = try? command(URL(fileURLWithPath: "/bin/zsh"), ["-lic", "print -r -- $PATH"])
             if let path = login?.output.split(separator: "\n").last { environment["PATH"] = String(path) }
             return try? command(executable, ["doctor", "--json", "--provider", selected], environment: environment, allowFailure: true)
         }.value
-        guard selected == provider else { return }
+        guard selected == chatModelSelection.provider else { return }
         guard let text = result?.output, let data = text.data(using: .utf8),
               let report = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         let components = report["checks"] as? [String: [String: Any]] ?? [:]
@@ -327,7 +386,7 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
                     _ = try command(URL(fileURLWithPath: String(python)), [release.appendingPathComponent("scripts/setup_runtime.py").path, "--release-root", release.path, "--provider", selected, "--workspace", selectedWorkspace, "--progress-file", progressPath.path], environment: env)
                 }.value
                 prepared = receiptIsCurrent()
-                if modelIsValid { try savePreferences() }
+                if allModelsValid { try savePreferences() }
                 loadSavedModelCatalog()
                 message = "Componenti preparati. Apri la chat: MyNotes si presenterà e ti chiederà brevemente il tuo background."
                 progress = 1
@@ -349,7 +408,7 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         let name = message == nil ? "Open MyNotes.command" : "MyNotes Chat \(UUID().uuidString).command"
         let path = runtime.appendingPathComponent(name)
         let cleanup = message == nil ? "" : "/bin/rm -f -- \"$0\"\n"
-        let script = "#!/bin/zsh\n" + cleanup + "export MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + quoted(provider) + (message.map { " " + quoted($0) } ?? "") + "\n"
+        let script = "#!/bin/zsh\n" + cleanup + "export MYNOTES_HOME=" + quoted(runtime.path) + "\nexport MYNOTES_WORKSPACE=" + quoted(workspace) + "\nexport PATH=" + quoted(launcher.deletingLastPathComponent().path) + ":\"$PATH\"\ncd " + quoted(runtime.path) + "\nexec " + quoted(launcher.path) + " " + "chat" + (message.map { " " + quoted($0) } ?? "") + "\n"
         do {
             try script.write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
@@ -364,7 +423,7 @@ private func command(_ executable: URL, _ arguments: [String], environment: [Str
         do {
             let path = runtime.appendingPathComponent("Login MyNotes.command")
             try FileManager.default.createDirectory(at: runtime, withIntermediateDirectories: true)
-            let login = provider == "codex" ? "codex login" : provider == "claude" ? "claude auth login" : "agy"
+            let login = chatModelSelection.provider == "codex" ? "codex login" : chatModelSelection.provider == "claude" ? "claude auth login" : "agy"
             try ("#!/bin/zsh\n" + login + "\n").write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path.path)
             NSWorkspace.shared.open(path)

@@ -8,7 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-import fcntl
+from . import file_lock
 from copy import deepcopy
 from datetime import datetime, UTC
 import errno
@@ -38,7 +38,7 @@ def locked(function):
             return function(ws, *args, **kwargs)
         directory(ws).mkdir(parents=True, exist_ok=True, mode=0o700)
         with (directory(ws) / 'operation.lock').open('a+') as lease:
-            fcntl.flock(lease, fcntl.LOCK_EX)
+            file_lock.flock(lease, file_lock.LOCK_EX)
             token = _in_operation.set(True)
             try: return function(ws, *args, **kwargs)
             finally: _in_operation.reset(token)

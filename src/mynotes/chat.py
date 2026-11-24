@@ -6,27 +6,56 @@ import os
 import json
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from .provider_limits import CommandSizeError, validate_command_size
+from .provider_process import run_windows_job
 from .workspace import Workspace
-from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_override_flags
+from .providers import PROVIDER_INSTALL_URLS, RequestedModel, provider_environment, provider_executable, provider_override_flags
 
 
 class ChatError(RuntimeError):
     pass
 
 
+def login_provider(provider: str) -> int:
+    login_arguments = {"codex": ["login"], "agy": [], "claude": ["auth", "login"]}
+    if provider not in login_arguments:
+        raise ChatError("Choose an agent: codex, agy or claude")
+    environment = provider_environment()
+    executable = provider_executable(provider)
+    if not executable:
+        raise ChatError(f"Install {provider}: {PROVIDER_INSTALL_URLS[provider]}")
+    environment.pop("MYNOTES_WORKSPACE", None)
+    # Agy starts its interactive app to authenticate. Give it an empty root.
+    with tempfile.TemporaryDirectory(prefix="mynotes-login-", ignore_cleanup_errors=True) as directory:
+        return _run_interactive(provider, [executable, *login_arguments[provider]], environment, Path(directory))
+
+
+def _run_interactive(provider: str, command: list[str], environment: dict[str, str], directory: Path) -> int:
+    if os.name == "nt":
+        try:
+            validate_command_size(command, environment)
+            return run_windows_job(command, timeout=None, env=environment, cwd=directory, console=True).returncode
+        except (CommandSizeError, OSError) as error:
+            raise ChatError(f"Unable to launch {provider}: {error}") from error
+    return subprocess.run(command, env=environment, cwd=directory, check=False).returncode
+
+
 def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: str | None, message: str | None = None) -> int:
     if os.environ.get("MYNOTES_CHAT_ACTIVE") == "1":
         raise ChatError("A MyNotes provider chat is already active; recursive launch is blocked")
-    selected = provider or configuration["providers"].get("default")
+    from .models import resolve_role_selection
+    selection = resolve_role_selection(configuration, 'chat', provider)
+    selected, model, effort = (selection[key] for key in ('provider', 'model', 'effort'))
     if selected not in {"codex", "agy", "claude"}:
         raise ChatError("Choose an agent in MyNotes Setup: codex, agy or claude")
-    from .models import resolve_provider_options
-    model, effort = resolve_provider_options(configuration, selected)
     environment = provider_environment()
-    executable = shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
+    executable = provider_executable(selected) if os.name == "nt" else (
+        shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
+    )
     if not executable:
         raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
     # Instructions belong to this private workspace, never the application source.
@@ -85,10 +114,19 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             else "Hi! I'm ready to help with MyNotes. What would you like to do?"
         )
         style_guidance += f"\nUse this greeting as your entire first reply: {greeting}\n"
+    if any(configuration.get('providers', {}).get('roles', {}).values()):
+        context += ('Effective model roles: ' + json.dumps({role: resolve_role_selection(configuration, role) for role in ('chat', 'notes')})
+                    + '. For new notes use the configured writing role; omit --provider unless the user explicitly overrides it. '
+                    'Never copy the chat agent into the writing command. Resume preserves the saved attempt settings. ')
     if message:
         prompt = context + style_guidance + "\nHandle this user request directly; load the relevant activity context first. User request: " + message
     else:
         prompt = context + style_guidance + "\nOpen the interactive session and briefly greet the user, then wait for a request. Do not run commands, inspect files or scan libraries before the user asks."
+    if selected == 'codex':
+        prompt += (" If MyNotes reports CODEX_LAUNCH_DENIED, the writing CLI could not initialize inside the coordinator's permissions. "
+                   "Use your supported command permission/escalation mechanism for the exact MyNotes command. "
+                   "Never use danger-full-access, change credentials, or repeat paid generation to bypass it. "
+                   "If permission is denied, preserve the attempt and report that denial explicitly.")
     overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
     if selected == "agy":
         command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
@@ -103,4 +141,4 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         command = [executable, "-C", str(repository), "--sandbox", "workspace-write"] + overrides + [prompt]
     environment["MYNOTES_WORKSPACE"] = str(workspace.root)
     environment["MYNOTES_CHAT_ACTIVE"] = "1"
-    return subprocess.run(command, env=environment, cwd=repository, check=False).returncode
+    return _run_interactive(selected, command, environment, repository)

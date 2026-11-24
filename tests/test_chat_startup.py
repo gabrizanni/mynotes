@@ -21,6 +21,27 @@ def _setup(tmp_path: Path):
     return workspace, configuration
 
 
+@pytest.mark.parametrize(("provider", "arguments"), [
+    ("codex", ["login"]), ("agy", []), ("claude", ["auth", "login"]),
+])
+def test_login_runs_only_the_provider_auth_flow(provider, arguments, tmp_path, monkeypatch):
+    workspace, _ = _setup(tmp_path)
+    monkeypatch.setenv("MYNOTES_WORKSPACE", str(workspace.root))
+    executable = str(tmp_path / f"{provider}.exe")
+    monkeypatch.setattr("mynotes.chat.provider_executable", lambda _: executable)
+
+    def run(selected, command, environment, directory):
+        assert selected == provider
+        assert command == [executable, *arguments]
+        assert "MYNOTES_WORKSPACE" not in environment
+        assert not directory.is_relative_to(workspace.root)
+        assert not list(directory.iterdir())
+        return 0
+
+    monkeypatch.setattr("mynotes.chat._run_interactive", run)
+    assert main(["provider-login", "--provider", provider]) == 0
+
+
 def test_empty_chat_uses_startup_context_without_eager_checks(tmp_path, monkeypatch) -> None:
     workspace, configuration = _setup(tmp_path)
     calls = []
@@ -129,7 +150,10 @@ def test_all_providers_share_rules_and_startup_prompt(tmp_path, monkeypatch):
     assert launch_chat(workspace, configuration, "codex") == 0
     assert launch_chat(workspace, configuration, "agy") == 0
     assert launch_chat(workspace, configuration, "claude") == 0
-    assert calls[0][-1] == calls[1][-1] == calls[2][-1]
+    assert calls[1][-1] == calls[2][-1]
+    assert calls[0][-1].startswith(calls[1][-1])
+    assert 'CODEX_LAUNCH_DENIED' in calls[0][-1]
+    assert 'CODEX_LAUNCH_DENIED' not in calls[1][-1]
     assert "Ciao! Sono pronto ad aiutarti con MyNotes." in calls[0][-1]
     assert CORE not in calls[0][-1]
     assert CORE in (workspace.root / "AGENTS.md").read_text()

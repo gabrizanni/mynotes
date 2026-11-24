@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import struct
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 
@@ -25,6 +26,21 @@ def validate_command_size(command: Sequence[str], environment: Mapping[str, str]
     Leave ten percent for platform bookkeeping. Unknown limits remain unknown.
     Errors contain only counts and an action, never prompt or environment text.
     """
+    if sys.platform == "win32":
+        # CreateProcessW limits the quoted command line, including its
+        # terminating NUL, to 32,767 UTF-16 code units.
+        size = len(subprocess.list2cmdline(command).encode("utf-16-le")) + 2
+        limit = 32_767 * 2
+        if size > limit:
+            raise CommandSizeError(
+                f"Local CLI input limit: request needs {size} UTF-16 bytes; "
+                f"the Windows launch limit is {limit} bytes. Reduce the selected material "
+                "or split the lesson before generating. The provider was not started "
+                "and no source was truncated."
+            )
+        return {"estimated_launch_bytes": size, "safe_launch_limit_bytes": limit,
+                "single_string_limit_bytes": None}
+
     argument_sizes = [len(os.fsencode(value)) + 1 for value in command]
     environment_sizes = [len(os.fsencode(key + "=" + value)) + 1 for key, value in environment.items()]
     pointer_bytes = (len(command) + len(environment) + 2) * struct.calcsize("P")

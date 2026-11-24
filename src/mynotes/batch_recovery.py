@@ -242,6 +242,12 @@ def revised_response(root, plan, lectures, continuity, *, preserve_manifest=True
 def certify_response(response,request,root):
     if not response.attempt_path or not Path(response.attempt_path).is_absolute():return response
     record=json.loads(Path(response.attempt_path).read_text())
+    if record.get('requested',{}).get('provider') == 'codex' and '--json' in record.get('command', []):
+        from .codex_notes import certified
+        raw = certified(record, request)
+        # Completed checkpoints contain deterministic local projection. Always
+        # reconstruct from the immutable transport before projecting again.
+        return response if raw == response.notes else replace(response, notes=raw)
     if record.get('transport') == 'agy_local_recovery_v1':
         from .local_recovery import verify_local_receipt
         raw=verify_local_receipt(Path(response.attempt_path),root)
@@ -593,12 +599,12 @@ def _candidate_completion_digest(path):
 
 def _notes_request_status(root):
     from .batch import _read
-    import os
+    from .process_status import probe_process
     path=root/'notes-run.json'
     if not path.is_file():return None
     value=_read(path)
     if value.get('status') in {'GENERATING','BUILDING_WORD','UPDATING_WORD','LOCAL_WORD_RETRY','RECOVERING_LOCALLY'}:
-        try:os.kill(value['pid'],0)
+        try:probe_process(value['pid'])
         except (ProcessLookupError,KeyError):value={**value,'reported_status':value.get('status'),'status':'INTERRUPTED'}
         except PermissionError:value={**value,'reported_status':value.get('status'),'status':'STATUS_UNAVAILABLE','liveness':'permission_denied'}
     def intact(row):
@@ -634,8 +640,8 @@ def batch_status(workspace,batch_id):
     activity=manifest.get('activity',{})
     retries=manifest.get('network_retries',0)
     if activity:
-        import os
-        try:os.kill(activity['pid'],0)
+        from .process_status import probe_process
+        try:probe_process(activity['pid'])
         except (ProcessLookupError,KeyError):activity={**activity,'status':'STOPPED'}
         except PermissionError:activity={**activity,'status':'UNKNOWN','reported_status':activity.get('status'),'liveness':'permission_denied'}
         directory=Path(activity.get('checkpoint',''))

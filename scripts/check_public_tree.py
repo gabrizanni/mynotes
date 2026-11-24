@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import hashlib
 import re
+import subprocess
 import sys
 from pathlib import Path
 from zipfile import BadZipFile, ZipFile
@@ -45,6 +47,7 @@ PUBLIC_FILES = (
     "docs/GENERATION.md",
     "docs/NOTES_DELIVERY.md",
     "docs/NOTES_FLOW.md",
+    "docs/CODEX_NOTES.md",
     "docs/MODEL-CATALOG.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",
@@ -76,6 +79,8 @@ PUBLIC_FILES = (
     "setup/Sources/MyNotesSetup/ChatTerminal.swift",
     "setup/Sources/MyNotesSetup/SetupProgress.swift",
     "setup/Sources/MyNotesSetup/ModelChoices.swift",
+    "setup/Sources/MyNotesSetup/ModelRoles.swift",
+    "setup/Sources/MyNotesSetup/ModelRoleEditor.swift",
     "setup/Sources/MyNotesSetup/ModelCatalogCommand.swift",
     "setup/Sources/MyNotesSetup/MyNotesHomeView.swift",
     "setup/Sources/MyNotesSetup/CaptureDashboard.swift",
@@ -195,8 +200,42 @@ def validate(root: Path = ROOT) -> list[str]:
     return errors
 
 
+def validate_windows_source(root: Path = ROOT) -> list[str]:
+    """Audit Windows Git sources without adding them to the macOS installer."""
+    tracked = subprocess.check_output(["git", "ls-files", "-z", "--", "windows/"], cwd=root)
+    suffixes = {".cs", ".csproj", ".props", ".targets", ".xaml", ".resw", ".manifest",
+                ".xml", ".md", ".json", ".iss", ".py", ".ps1", ".sln", ".slnx"}
+    private_profile = re.compile(r"[a-z]:[\\/]users[\\/]", re.IGNORECASE)
+    brand_icons = {
+        "windows/desktop/MyNotes.ico": "522755e72d192044af7abd6013e45b2e440e1da1264ccf96abff9a4df204e3ea",
+    }
+    errors = []
+    for name in filter(None, tracked.decode("utf-8").split("\0")):
+        path = root / name
+        if name in brand_icons and path.is_file() and not path.is_symlink():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != brand_icons[name]:
+                errors.append(f"changed Windows public brand asset: {name}")
+            continue
+        if path.is_symlink() or (path.suffix.lower() not in suffixes and path.name != ".gitignore"):
+            errors.append(f"unexpected Windows public artifact: {name}")
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            errors.append(f"unreadable Windows public source: {name}")
+            continue
+        if PRIVATE_REFERENCE.search(content) or private_profile.search(content):
+            errors.append(f"private reference in Windows public source: {name}")
+    return errors
+
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--windows-source", action="store_true")
+    arguments = parser.parse_args()
     issues = validate()
+    if arguments.windows_source:
+        issues += validate_windows_source()
     if issues:
         print("\n".join(issues), file=sys.stderr)
         raise SystemExit(1)

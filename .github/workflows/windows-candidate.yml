@@ -1,0 +1,285 @@
+name: Windows internal candidate
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths: ['windows/**', 'src/**', 'uv.lock', 'pyproject.toml', '.github/workflows/windows-candidate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64-desktop:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.404'
+
+      - name: Install Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12.14"
+
+      - name: Smoke-test standalone WinUI startup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          uv sync --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $desktop = Join-Path $env:RUNNER_TEMP 'WinUI desktop'
+          dotnet publish windows/desktop/MyNotes.Desktop.csproj -c Release -r win-x64 -p:Platform=x64 -o $desktop
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem $desktop -Recurse -Include '*.pri', '*.xbf' | ForEach-Object { $_.FullName.Substring($desktop.Length + 1) }
+          if (!(Test-Path "$desktop/MyNotes.Desktop.pri") -and !(Test-Path "$desktop/resources.pri")) {
+              throw 'WinUI publish is missing the application resource index.'
+          }
+          if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
+              Write-Host 'This runner has no interactive desktop. The Windows 11 VM UI test is still required.'
+              exit 0
+          }
+          powershell.exe -NoProfile -STA -File windows/desktop/tests/SmokeTest.ps1 -DesktopPath "$desktop/MyNotes.Desktop.exe" -PythonPath '.venv/Scripts/python.exe'
+          exit $LASTEXITCODE
+
+  windows-x64-package:
+    runs-on: windows-2025
+    timeout-minutes: 75
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.404'
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12.14"
+
+      - name: Audit Windows source
+        run: uv run --locked python scripts/check_public_tree.py --windows-source
+
+      - name: Test the desktop bridge
+        run: dotnet run --project windows/desktop/tests/MyNotes.Desktop.BridgeTests.csproj --configuration Release
+
+      - name: Install checked Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.1-x64.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe' -OutFile $setup
+          $sha = (Get-FileHash $setup -Algorithm SHA256).Hash
+          if ($sha -ne '8a5a6711c3766a6e5fb74f280ba0e3551e719ce94538d901fdbd1f8f9920b3f0') { throw 'Inno Setup checksum mismatch' }
+          $install = Join-Path $env:RUNNER_TEMP 'Inno'
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$install`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Inno Setup exited $($result.ExitCode)" }
+          "MYNOTES_INNO=$install" >> $env:GITHUB_ENV
+
+      - name: Build and verify unsigned candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'mynotes-candidate'
+          $office = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.3_Win_x86-64.msi'
+          $lessmsi = Join-Path $env:RUNNER_TEMP 'lessmsi-v2.12.9.zip'
+          $whisper = Join-Path $env:RUNNER_TEMP 'whisper-bin-x64.zip'
+          $whisperLicense = Join-Path $env:RUNNER_TEMP 'whisper-license.txt'
+          $segmentation = Join-Path $env:RUNNER_TEMP 'speaker-segmentation.tar.bz2'
+          $embedding = Join-Path $env:RUNNER_TEMP 'speaker-embedding.onnx'
+          $embeddingLicense = Join-Path $env:RUNNER_TEMP 'speaker-embedding-license.txt'
+          curl.exe --fail --silent --show-error --location --retry 3 'https://download.documentfoundation.org/libreoffice/stable/26.8.3/win/x86_64/LibreOffice_26.8.3_Win_x86-64.msi' --output $office
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/activescott/lessmsi/releases/download/v2.12.9/lessmsi-v2.12.9.zip' --output $lessmsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip' --output $whisper
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/LICENSE' --output $whisperLicense
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2' --output $segmentation
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx' --output $embedding
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/alibaba-damo-academy/3D-Speaker/b6ea24f428a178c02b7ef9d6900569050448c8a1/LICENSE' --output $embeddingLicense
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv run --locked python windows/setup/build_candidate.py --iscc "$env:MYNOTES_INNO/ISCC.exe" --libreoffice-msi $office --lessmsi-zip $lessmsi --whisper-zip $whisper --whisper-license $whisperLicense --segmentation-tar $segmentation --embedding-model $embedding --embedding-license $embeddingLicense --output $out
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MYNOTES_WINDOWS_ARTIFACT=$out" >> $env:GITHUB_ENV
+
+      - name: Upload internal unsigned candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mynotes-windows-x64-internal
+          path: ${{ env.MYNOTES_WINDOWS_ARTIFACT }}/MyNotes-Setup-x64-internal.exe*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: Test clean per-user installation
+        id: install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = Join-Path $env:LOCALAPPDATA 'Programs/MyNotes'
+          $workspace = Join-Path $env:RUNNER_TEMP 'MyNotes workspace'
+          $log = Join-Path $env:RUNNER_TEMP 'mynotes-install.log'
+          $setup = Join-Path $env:MYNOTES_WINDOWS_ARTIFACT 'MyNotes-Setup-x64-internal.exe'
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { Get-Content $log; throw "Installation failed: $($result.ExitCode)" }
+          $launcher = Join-Path $app 'runtime/mynotes.exe'
+          & $launcher init --workspace $workspace
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MYNOTES_INSTALLED_APP=$app" >> $env:GITHUB_ENV
+          "MYNOTES_TEST_WORKSPACE=$workspace" >> $env:GITHUB_ENV
+
+      - name: Verify the installed Word renderer
+        shell: pwsh
+        run: |
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          & "$env:MYNOTES_INSTALLED_APP/runtime/mynotes.exe" verify-word-renderer --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:MYNOTES_TEST_SOFFICE = Join-Path $env:MYNOTES_INSTALLED_APP 'office/program/soffice.com'
+          uv run --locked pytest tests/test_office_windows.py
+
+      - name: Verify installed Whisper, Sherpa and TXT export
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          $models = Join-Path $env:MYNOTES_HOME 'speech-models/whisper.cpp'
+          New-Item -ItemType Directory -Path $models -Force | Out-Null
+          $weights = Join-Path $models 'ggml-tiny.bin'
+          $env:MYNOTES_TEST_WAV = Join-Path $env:RUNNER_TEMP 'jfk.wav'
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 120 'https://huggingface.co/ggerganov/whisper.cpp/resolve/80da2d8bfee42b0e836fc3a9890373e5defc00a6/ggml-tiny.bin' --output $weights
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $weights).Hash -ne 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21') { throw 'Whisper model checksum mismatch' }
+          curl.exe --fail --silent --show-error --location --retry 3 'https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav' --output $env:MYNOTES_TEST_WAV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $env:MYNOTES_TEST_WAV).Hash -ne '59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e') { throw 'Speech sample checksum mismatch' }
+          & "$app/runtime/python.exe" -I windows/setup/smoke_speech.py --audio $env:MYNOTES_TEST_WAV --language en
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $italianSample = Join-Path $env:RUNNER_TEMP 'italian-librivox.mp3'
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 90 'https://archive.org/download/divina_commedia_inferno_2302_librivox/divinacommedialinferno_01_alighieri_128kb.mp3' --output $italianSample
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $italianSample).Hash -ne 'c1ceba6ec4b2e02e0be1de68d2251a79705daf82d4a4bcf5e5809bed0d2b38d4') { throw 'Italian speech sample checksum mismatch' }
+          & "$app/runtime/python.exe" -I windows/setup/smoke_speech.py --audio $italianSample --language it --excerpt-seconds 40
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dialogue = Join-Path $env:RUNNER_TEMP 'two-speakers-en.wav'
+          $speakers = Join-Path $env:RUNNER_TEMP 'speaker-test.json'
+          curl.exe --fail --silent --show-error --location --retry 3 'https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/1-two-speakers-en.wav' --output $dialogue
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $dialogue).Hash -ne 'f1c877dc01595e28be7147bf2fe38e5268147a868bf3fdb5c37b97f5940e21f3') { throw 'Diarization sample checksum mismatch' }
+          & "$app/runtime/python.exe" -I -m mynotes.speaker_diarization --audio $dialogue --segmentation "$app/speech/diarization/segmentation.onnx" --embedding "$app/speech/diarization/embedding.onnx" --output $speakers
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $report = Get-Content $speakers -Raw | ConvertFrom-Json
+          if (@($report.segments.speaker | Sort-Object -Unique).Count -ne 2 -or $report.professor) {
+              throw 'Sherpa did not distinguish the two speakers in the official audio sample'
+          }
+          $env:MYNOTES_USER_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes test home'
+          $collection = Join-Path $env:RUNNER_TEMP 'MyNotes audio fixture'
+          & "$app/runtime/python.exe" -I windows/setup/smoke_queue.py --workspace $env:MYNOTES_TEST_WORKSPACE --audio $env:MYNOTES_TEST_WAV --collection $collection
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Benchmark the default model on the full English recording
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          & "$app/runtime/python.exe" -I -m mynotes install-speech-model --json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $english = Join-Path $env:RUNNER_TEMP 'english-librivox.mp3'
+          curl.exe --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 180 'https://archive.org/download/alices_adventures_1003/alices_adventures_01_carroll.mp3' --output $english
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash $english).Hash -ne '42ead6b9f74aee965a31a3bdf8f4624aacb18ce2f1519f0a6da5724c091fc279') { throw 'English speech sample checksum mismatch' }
+          $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
+          & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $english --language en --expected alice --report "$reports/english.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Benchmark the default model on the full Italian recording
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 35
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $env:MYNOTES_HOME = Join-Path $env:RUNNER_TEMP 'MyNotes application data'
+          $reports = Join-Path $env:RUNNER_TEMP 'speech-benchmarks'
+          $italian = Join-Path $env:RUNNER_TEMP 'italian-librivox.mp3'
+          & "$app/runtime/python.exe" -I windows/setup/benchmark_speech.py --audio $italian --language it --expected cammin --report "$reports/italian.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Upload public-fixture speech measurements
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-default-speech-measurements
+          path: ${{ runner.temp }}/speech-benchmarks/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Smoke-test desktop UI when the runner has an interactive session
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          if (![Environment]::UserInteractive -or (Get-Process -Id $PID).SessionId -eq 0) {
+              Write-Host 'This runner has no interactive desktop. The Windows 11 VM UI test is still required.'
+              exit 0
+          }
+          powershell.exe -NoProfile -STA -File windows/desktop/tests/SmokeTest.ps1 -DesktopPath "$env:MYNOTES_INSTALLED_APP/desktop/MyNotes.Desktop.exe"
+          exit $LASTEXITCODE
+
+      - name: Test update guard, idle upgrade and data-preserving uninstall
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $app = $env:MYNOTES_INSTALLED_APP
+          $workspace = $env:MYNOTES_TEST_WORKSPACE
+          $launcher = Join-Path $app 'runtime/mynotes.exe'
+          $log = Join-Path $env:RUNNER_TEMP 'mynotes-update.log'
+          $setup = Join-Path $env:MYNOTES_WINDOWS_ARTIFACT 'MyNotes-Setup-x64-internal.exe'
+          $captureExe = Join-Path $app 'capture/MyNotes.Capture.exe'
+          $captureHome = Join-Path $env:LOCALAPPDATA 'MyNotes/Capture'
+          $lease = [System.IO.File]::Open((Join-Path $captureHome 'update.lock'), 'OpenOrCreate', 'ReadWrite', 'ReadWrite')
+          $lease.Lock(0, 1)
+          try {
+              $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
+              if ($result.ExitCode -ne 7) { throw "Expected a busy update exit (7), got $($result.ExitCode)" }
+          } finally {
+              $lease.Dispose()
+          }
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $taskName = "MyNotes Capture $sid"
+          $action = New-ScheduledTaskAction -Execute $captureExe
+          $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive
+          Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force | Out-Null
+          Disable-ScheduledTask -TaskName $taskName | Out-Null
+
+          $result = Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=`"$log`"") -Wait -PassThru
+          if ($result.ExitCode -ne 0) { Get-Content $log -Tail 70; throw "Idle update failed: $($result.ExitCode)" }
+          if (!(Test-Path "$workspace/config/settings.json") -or (Get-ScheduledTask -TaskName $taskName).State -ne 'Disabled') {
+              throw 'Update did not preserve the workspace and the disabled Capture task'
+          }
+          $result = Start-Process (Join-Path $app 'unins000.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -Wait -PassThru
+          if ($result.ExitCode -ne 0) { throw "Uninstall failed: $($result.ExitCode)" }
+          if (!(Test-Path "$workspace/config/settings.json") -or (Test-Path $launcher) -or
+              (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue)) {
+              throw 'Uninstall did not preserve the workspace and remove the runtime and Capture task'
+          }

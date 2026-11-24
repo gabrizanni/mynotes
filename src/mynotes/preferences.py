@@ -56,3 +56,70 @@ def save_background(workspace: Workspace, background: str, *, skip: bool = False
             answers["background"] = background.strip()
         return merge_group_answers(settings, "personal", answers)
     return workspace.configuration_store().update(edit)["personal"]
+
+
+def model_preferences(workspace: Workspace) -> dict:
+    """Read model choices without initializing a workspace or contacting providers."""
+    import hashlib
+    import json
+    from .configuration import validate_configuration
+    # Read one atomically replaced file once: the revision must describe the
+    # same bytes as the returned settings, even if another editor saves now.
+    content = workspace.configuration_path.read_bytes()
+    settings = validate_configuration(json.loads(content))
+    revision = hashlib.sha256(content).hexdigest()
+    return _model_preferences_snapshot(settings, revision)
+
+
+def _model_preferences_snapshot(settings: dict, revision: str) -> dict:
+    from .models import resolve_role_selection, resolve_provider_options
+    provider = settings['providers']['default']
+    model, effort = resolve_provider_options(settings, provider) if provider else ('', '')
+    return {'default': dict(provider=provider, model=model, effort=effort),
+            'overrides': {role: settings['providers'].get('roles', {}).get(role) for role in ('chat', 'notes')},
+            'effective': {role: resolve_role_selection(settings, role) for role in ('chat', 'notes')},
+            'language': settings['personal']['interface_language'],
+            'revision': revision}
+
+
+def save_model_preferences(workspace: Workspace, payload: dict, expected_revision: str) -> dict:
+    """Atomically save the shared choice and both independent overrides."""
+    from .utils import file_sha256
+    if not isinstance(payload, dict) or set(payload) != {'default', 'overrides', 'language'}:
+        raise ConfigurationError('Supply default, overrides and language')
+    if not isinstance(payload['overrides'], dict) or set(payload['overrides']) != {'chat', 'notes'}:
+        raise ConfigurationError('Supply both model roles; null means inherit')
+    if not isinstance(payload['language'], str) or payload['language'] not in {'it', 'en'}:
+        raise ConfigurationError('Choose Italian or English')
+    for value in [payload['default'], *payload['overrides'].values()]:
+        if value is None:
+            continue
+        if (not isinstance(value, dict) or set(value) != {'provider', 'model', 'effort'}
+                or not isinstance(value['provider'], str) or value['provider'] not in SUPPORTED_PROVIDERS or not valid_model(value['model'])
+                or not isinstance(value['effort'], str)):
+            raise ConfigurationError('Each selection needs an agent, model and effort')
+        validate_effort(value['provider'], value['model'], value['effort'])
+    if payload['default'] is None or not isinstance(expected_revision, str) or not expected_revision:
+        raise ConfigurationError('A shared default and expected revision are required')
+    before = {}
+    def edit(settings):
+        from copy import deepcopy
+        before.update(deepcopy(settings))
+        if file_sha256(workspace.configuration_path) != expected_revision:
+            raise ConfigurationError('CONFIGURATION_CONFLICT: settings changed; reread before saving')
+        shared = payload['default']
+        settings['providers']['default'] = shared['provider']
+        settings['providers']['configured'].setdefault(shared['provider'], {}).update(model=shared['model'], effort=shared['effort'])
+        settings['providers']['roles'] = payload['overrides']
+        for custom in payload['overrides'].values():
+            if custom is not None:
+                settings['providers']['configured'].setdefault(custom['provider'], {})
+        settings['personal']['interface_language'] = payload['language']
+        return settings
+    written = workspace.configuration_store().update(edit)
+    import hashlib
+    import json
+    # Return the revision of our own transaction, never a later concurrent edit.
+    revision = expected_revision if written == before else hashlib.sha256(
+        (json.dumps(written, ensure_ascii=False, indent=2, sort_keys=True) + '\n').encode()).hexdigest()
+    return _model_preferences_snapshot(written, revision)

@@ -17,7 +17,7 @@ ERRORS = {
     "FEED_UNAVAILABLE": ("Il calendario non è disponibile a questo indirizzo. Controlla il link iCal.", False, "correct_link"),
     "NETWORK_ERROR": ("Impossibile raggiungere il calendario. Controlla la connessione e riprova.", True, "retry"),
     "TIMEOUT": ("Il calendario non ha risposto in tempo. Riprova tra poco.", True, "retry"),
-    "TLS_ERROR": ("Non è stato possibile verificare la connessione sicura al calendario. Controlla rete, data del Mac e certificati.", False, "check_connection"),
+    "TLS_ERROR": ("Non è stato possibile verificare la connessione sicura al calendario. Controlla rete, data del dispositivo e certificati.", False, "check_connection"),
     "INVALID_CALENDAR": ("La risposta non contiene un calendario iCal valido. Controlla il link di sottoscrizione.", False, "use_ical"),
     "FEED_TOO_LARGE": ("Il calendario supera il limite di dieci MB. Usa un feed più piccolo.", False, "correct_link"),
     "INSECURE_REDIRECT": ("Il calendario rimanda a una connessione non HTTPS. Usa un link iCal sicuro.", False, "correct_link"),

@@ -6,10 +6,12 @@ validation still checks the content; ambiguous and uncited pages remain missing.
 from copy import deepcopy
 
 
-def reconcile(units, request):
+def reconcile(units, request, *, eligible_pages=None):
     result=deepcopy(units)
     settled={d['canonical_slide_id'] for part in result for d in part['organization_delta']}
     pages={row['id'] for row in request.source_pack['evidence'] if row['id'].startswith('S')}
+    if eligible_pages is not None:
+        pages &= set(eligible_pages)
     origins=request.batch_context.get('lesson_evidence',{})
     for identifier in sorted(pages-settled):
         candidates=[]

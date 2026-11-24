@@ -12,8 +12,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .office import find_soffice
+from .provider_process import run_windows_job
 from .utils import atomic_json_write, file_sha256
-from .workspace import Workspace
+from .workspace import Workspace, windows_data_home
 
 INSTALL_URLS = {
     "codex": "https://developers.openai.com/codex/cli/",
@@ -23,7 +25,8 @@ INSTALL_URLS = {
 
 
 def runtime_home() -> Path:
-    return Path(os.environ.get("MYNOTES_HOME", str(Path.home() / "Library/Application Support/MyNotes"))).expanduser()
+    default = windows_data_home() if os.name == "nt" else Path.home() / "Library/Application Support/MyNotes"
+    return Path(os.environ.get("MYNOTES_HOME", str(default))).expanduser()
 
 
 def _managed_registry() -> tuple[dict[str, Any], str | None]:
@@ -39,7 +42,7 @@ def _managed_registry() -> tuple[dict[str, Any], str | None]:
         return {}, "Managed component registry must be a JSON object."
     if "schema_version" in data and data["schema_version"] != 1:
         return {}, "Managed component registry uses an unsupported schema version."
-    for key in ("argmax", "soffice", "model_cache"):
+    for key in ("argmax", "whispercpp", "soffice", "model_cache"):
         if key in data and (not isinstance(data[key], str) or not data[key] or "\x00" in data[key]):
             return {}, f"Managed component registry has an invalid {key} path."
     if "execution_proof" in data and not isinstance(data["execution_proof"], dict):
@@ -223,6 +226,12 @@ def add_first_course(workspace: Workspace, name: str, notes_language: str = "en"
     return next(course for course in updated["courses"] if course["code"] == selected_code[0])
 
 
+def _provider_probe(command: list[str], *, timeout: float, env: dict[str, str]):
+    if os.name == "nt":
+        return run_windows_job(command, timeout=timeout, env=env)
+    return subprocess.run(command, capture_output=True, text=True, timeout=timeout, env=env)
+
+
 def provider_check(provider: str | None) -> dict:
     if not provider:
         return {"status": "missing", "action": "Open MyNotes setup and choose an AI agent."}
@@ -233,7 +242,7 @@ def provider_check(provider: str | None) -> dict:
     result = {"status": "unverified", "provider": provider, "executable": executable,
               "action": f"Open {provider} and sign in; then recheck. No paid generation was performed."}
     try:
-        version = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=10, env=provider_environment())
+        version = _provider_probe([executable, "--version"], timeout=10, env=provider_environment())
         if version.returncode:
             return {**result, "status": "incompatible", "action": f"Update {provider} using its official installer.", "install_url": INSTALL_URLS.get(provider)}
         result["version"] = (version.stdout or version.stderr).strip()[:200]
@@ -248,7 +257,7 @@ def provider_check(provider: str | None) -> dict:
         missing = []
         result["compatibility_verified"] = False
         for arguments, required in probes.get(provider, []):
-            help_result = subprocess.run([executable, *arguments], capture_output=True, text=True, timeout=10, env=provider_environment())
+            help_result = _provider_probe([executable, *arguments], timeout=10, env=provider_environment())
             help_text = help_result.stdout + help_result.stderr
             if help_result.returncode:
                 missing.extend(required)
@@ -267,7 +276,7 @@ def provider_check(provider: str | None) -> dict:
         result["compatibility_verified"] = True
         command = {"codex": ["login", "status"], "claude": ["auth", "status"]}.get(provider)
         if command:
-            auth = subprocess.run([executable, *command], capture_output=True, text=True, timeout=15, env=provider_environment())
+            auth = _provider_probe([executable, *command], timeout=15, env=provider_environment())
             if provider == "claude":
                 payload = json.loads(auth.stdout)
                 if not isinstance(payload, dict) or type(payload.get("loggedIn")) is not bool:
@@ -295,18 +304,40 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
             settings = workspace.configuration_store().load()
         except Exception as error:
             config_error = str(error)
-    argmax = managed_tool("argmax") or shutil.which("argmax-cli")
-    model_cache = Path(tools.get("model_cache", workspace.root / "local-models"))
-    model_ready = any(model_cache.glob("whisperkit/**/AudioEncoder.mlmodelc"))
-    soffice = managed_tool("soffice") or shutil.which("soffice")
     proof = tools.get("execution_proof", {})
-    asr_verified = bool(argmax and proof.get("transcription") is True and proof.get("model_cache") == str(model_cache) and proof.get("argmax_sha256") == file_sha256(Path(argmax)))
-    word_verified = bool(soffice and proof.get("word") is True and proof.get("soffice_sha256") == file_sha256(Path(soffice)))
+    managed_soffice = managed_tool("soffice")
+    if os.name == "nt":
+        from .asr import default_engines
+        from .windows_speech import DEFAULT_MODEL, current_proof
+        whisper = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+        asr_executable = whisper.executable if whisper else None
+        weights = whisper.model_dir / f"ggml-{DEFAULT_MODEL}.bin" if whisper else None
+        model_ready = bool(weights and weights.is_file())
+        asr_verified = bool(weights and current_proof(asr_executable, weights))
+        asr_action = "Repair the Windows installation to restore the speech runtime."
+        if asr_executable:
+            asr_action = ("Verify local transcription from MyNotes Settings." if model_ready
+                          else "Download the local speech model from MyNotes Settings.")
+        soffice = find_soffice(managed_soffice)
+        word_verified = bool(soffice and _current_word_proof(soffice))
+        word_action = "Verify the Word renderer." if soffice else "Install LibreOffice for Word validation."
+    else:
+        asr_executable = managed_tool("argmax") or shutil.which("argmax-cli")
+        model_cache = Path(tools.get("model_cache", workspace.root / "local-models"))
+        model_ready = any(model_cache.glob("whisperkit/**/AudioEncoder.mlmodelc"))
+        asr_verified = bool(asr_executable and proof.get("transcription") is True
+                            and proof.get("model_cache") == str(model_cache)
+                            and proof.get("argmax_sha256") == file_sha256(Path(asr_executable)))
+        soffice = managed_soffice or shutil.which("soffice")
+        word_verified = bool(soffice and proof.get("word") is True and proof.get("soffice_sha256") == file_sha256(Path(soffice)))
+        word_action = "Open MyNotes setup to install the Word renderer."
+        asr_action = "Open MyNotes setup to download local transcription components."
+    from .models import resolve_role_selection
     checks = {
         "installation": _check(workspace.is_initialized() and config_error is None, "Open MyNotes setup.", workspace=str(workspace.root), configuration_error=config_error),
-        "agent": provider_check(provider or settings.get("providers", {}).get("default")),
-        "transcription": _check(bool(argmax and model_ready and asr_verified), "Open MyNotes setup to download local transcription components.", executable=argmax, model_present=model_ready, execution_verified=asr_verified),
-        "word": _check(bool(soffice and word_verified), "Open MyNotes setup to install the Word renderer.", executable=soffice, execution_verified=word_verified),
+        "agent": provider_check(resolve_role_selection(settings, 'chat', provider)['provider']),
+        "transcription": _check(bool(asr_executable and model_ready and asr_verified), asr_action, executable=asr_executable, model_present=model_ready, execution_verified=asr_verified),
+        "word": _check(bool(soffice and word_verified), word_action, executable=soffice, execution_verified=word_verified),
         "capture": {"status": "optional", "action": "Configure Capture, record a microphone test, listen to it and confirm audibility."},
     }
     if registry_error:
@@ -318,8 +349,8 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
         if not isinstance(record, dict) or not isinstance(record.get("path"), str):
             raise ValueError("Invalid Capture microphone test evidence; run and confirm a new test.")
         audio = Path(record["path"])
-        from .capture import app_path
-        binary = app_path() / "Contents/MacOS/MyNotesCapture"
+        from .capture import capture_executable
+        binary = capture_executable()
         if record.get("audible_confirmed") is True and record.get("validated") is True and audio.is_file() and record.get("sha256") == file_sha256(audio) and record.get("capture_binary_sha256") == file_sha256(binary):
             checks["capture"] = {"status": "ready", "action": "Capture microphone test verified and audibility confirmed.", "path": str(audio)}
     except (OSError, ValueError, KeyError, TypeError) as error:
@@ -346,11 +377,16 @@ def confirm_capture_audio(workspace: Workspace, audio: Path, *, audible: bool) -
             continue
     if not verified_session:
         raise ValueError("Select the completed microphone test from Capture status; ordinary recordings cannot confirm readiness.")
-    checked = subprocess.run(["/usr/bin/afinfo", str(audio)], capture_output=True, text=True, timeout=15)
-    if checked.returncode or not audio.is_file() or audio.stat().st_size == 0:
+    if os.name == "nt":
+        from .capture_windows import valid_audio
+        audio_is_valid = valid_audio(audio)
+    else:
+        checked = subprocess.run(["/usr/bin/afinfo", str(audio)], capture_output=True, text=True, timeout=15)
+        audio_is_valid = checked.returncode == 0 and audio.is_file() and audio.stat().st_size > 0
+    if not audio_is_valid:
         raise ValueError("Microphone test is missing or is not valid audio.")
-    from .capture import app_path
-    binary = app_path() / "Contents/MacOS/MyNotesCapture"
+    from .capture import capture_executable
+    binary = capture_executable()
     evidence = {"path": str(audio), "validated": True, "audible_confirmed": True, "sha256": file_sha256(audio), "capture_binary_sha256": file_sha256(binary)}
     atomic_json_write(workspace.state_dir / "capture/audio-readiness.json", evidence)
     return evidence
@@ -366,6 +402,59 @@ def setup_cli(workspace: Workspace, provider: str | None = None) -> int:
         raise ValueError("Install MyNotes.app in Applications, then open it to complete setup.") from error
     return 0
 
+
+
+def _word_proof_path() -> Path:
+    return runtime_home() / "checks/word-renderer.json"
+
+
+def _word_renderer_identity(executable: str) -> dict:
+    renderer = Path(executable).resolve()
+    worker = renderer.with_name("soffice.bin")
+    identity = {"soffice_path": str(renderer), "soffice_sha256": file_sha256(renderer)}
+    if worker.is_file():
+        identity["worker_sha256"] = file_sha256(worker)
+    return identity
+
+
+def _current_word_proof(executable: str) -> dict | None:
+    try:
+        proof = json.loads(_word_proof_path().read_text(encoding="utf-8"))
+        signature = _word_renderer_identity(executable)
+        if isinstance(proof, dict) and proof.get("word") is True and all(
+            proof.get(key) == value for key, value in signature.items()
+        ) and proof.get("worker_sha256") == signature.get("worker_sha256"):
+            return proof
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def verify_word_renderer() -> dict:
+    """Exercise the same local DOCX rendering gate used before publication."""
+    from docx import Document
+    from .publication import _render_and_validate, append_equation
+
+    executable = find_soffice(managed_tool("soffice"))
+    if not executable:
+        raise ValueError("Install LibreOffice for Word validation, then retry.")
+    existing = _current_word_proof(executable)
+    if existing:
+        return existing
+    signature = _word_renderer_identity(executable)
+    with tempfile.TemporaryDirectory(prefix="mynotes-word-check-") as temporary:
+        root = Path(temporary)
+        document = Document()
+        document.add_heading("MyNotes setup test", 0)
+        document.add_paragraph("Your local Word renderer is working.")
+        append_equation(document, "x^2 + y^2 = z^2")
+        document.save(root / "check.docx")
+        rendered = _render_and_validate(root / "check.docx", root / "render")
+        if _word_renderer_identity(executable) != signature:
+            raise ValueError("LibreOffice changed during validation. Retry the Word check.")
+    proof = {**signature, "word": True, "word_pages": len(rendered["pages"])}
+    atomic_json_write(_word_proof_path(), proof)
+    return proof
 
 
 def verify_local_components(workspace: Workspace) -> dict:

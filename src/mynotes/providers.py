@@ -17,6 +17,7 @@ import shutil
 import signal
 import threading
 import subprocess
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field, replace
@@ -27,6 +28,7 @@ from .execution import AttemptStart, timestamp
 from .generation_budget import MODEL_PHASE_SECONDS, CLI_PHASE_TIMEOUT, invocation_timeout, SOFT_PROGRESS_MESSAGE
 from .utils import atomic_json_write, now_compact_utc
 from .provider_limits import CommandSizeError, validate_command_size
+from .provider_process import run_windows_job
 
 
 class ProviderError(RuntimeError):
@@ -38,7 +40,7 @@ class ProviderCancelledError(ProviderError):
 
 
 class ProviderUnavailableError(ProviderError):
-    """The selected local CLI cannot be used on this Mac."""
+    """The selected local CLI cannot be used on this computer."""
 
 
 class ProviderQuotaError(ProviderError):
@@ -475,6 +477,17 @@ PROVIDER_INSTALL_URLS = {
 def provider_environment() -> dict[str, str]:
     """Give GUI launches the same supported launcher locations as a shell."""
     environment = os.environ.copy()
+    if os.name == "nt":
+        home = Path.home()
+        directories = [home / ".local/bin", Path(sys.executable).parent]
+        if environment.get("LOCALAPPDATA"):
+            local = Path(environment["LOCALAPPDATA"])
+            directories.extend((local / "agy/bin", local / "Microsoft/WinGet/Links", local / "Microsoft/WindowsApps"))
+        if environment.get("APPDATA"):
+            directories.append(Path(environment["APPDATA"]) / "npm")
+        existing = environment.get("PATH", "").split(os.pathsep)
+        environment["PATH"] = os.pathsep.join(dict.fromkeys(existing + list(map(str, directories))))
+        return environment
     # LaunchServices may omit HOME. Restore the OS user's home for CLIs that
     # require it; do not redirect authentication or clone credentials.
     if not environment.get("HOME"):
@@ -487,7 +500,23 @@ def provider_environment() -> dict[str, str]:
     return environment
 
 
-def provider_executable(provider: str) -> str | None:
+def provider_executable(provider: str, *, path: str | None = None) -> str | None:
+    if os.name == "nt":
+        # Batch wrappers would interpret parts of arbitrary chat prompts as shell
+        # syntax. Use the provider's standalone executable on Windows.
+        name = provider if provider in {"codex.exe", "agy.exe", "claude.exe"} else f"{provider}.exe"
+        if name not in {"codex.exe", "agy.exe", "claude.exe"}:
+            return None
+        search = path if path is not None else provider_environment()["PATH"]
+        for directory in search.split(os.pathsep):
+            root = Path(directory.strip('"'))
+            if root.is_absolute():
+                executable = root / name
+                if executable.is_file():
+                    return str(executable)
+        return None
+    if path is not None:
+        return shutil.which(provider, path=path)
     return shutil.which(provider) or shutil.which(provider, path=provider_environment()["PATH"])
 
 
@@ -545,7 +574,10 @@ def _exception_completion(command: list[str], error: BaseException) -> subproces
         return None
     def text(value):
         return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
-    return subprocess.CompletedProcess(command, None, text(error.output), text(error.stderr))
+    if not hasattr(error, "output") and not hasattr(error, "stderr"):
+        return None
+    return subprocess.CompletedProcess(command, None, text(getattr(error, "output", None)),
+                                       text(getattr(error, "stderr", None)))
 
 
 def reported_usage(provider: str, stdout: str, envelope: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -630,6 +662,25 @@ def _usage_from_events(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {}
 
 
+def _check_worker_cancelled():
+    from .review_dispatch import cancel_event
+    cancellation = cancel_event.get()
+    if cancellation is not None and cancellation.is_set():
+        raise ProviderCancelledError("Review stopped after another blocking packet")
+
+
+def _run_structured_worker(command, request, environment, timeout, prompt):
+    cwd = str(request.run_dir.resolve()) if request.run_dir is not None else None
+    limit = None if math.isinf(timeout) else timeout
+    if os.name == "nt":
+        # The private prompt can exceed CreateProcessW's argv limit. Both
+        # structured CLIs accept it on stdin.
+        return run_windows_job(command, timeout=limit, cwd=cwd, env=environment, input_text=prompt,
+                               check_cancelled=_check_worker_cancelled)
+    return subprocess.run(command, text=True, capture_output=True, timeout=limit, check=False,
+                          cwd=cwd, env=environment, **({"input": prompt} if command[-1] == "-" else {}))
+
+
 class CodexAdapter:
     executable = "codex"
 
@@ -640,13 +691,27 @@ class CodexAdapter:
             attempt = _save_attempt(request, command=[self.executable], completed=None,
                                     started=AttemptStart(), error=message, invocation_started=False)
             raise ProviderUnavailableError(f"{message} (attempt: {attempt})")
+        joint = request.phase == 'writing' and (request.batch_context or {}).get('progressive_protocol') == 3
+        sheets = []
+        if joint:
+            from .codex_notes import prepare
+            request, sheets = prepare(request)
         attempt_dir = _attempt_dir(request)
         schema_path = attempt_dir / f"{request.phase}-{uuid.uuid4().hex[:8]}.schema.json"
         final_path = attempt_dir / f"{request.phase}-{uuid.uuid4().hex[:8]}.final.json"
         atomic_json_write(schema_path, _codex_schema(request.response_schema or notes_schema(compact=True)))
         command = [executable, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only"]
         command.extend(provider_override_flags(request.requested))
-        command.extend(["--output-schema", str(schema_path), "--output-last-message", str(final_path), _prompt(request)])
+        prompt = _prompt(request)
+        if joint:
+            from .codex_notes import instructions
+            prompt += instructions()
+            input_path = attempt_dir / (schema_path.stem + '.input.txt')
+            input_path.write_text(prompt, encoding='utf-8')
+            for sheet in sheets:
+                command.extend(['--image', sheet['path']])
+        command.extend(["--output-schema", str(schema_path), "--output-last-message", str(final_path),
+                        "-" if joint or os.name == "nt" else prompt])
         timeout = invocation_timeout(request.timeout_seconds)
         if timeout <= 0:
             raise ProviderTimeoutError(f"{request.requested.provider} {request.phase} phase has no remaining execution allowance; no provider was invoked")
@@ -654,18 +719,23 @@ class CodexAdapter:
         try:
             environment = provider_environment()
             validate_command_size(command, environment)
-            completed = subprocess.run(command, text=True, capture_output=True, timeout=None if math.isinf(timeout) else timeout, check=False,
-                cwd=str(request.run_dir.resolve()) if request.run_dir is not None else None, env=environment)
+            completed = _run_structured_worker(command, request, environment, timeout, prompt)
         except CommandSizeError as error:
             self._raise(request, command, None, started, str(error), invocation_started=False)
         except subprocess.TimeoutExpired as error:
             self._raise(request, command, _exception_completion(command, error), started,
                         f"{request.requested.provider} {request.phase} phase exceeded its remaining {timeout:.1f}-second execution allowance (phase maximum {MODEL_PHASE_SECONDS}s)", error_type=ProviderTimeoutError)
+        except (KeyboardInterrupt, ProviderCancelledError) as error:
+            self._raise(request, command, _exception_completion(command, error), started,
+                        "Note generation interrupted by user", error_type=ProviderCancelledError)
         except OSError as error:
             self._raise(request, command, _exception_completion(command, error), started, str(error))
         events = _jsonl_events(completed.stdout)
         combined = f"{completed.stdout}\n{completed.stderr}"
         if completed.returncode != 0:
+            if any(marker in combined for marker in ('Operation not permitted', 'unable to open database file')):
+                self._raise(request, command, completed, started,
+                    'CODEX_LAUNCH_DENIED: Codex could not initialize its local runtime. Run this MyNotes command through the coordinator permission mechanism; changing the child sandbox cannot grant parent permissions. No automatic retry. ' + _compact(combined))
             self._raise(request, command, completed, started, _compact(combined))
         try:
             notes = json.loads(final_path.read_text(encoding="utf-8"))
@@ -673,7 +743,23 @@ class CodexAdapter:
             self._raise(request, command, completed, started, f"Codex did not produce a valid structured final response: {error}")
         if not isinstance(notes, dict):
             self._raise(request, command, completed, started, "Codex structured final response is not an object")
-        attempt = _save_attempt(request, command=command, completed=completed, started=started, envelope={"events": len(events), "usage": _usage_from_events(events)})
+        envelope = {"events": len(events), "usage": _usage_from_events(events)}
+        if joint:
+            from .codex_notes import source_access
+            envelope.update(transport='codex_joint_v1', preview_sheets=sheets, input_path=str(input_path),
+                            input_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                            source_access=source_access(events, request),
+                            final_sha256=hashlib.sha256(final_path.read_bytes()).hexdigest())
+        if joint:
+            from .codex_notes import certified
+            try:
+                reconstructed = certified({'returncode': completed.returncode, 'requested': request.requested.__dict__,
+                                           'stdout': completed.stdout}, request)
+                if reconstructed != _normalize_transport_notes(notes, request.response_schema):
+                    raise ProviderError('Codex final file differs from the completed transport message')
+            except ProviderError as error:
+                self._raise(request, command, completed, started, str(error))
+        attempt = _save_attempt(request, command=command, completed=completed, started=started, envelope=envelope)
         notes = _normalize_transport_notes(notes, request.response_schema)
         model, effort = _reported_settings(events)
         return ProviderResponse(notes, "codex", model, effort, _usage_from_events(events), str(attempt))
@@ -802,6 +888,9 @@ def _stage_agy_context(request: ProviderRequest, directory: Path, *, write: bool
 
 def _run_agy_worker(command: list[str], *, timeout: float, cwd: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """A cancelled/timed-out writer cannot leave paid CLI descendants running."""
+    if os.name == "nt":
+        return run_windows_job(command, timeout=None if math.isinf(timeout) else timeout, cwd=cwd, env=env,
+                               check_cancelled=_check_worker_cancelled)
     with subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           cwd=cwd, env=env, start_new_session=True) as process:
         previous = None
@@ -891,7 +980,8 @@ class AgyAdapter:
             self._raise(request, command, _exception_completion(command, error), started,
                         f"Agy {request.phase} phase exceeded its remaining {timeout:.1f}-second execution allowance (phase maximum {AGY_WRITER_TIMEOUT_SECONDS}s); the process group was stopped. No automatic retry or model change.", error_type=ProviderTimeoutError)
         except ProviderCancelledError as error:
-            self._raise(request, command, _exception_completion(command, error), started, str(error))
+            self._raise(request, command, _exception_completion(command, error), started, str(error),
+                        error_type=ProviderCancelledError)
         except KeyboardInterrupt as error:
             _save_attempt(request, command=command, completed=_exception_completion(command, error), started=started,
                           error="Note generation interrupted by user", invocation_started=True)
@@ -953,7 +1043,9 @@ class ClaudeAdapter:
         if request.run_dir is not None:
             request.run_dir.mkdir(parents=True, exist_ok=True)
             command.extend(["--add-dir", str(request.run_dir.resolve())])
-        command.append(_prompt(request))
+        prompt = _prompt(request)
+        if os.name != "nt":
+            command.append(prompt)
         timeout = invocation_timeout(request.timeout_seconds)
         if timeout <= 0:
             raise ProviderTimeoutError(f"{request.requested.provider} {request.phase} phase has no remaining execution allowance; no provider was invoked")
@@ -961,14 +1053,15 @@ class ClaudeAdapter:
         try:
             environment = provider_environment()
             validate_command_size(command, environment)
-            completed = subprocess.run(command, text=True, capture_output=True, timeout=None if math.isinf(timeout) else timeout,
-                check=False, cwd=str(request.run_dir.resolve()) if request.run_dir is not None else None,
-                env=environment)
+            completed = _run_structured_worker(command, request, environment, timeout, prompt)
         except CommandSizeError as error:
             self._raise(request, command, None, started, str(error), invocation_started=False)
         except subprocess.TimeoutExpired as error:
             self._raise(request, command, _exception_completion(command, error), started,
                         f"{request.requested.provider} {request.phase} phase exceeded its remaining {timeout:.1f}-second execution allowance (phase maximum {MODEL_PHASE_SECONDS}s)", error_type=ProviderTimeoutError)
+        except (KeyboardInterrupt, ProviderCancelledError) as error:
+            self._raise(request, command, _exception_completion(command, error), started,
+                        "Note generation interrupted by user", error_type=ProviderCancelledError)
         except OSError as error:
             self._raise(request, command, _exception_completion(command, error), started, str(error))
         if completed.returncode != 0:
