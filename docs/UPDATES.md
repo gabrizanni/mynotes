@@ -1,5 +1,28 @@
 # Versioned updates and recovery
 
+## 0.4.1 · Separate chat/writing models and Codex lesson recovery
+
+- Keep one shared model or choose independent agent/model/effort settings for
+  Chat and Note writing. The startup sidebar shows both effective selections;
+  Settings → AI agents includes per-activity inheritance and atomic saving.
+- The launcher resolves the Chat role; new notes resolve the writing role.
+  Legacy shared preferences remain valid and saved jobs retain their models.
+- Codex uses a compact single-pass writing contract, full stdin source text and
+  preview attachments. Notebook/document evidence no longer becomes invented
+  page ownership, and supplementary placement follows substantive narrative.
+- Retained successful Codex responses can be revalidated locally without another
+  model call. Permission denials have explicit diagnostics and included figures
+  need observed full-image inspection. Agy's writing adapter/protocol is unchanged.
+- Relative source paths resolve from the workspace. Named math operators and
+  stacked summation conditions remain editable in Word.
+
+This prerelease bundles the updated native interface and Python backend.
+Installation does not regenerate lessons, migrate course data or change saved
+model choices. Changes to chat models apply to new chats. Conflicting publication
+history or actual content gaps remain preserved for explicit review. Synthetic
+and retained-response checks do not certify a fresh real-provider generation.
+
+
 ## 0.4.0 · Shared chat startup
 
 - Codex, Antigravity and Claude Code load the same MyNotes workspace instructions
