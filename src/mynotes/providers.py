@@ -678,7 +678,7 @@ def _run_structured_worker(command, request, environment, timeout, prompt):
         return run_windows_job(command, timeout=limit, cwd=cwd, env=environment, input_text=prompt,
                                check_cancelled=_check_worker_cancelled)
     return subprocess.run(command, text=True, capture_output=True, timeout=limit, check=False,
-                          cwd=cwd, env=environment)
+                          cwd=cwd, env=environment, **({"input": prompt} if command[-1] == "-" else {}))
 
 
 class CodexAdapter:
@@ -691,6 +691,11 @@ class CodexAdapter:
             attempt = _save_attempt(request, command=[self.executable], completed=None,
                                     started=AttemptStart(), error=message, invocation_started=False)
             raise ProviderUnavailableError(f"{message} (attempt: {attempt})")
+        joint = request.phase == 'writing' and (request.batch_context or {}).get('progressive_protocol') == 3
+        sheets = []
+        if joint:
+            from .codex_notes import prepare
+            request, sheets = prepare(request)
         attempt_dir = _attempt_dir(request)
         schema_path = attempt_dir / f"{request.phase}-{uuid.uuid4().hex[:8]}.schema.json"
         final_path = attempt_dir / f"{request.phase}-{uuid.uuid4().hex[:8]}.final.json"
@@ -698,8 +703,15 @@ class CodexAdapter:
         command = [executable, "exec", "--json", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only"]
         command.extend(provider_override_flags(request.requested))
         prompt = _prompt(request)
+        if joint:
+            from .codex_notes import instructions
+            prompt += instructions()
+            input_path = attempt_dir / (schema_path.stem + '.input.txt')
+            input_path.write_text(prompt, encoding='utf-8')
+            for sheet in sheets:
+                command.extend(['--image', sheet['path']])
         command.extend(["--output-schema", str(schema_path), "--output-last-message", str(final_path),
-                        "-" if os.name == "nt" else prompt])
+                        "-" if joint or os.name == "nt" else prompt])
         timeout = invocation_timeout(request.timeout_seconds)
         if timeout <= 0:
             raise ProviderTimeoutError(f"{request.requested.provider} {request.phase} phase has no remaining execution allowance; no provider was invoked")
@@ -721,6 +733,9 @@ class CodexAdapter:
         events = _jsonl_events(completed.stdout)
         combined = f"{completed.stdout}\n{completed.stderr}"
         if completed.returncode != 0:
+            if any(marker in combined for marker in ('Operation not permitted', 'unable to open database file')):
+                self._raise(request, command, completed, started,
+                    'CODEX_LAUNCH_DENIED: Codex could not initialize its local runtime. Run this MyNotes command through the coordinator permission mechanism; changing the child sandbox cannot grant parent permissions. No automatic retry. ' + _compact(combined))
             self._raise(request, command, completed, started, _compact(combined))
         try:
             notes = json.loads(final_path.read_text(encoding="utf-8"))
@@ -728,7 +743,23 @@ class CodexAdapter:
             self._raise(request, command, completed, started, f"Codex did not produce a valid structured final response: {error}")
         if not isinstance(notes, dict):
             self._raise(request, command, completed, started, "Codex structured final response is not an object")
-        attempt = _save_attempt(request, command=command, completed=completed, started=started, envelope={"events": len(events), "usage": _usage_from_events(events)})
+        envelope = {"events": len(events), "usage": _usage_from_events(events)}
+        if joint:
+            from .codex_notes import source_access
+            envelope.update(transport='codex_joint_v1', preview_sheets=sheets, input_path=str(input_path),
+                            input_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                            source_access=source_access(events, request),
+                            final_sha256=hashlib.sha256(final_path.read_bytes()).hexdigest())
+        if joint:
+            from .codex_notes import certified
+            try:
+                reconstructed = certified({'returncode': completed.returncode, 'requested': request.requested.__dict__,
+                                           'stdout': completed.stdout}, request)
+                if reconstructed != _normalize_transport_notes(notes, request.response_schema):
+                    raise ProviderError('Codex final file differs from the completed transport message')
+            except ProviderError as error:
+                self._raise(request, command, completed, started, str(error))
+        attempt = _save_attempt(request, command=command, completed=completed, started=started, envelope=envelope)
         notes = _normalize_transport_notes(notes, request.response_schema)
         model, effort = _reported_settings(events)
         return ProviderResponse(notes, "codex", model, effort, _usage_from_events(events), str(attempt))

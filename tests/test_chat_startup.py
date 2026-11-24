@@ -150,7 +150,10 @@ def test_all_providers_share_rules_and_startup_prompt(tmp_path, monkeypatch):
     assert launch_chat(workspace, configuration, "codex") == 0
     assert launch_chat(workspace, configuration, "agy") == 0
     assert launch_chat(workspace, configuration, "claude") == 0
-    assert calls[0][-1] == calls[1][-1] == calls[2][-1]
+    assert calls[1][-1] == calls[2][-1]
+    assert calls[0][-1].startswith(calls[1][-1])
+    assert 'CODEX_LAUNCH_DENIED' in calls[0][-1]
+    assert 'CODEX_LAUNCH_DENIED' not in calls[1][-1]
     assert "Ciao! Sono pronto ad aiutarti con MyNotes." in calls[0][-1]
     assert CORE not in calls[0][-1]
     assert CORE in (workspace.root / "AGENTS.md").read_text()
