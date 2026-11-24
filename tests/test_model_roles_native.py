@@ -40,7 +40,7 @@ def test_native_setup_saves_both_roles_and_launches_the_chat_role(tmp_path,monke
     ws=Workspace(tmp_path/'workspace');ws.initialize();save_preferences(ws,'codex','shared','it',effort='high')
     prefix=tmp_path/'prefix';(prefix/'bin').mkdir(parents=True)
     launcher=prefix/'bin/mynotes'
-    launcher.write_text('#!/bin/zsh\nexport PYTHONPATH='+shlex.quote(str(root/'src'))+'\nexec '+shlex.quote(sys.executable)+' -m mynotes "$@"\n')
+    launcher.write_text('#!/bin/zsh\n# MyNotes managed launcher\nexport PYTHONPATH='+shlex.quote(str(root/'src'))+'\nexec '+shlex.quote(sys.executable)+' -m mynotes "$@"\n')
     launcher.chmod(0o700)
     app=tmp_path/'SetupCode.swift';app.write_text((sources/'App.swift').read_text().replace('@main',''))
     stub=tmp_path/'TerminalStub.swift';stub.write_text('''import Foundation
@@ -60,6 +60,14 @@ struct ChatTerminal {
   setup.notesOverride=ModelRoleSelection(provider:"agy",model:"writer",effort:"medium")
   try setup.savePreferences()
   try await setup.launchChat()
+  let fm=FileManager.default
+  let version=setup.runtime.appendingPathComponent("app/versions/0.4.1")
+  try fm.createDirectory(at:version,withIntermediateDirectories:true)
+  try Data("{}".utf8).write(to:version.appendingPathComponent("installation.json"))
+  try fm.createSymbolicLink(at:setup.runtime.appendingPathComponent("app/current"),withDestinationURL:version)
+  try JSONSerialization.data(withJSONObject:["version":"0.4.0"]).write(to:setup.runtime.appendingPathComponent("setup.json"))
+  precondition(setup.receiptIsCurrent(expectedVersion:"0.4.1"))
+  precondition(!setup.receiptIsCurrent(expectedVersion:"0.4.2"))
  }
 }
 ''')
