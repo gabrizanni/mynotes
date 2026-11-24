@@ -53,6 +53,24 @@ def resolve_provider_options(configuration: dict[str, Any], provider: str) -> tu
     return "", str(options.get("effort", "")).strip()
 
 
+
+def resolve_role_selection(configuration: dict[str, Any], role: str, provider_override: str | None = None) -> dict[str, Any]:
+    """Resolve one activity; an explicit provider never borrows another agent's model."""
+    if role not in {'chat', 'notes'}:
+        raise ConfigurationError('Unknown model role')
+    providers = configuration.get('providers', {})
+    custom = providers.get('roles', {}).get(role)
+    selected = (custom or {}).get('provider') or providers.get('default')
+    if provider_override is not None and provider_override not in SUPPORTED_PROVIDERS:
+        raise ConfigurationError('Unsupported provider')
+    if provider_override is not None and provider_override != selected:
+        model, effort = resolve_provider_options(configuration, provider_override)
+        return dict(provider=provider_override, model=model, effort=effort, origin='provider_override')
+    if custom is not None:
+        return {**custom, 'origin': 'custom'}
+    model, effort = resolve_provider_options(configuration, selected) if selected else ('', '')
+    return dict(provider=selected, model=model, effort=effort, origin='default')
+
 def _safe_label(value: Any, fallback: str) -> str:
     from .model_discovery import safe_text
     return safe_text(value, fallback, 100)

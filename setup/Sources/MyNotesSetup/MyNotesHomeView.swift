@@ -13,10 +13,11 @@ struct MyNotesHomeView: View {
     private var modelLabel: String { model.selectedChoice?.label ?? (model.selectedModel.isEmpty ? "Predefinito" : model.selectedModel) }
     private func effortLabel(_ value: String) -> String { value.isEmpty ? "Automatico" : value.capitalized }
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        ScrollView { VStack(alignment: .leading, spacing: 20) {
             header
             VStack(alignment: .leading, spacing: 18) {
-                Text("Chat e appunti").font(.title2.bold())
+                Text("Modello predefinito").font(.title2.bold())
+                Text("Usato per la chat e per scrivere le note, salvo le personalizzazioni sotto.").font(.caption).foregroundStyle(.secondary)
                 Picker("Agente", selection: $model.provider) {
                     Text("Codex").tag("codex")
                     Text("Agy").tag("agy")
@@ -36,24 +37,35 @@ struct MyNotesHomeView: View {
                 if let catalog = model.providerCatalog, !["ready", "stale", "no_catalog"].contains(catalog.status) {
                     Text(model.catalogMessage).font(.caption).foregroundStyle(.secondary)
                 }
+                Toggle("Usa modelli diversi per chat e note", isOn: $model.separateModels)
+                if model.separateModels {
+                    ModelRoleEditor(title: "Chat", detail: "Gestisce la conversazione e coordina il lavoro.",
+                        shared: model.defaultModelSelection, launcher: model.launcher, presets: model.presetsURL,
+                        selection: $model.chatOverride, valid: $model.chatModelValid)
+                    Divider()
+                    ModelRoleEditor(title: "Scrittura delle note", detail: "Compone gli appunti dalle fonti. Può usare un agente diverso dalla chat.",
+                        shared: model.defaultModelSelection, launcher: model.launcher, presets: model.presetsURL,
+                        selection: $model.notesOverride, valid: $model.notesModelValid)
+                }
                 Divider()
                 Picker("Lingua della chat", selection: $model.interfaceLanguage) {
                     Text("Italiano").tag("it"); Text("English").tag("en")
                 }.frame(maxWidth: 280).disabled(model.busy)
                 HStack(spacing: 10) {
-                    Label(model.agentUsable ? "Agente pronto" : model.providerFound ? "Agente installato" : "Agente da installare", systemImage: model.agentUsable ? "checkmark.circle" : "terminal").font(.caption).foregroundStyle(.secondary)
+                    Label("Chat · " + (model.agentUsable ? "agente pronto" : model.providerFound ? "agente installato" : "agente da installare"), systemImage: model.agentUsable ? "checkmark.circle" : "terminal").font(.caption).foregroundStyle(.secondary)
                     Spacer()
                     Button(model.providerFound ? "Aggiorna CLI…" : "Installa…") { NSWorkspace.shared.open(model.installURL) }
                     Button("Accedi…") { model.openLogin() }.disabled(!model.providerFound)
                     Button("Ricontrolla agente") { model.refreshProvider() }
                 }.controlSize(.small).disabled(model.busy)
-            }.padding(20).background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
-            Text("La scelta vale per le nuove chat e gli appunti. L’elenco cambia solo quando premi Aggiorna modelli.").font(.caption).foregroundStyle(.secondary)
+            }.disabled(model.busy || model.savingSelection).padding(20).background(Color(nsColor: .controlBackgroundColor).opacity(0.5), in: RoundedRectangle(cornerRadius: 14))
+            Text("Le scelte valgono per le nuove chat e generazioni. I tentativi già avviati conservano i propri modelli.").font(.caption).foregroundStyle(.secondary)
             Spacer(minLength: 0)
             localTools
             footer
-        }.padding(22).tint(brand).background(Color(nsColor: .windowBackgroundColor))
+        }.padding(22) }.tint(brand).background(Color(nsColor: .windowBackgroundColor))
         .onChange(of: model.provider) { previous, _ in model.selectProvider(from: previous) }
+        .onChange(of: model.chatModelSelection.provider) { _, _ in model.refreshProvider() }
         .onChange(of: active) { _, value in if value { model.refreshAfterActivation() } }
         .onChange(of: scenePhase) { _, value in if value == .active && active { model.refreshAfterActivation() } }
     }
@@ -121,24 +133,29 @@ struct MyNotesHomeView: View {
                     }.frame(maxHeight: 110)
                 }.font(.callout)
             }
-            if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(3).textSelection(.enabled) }
+            if let error = model.error {
+                Text(error.contains("CONFIGURATION_CONFLICT") ? "Le impostazioni sono cambiate altrove. Le modifiche inserite sono conservate; ricarica le scelte salvate prima di riprovare." : error).font(.caption).foregroundStyle(.red).lineLimit(3).textSelection(.enabled)
+                if error.contains("CONFIGURATION_CONFLICT") {
+                    Button("Ricarica scelte salvate") { model.reloadModelSettings(); model.error = nil }
+                }
+            }
             if let notice = model.selectionNotice { Label(notice, systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary) }
         }
     }
     private var footer: some View {
         VStack(spacing: 12) {
             Divider()
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Chat · " + model.chatModelSelection.summary + (model.separateModels && model.chatOverride != nil ? "" : " · predefinito"))
+                Text("Scrittura · " + model.notesModelSelection.summary + (model.separateModels && model.notesOverride != nil ? "" : " · predefinito"))
+            }.font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("PROSSIMA CHAT E NUOVI APPUNTI").font(.caption2.bold()).foregroundStyle(.secondary)
-                    Text((model.selectedChoice?.label ?? model.selectedModel) + " · " + model.effortLabel).font(.callout).lineLimit(1)
-                }
                 Spacer(minLength: 8)
                 if model.savingSelection { ProgressView().controlSize(.small) }
-                Button("Salva scelta") { model.saveSelection() }.disabled(!model.modelIsValid || model.savingSelection || model.busy)
+                Button("Salva impostazioni") { model.saveSelection() }.disabled(!model.allModelsValid || model.savingSelection || model.busy)
                 Button(model.error != nil ? "Riprova setup" : model.prepared ? "Controlla strumenti" : "Prepara MyNotes") { model.prepare() }.disabled(model.busy || preview)
                 Button("Apri la chat", systemImage: "arrow.up.right") { model.openChat() }.buttonStyle(.borderedProminent)
-                    .disabled(model.busy || model.savingSelection || !model.modelIsValid || !model.prepared || !model.providerFound || !model.agentUsable || !model.componentsReady || preview)
+                    .disabled(model.busy || model.savingSelection || !model.allModelsValid || !model.prepared || !model.providerFound || !model.agentUsable || !model.componentsReady || preview)
             }
         }
     }

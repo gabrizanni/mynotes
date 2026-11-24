@@ -47,11 +47,11 @@ def _run_interactive(provider: str, command: list[str], environment: dict[str, s
 def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: str | None, message: str | None = None) -> int:
     if os.environ.get("MYNOTES_CHAT_ACTIVE") == "1":
         raise ChatError("A MyNotes provider chat is already active; recursive launch is blocked")
-    selected = provider or configuration["providers"].get("default")
+    from .models import resolve_role_selection
+    selection = resolve_role_selection(configuration, 'chat', provider)
+    selected, model, effort = (selection[key] for key in ('provider', 'model', 'effort'))
     if selected not in {"codex", "agy", "claude"}:
         raise ChatError("Choose an agent in MyNotes Setup: codex, agy or claude")
-    from .models import resolve_provider_options
-    model, effort = resolve_provider_options(configuration, selected)
     environment = provider_environment()
     executable = provider_executable(selected) if os.name == "nt" else (
         shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
@@ -114,6 +114,10 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             else "Hi! I'm ready to help with MyNotes. What would you like to do?"
         )
         style_guidance += f"\nUse this greeting as your entire first reply: {greeting}\n"
+    if any(configuration.get('providers', {}).get('roles', {}).values()):
+        context += ('Effective model roles: ' + json.dumps({role: resolve_role_selection(configuration, role) for role in ('chat', 'notes')})
+                    + '. For new notes use the configured writing role; omit --provider unless the user explicitly overrides it. '
+                    'Never copy the chat agent into the writing command. Resume preserves the saved attempt settings. ')
     if message:
         prompt = context + style_guidance + "\nHandle this user request directly; load the relevant activity context first. User request: " + message
     else:

@@ -427,6 +427,19 @@ def validate_configuration(raw: dict[str, Any]) -> dict[str, Any]:
             raise ConfigurationError("Provider model must be text")
         if "effort" in options and not isinstance(options["effort"], str):
             raise ConfigurationError("Provider effort must be text")
+    roles = providers.get('roles', {})
+    if not isinstance(roles, dict) or set(roles) - {'chat', 'notes'}:
+        raise ConfigurationError('Model roles must contain only chat and notes')
+    for selection in roles.values():
+        if selection is None:
+            continue
+        if (not isinstance(selection, dict) or set(selection) != {'provider', 'model', 'effort'}
+                or not isinstance(selection['provider'], str) or selection['provider'] not in SUPPORTED_PROVIDERS
+                or not isinstance(selection['model'], str) or not isinstance(selection['effort'], str)):
+            raise ConfigurationError('A model role needs an agent, model and effort')
+        from .models import valid_model
+        if not valid_model(selection['model']) or (selection['effort'] and not re.fullmatch(r'[a-z][a-z0-9_-]{0,63}', selection['effort'])):
+            raise ConfigurationError('Invalid model role selection')
     courses = configuration.get("courses")
     if not isinstance(courses, list):
         raise ConfigurationError("Courses must be a list")

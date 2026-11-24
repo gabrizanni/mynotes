@@ -78,6 +78,8 @@ PUBLIC_FILES = (
     "setup/Sources/MyNotesSetup/ChatTerminal.swift",
     "setup/Sources/MyNotesSetup/SetupProgress.swift",
     "setup/Sources/MyNotesSetup/ModelChoices.swift",
+    "setup/Sources/MyNotesSetup/ModelRoles.swift",
+    "setup/Sources/MyNotesSetup/ModelRoleEditor.swift",
     "setup/Sources/MyNotesSetup/ModelCatalogCommand.swift",
     "setup/Sources/MyNotesSetup/MyNotesHomeView.swift",
     "setup/Sources/MyNotesSetup/CaptureDashboard.swift",

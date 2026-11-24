@@ -77,14 +77,13 @@ def normalize_quality(value: str) -> str:
 
 
 def resolve_model(configuration: dict[str, Any], provider: str | None, quality: str) -> RequestedModel:
-    selected = provider or configuration["providers"]["default"]
+    from .models import resolve_role_selection
+    selection = resolve_role_selection(configuration, 'notes', provider)
+    selected, model, effort = (selection[key] for key in ('provider', 'model', 'effort'))
     if not selected:
         raise WorkflowError("No provider is selected; configure codex, agy or claude before processing")
-    options = configuration["providers"]["configured"].get(selected)
-    if not isinstance(options, dict):
+    if not isinstance(configuration['providers']['configured'].get(selected), dict):
         raise WorkflowError(f"Provider is not configured: {selected}")
-    from .models import resolve_provider_options
-    model, effort = resolve_provider_options(configuration, selected)
     return RequestedModel(
         selected,
         model,

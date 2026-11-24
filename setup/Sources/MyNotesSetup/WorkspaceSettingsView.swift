@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+typealias ModelSettingsStorage<Value> = SwiftUI.AppStorage<Value>
+
 private enum SettingsSheet: Identifiable {
     case calendar, repair(String), course
     var id: String { switch self { case .calendar: return "calendar"; case .repair(let id): return id; case .course: return "course" } }
@@ -9,7 +11,7 @@ private enum SettingsSheet: Identifiable {
 struct WorkspaceSettingsView: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var setup: SetupModel
-    @CaptureViewState<String> private var section = "general"
+    @ModelSettingsStorage<String>("MyNotesSettingsSection") private var section = "general"
     @CaptureViewState<SettingsSheet?> private var sheet: SettingsSheet?
     @CaptureViewState<CaptureSource?> private var disconnect: CaptureSource?
     var body: some View {
@@ -33,7 +35,10 @@ struct WorkspaceSettingsView: View {
                     default: general
                     }
                     if let error = model.error { Label(error, systemImage: "exclamationmark.circle").font(.callout).foregroundStyle(.red).textSelection(.enabled) }
-                    if let error = setup.error { Text(error).font(.callout).foregroundStyle(.red).textSelection(.enabled) }
+                    if let error = setup.error {
+                        Text(error.contains("CONFIGURATION_CONFLICT") ? "Le impostazioni sono cambiate altrove. Le modifiche inserite sono conservate; ricarica le scelte salvate prima di riprovare." : error).font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                        if error.contains("CONFIGURATION_CONFLICT") { Button("Ricarica scelte salvate") { setup.reloadModelSettings(); setup.error = nil } }
+                    }
                 }.padding(28).frame(maxWidth: .infinity, alignment: .leading)
             }
         }.frame(width: 760, height: 620).background(WorkspaceStyle.background)
@@ -162,7 +167,8 @@ struct WorkspaceSettingsView: View {
     }
     private var agents: some View {
         VStack(alignment: .leading, spacing: 24) {
-            heading("Agenti AI", "Queste scelte valgono per le nuove chat e gli appunti. La chat continua ad aprirsi nell’agente esterno.")
+            heading("Modelli per chat e note", "Il modello predefinito vale per entrambe le attività. Puoi personalizzare agente, modello ed effort per ciascuna.")
+            Text("Modello predefinito").font(.headline)
             Form {
                 Picker("Agente", selection: $setup.provider) { Text("Codex").tag("codex"); Text("Agy").tag("agy"); Text("Claude Code").tag("claude") }
                 Picker("Modello", selection: Binding(get: { setup.modelID }, set: { setup.selectModel($0) })) {
@@ -175,9 +181,27 @@ struct WorkspaceSettingsView: View {
                 Picker("Lingua della chat", selection: $setup.interfaceLanguage) { Text("Italiano").tag("it"); Text("English").tag("en") }
             }.onChange(of: setup.provider) { previous, _ in setup.selectProvider(from: previous) }
             HStack {
-                Button("Salva preferenze") { setup.saveSelection() }.buttonStyle(.borderedProminent).disabled(!setup.modelIsValid)
-                Menu("Gestisci agente") {
-                    Button("Aggiorna elenco modelli") { setup.refreshModelCatalog() }
+                Button("Aggiorna modelli predefiniti") { setup.refreshModelCatalog() }.disabled(setup.catalogLoading)
+                if setup.catalogLoading { ProgressView().controlSize(.small) }
+            }
+            Toggle("Usa modelli diversi per chat e note", isOn: $setup.separateModels)
+            if setup.separateModels {
+                ModelRoleEditor(title: "Chat", detail: "Gestisce la conversazione e coordina il lavoro.",
+                    shared: setup.defaultModelSelection, launcher: setup.launcher, presets: setup.presetsURL,
+                    selection: $setup.chatOverride, valid: $setup.chatModelValid)
+                Divider()
+                ModelRoleEditor(title: "Scrittura delle note", detail: "Compone gli appunti dalle fonti. Può usare un agente diverso dalla chat.",
+                    shared: setup.defaultModelSelection, launcher: setup.launcher, presets: setup.presetsURL,
+                    selection: $setup.notesOverride, valid: $setup.notesModelValid)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Chat · " + setup.chatModelSelection.summary + (setup.separateModels && setup.chatOverride != nil ? "" : " · predefinito"))
+                Text("Scrittura · " + setup.notesModelSelection.summary + (setup.separateModels && setup.notesOverride != nil ? "" : " · predefinito"))
+                Text("Le modifiche valgono per nuove chat e generazioni. I tentativi già avviati conservano i propri modelli.").font(.caption).foregroundStyle(.secondary)
+            }.font(.callout).textSelection(.enabled)
+            HStack {
+                Button("Salva impostazioni") { setup.saveSelection() }.buttonStyle(.borderedProminent).disabled(!setup.allModelsValid)
+                Menu("Gestisci agente della chat") {
                     Button("Accedi…") { setup.openLogin() }
                     Button(setup.providerFound ? "Aggiorna CLI…" : "Installa CLI…") { NSWorkspace.shared.open(setup.installURL) }
                     Button("Ricontrolla agente") { setup.refreshProvider() }
@@ -194,7 +218,8 @@ struct WorkspaceSettingsView: View {
             }
             if setup.busy { ProgressView(setup.message); Text(setup.progressDetail).font(.caption).foregroundStyle(.secondary) }
             DisclosureGroup("Stato e dettagli tecnici") { Text(setup.diagnostics.isEmpty ? setup.catalogMessage : setup.diagnostics).font(.caption).textSelection(.enabled).padding(.top, 8) }
-        }.disabled(setup.busy || setup.savingSelection || model.isPreview)
+        }.onChange(of: setup.chatModelSelection.provider) { _, _ in setup.refreshProvider() }
+        .disabled(setup.busy || setup.savingSelection || model.isPreview)
     }
     private func heading(_ title: String, _ subtitle: String) -> some View { VStack(alignment: .leading, spacing: 8) { Text(title).font(.title2.weight(.semibold)); Text(subtitle).font(.callout).foregroundStyle(.secondary) } }
     private func chooseFolder() {

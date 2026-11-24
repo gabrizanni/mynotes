@@ -100,8 +100,17 @@ struct MyNotesWorkspaceView: View {
                     }
                 }.listStyle(.sidebar)
                 VStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Chat · " + setup.chatModelSelection.summary).lineLimit(2).help(setup.chatModelSelection.summary)
+                        Text("Note · " + setup.notesModelSelection.summary).lineLimit(2).help(setup.notesModelSelection.summary)
+                        Button("Modelli AI…") {
+                            UserDefaults.standard.set("agents", forKey: "MyNotesSettingsSection")
+                            openSettings()
+                        }.buttonStyle(.link)
+                    }.font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 8)
                     Button { setup.openChat() } label: { Label("Apri chat esterna", systemImage: "arrow.up.right.square").frame(maxWidth: .infinity, alignment: .leading) }
-                        .buttonStyle(.plain).disabled(model.isPreview || !setup.prepared || !setup.providerFound)
+                        .buttonStyle(.plain).disabled(model.isPreview || !setup.prepared || !setup.providerFound || !setup.agentUsable || !setup.allModelsValid || setup.savingSelection || setup.busy)
                         .help("Apre l’agente selezionato. Gestisci agente e strumenti nelle Impostazioni.")
                     Button { openSettings() } label: { Label("Impostazioni", systemImage: "gearshape").frame(maxWidth: .infinity, alignment: .leading) }
                         .buttonStyle(.plain).keyboardShortcut(",", modifiers: .command)
@@ -175,6 +184,7 @@ struct MyNotesWorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemClockDidChange).receive(on: RunLoop.main)) { _ in clockInstant = Date() }
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in clockInstant = Date() }
+        .onChange(of: setup.chatModelSelection.provider) { _, _ in setup.refreshProvider() }
         .onChange(of: scenePhase) { _, phase in if phase == .active && sheet == nil { Task { await refresh(recover: true) } } }
         .onReceive(poll) { date in
             if abs(date.timeIntervalSince(clockInstant)) >= 30 { clockInstant = date }
