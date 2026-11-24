@@ -59,7 +59,7 @@ def certified(record, request):
     return _normalize_transport_notes(_decode_agy(results[0]),request.response_schema,provider='agy')
 
 
-def project(request, notes, *, access=None, preview_sheets=None):
+def project(request, notes, *, access=None, preview_sheets=None, eligible_pages=None):
     """Recover explicit metadata, then use the common figure/layout assembler."""
     from .source_organization import reconcile
     from .note_assembly import compile_notes
@@ -76,7 +76,7 @@ def project(request, notes, *, access=None, preview_sheets=None):
     parts=[{'lecture_id':row['lecture_id'],'blocks':row['notes']['blocks'],
             'organization_delta':[c for c in organization if c['owner']==row['lecture_id']]}
            for row in result['lessons']]
-    parts=reconcile(parts,request)
+    parts=reconcile(parts,request,eligible_pages=eligible_pages)
     result['organization']=[c for part in parts for c in part['organization_delta']]
     decisions={v['evidence_id']:v for row in result['lessons'] for v in row['notes']['visual_decisions']}
     for row in result['lessons']:

@@ -78,7 +78,20 @@ class _FormulaParser:
     def __init__(self, source: str) -> None:
         # Providers sometimes double-escape LaTeX inside a JSON text field.
         # A single backslash is the actual TeX command introducer.
-        value = source.strip().replace("\\\\", "\\")
+        # Preserve canonical substack row separators before normalizing the
+        # legacy double-escaped transport. Balanced groups can contain scripts.
+        value = source.strip()
+        for match in reversed(list(re.finditer(r"(?<!\\)\\substack\{", value))):
+            start = match.end(); end = start; depth = 1
+            while end < len(value) and depth:
+                if value[end] == '{': depth += 1
+                elif value[end] == '}': depth -= 1
+                end += 1
+            if depth:
+                raise PublicationError("Unclosed substack group")
+            body = value[start:end-1].replace("\\\\", "MYNOTESROWSEPARATOR")
+            value = value[:start] + body + value[end-1:]
+        value = value.replace("\\\\", "\\")
         for left, right in (("$$", "$$"), ("\\[", "\\]"), ("$", "$")):
             if value.startswith(left) and value.endswith(right):
                 value = value[len(left):-len(right)].strip()
@@ -245,6 +258,17 @@ class _FormulaParser:
             # full expression. A symbol with native scripts stays editable and
             # renders correctly even when the model omits summation limits.
             return [_math_run("∑" if name == "sum" else "∏")]
+        if name == "substack":
+            array = _m("eqArr")
+            for row in self._literal_argument().split("MYNOTESROWSEPARATOR"):
+                expression = _m("e")
+                for item in _FormulaParser(row).parse(): expression.append(item)
+                array.append(expression)
+            return [array]
+        if name in {"mid", "vert"}:
+            return [_math_run("|")]
+        if name == "operatorname":
+            return [_math_run(self._literal_argument(), normal=True)]
         if name == "text":
             return [_math_run(self._literal_argument(), normal=True)]
         if name == "mathbb":
@@ -1230,6 +1254,13 @@ def _load_candidate(workspace: Workspace, lecture_id: str) -> tuple[dict[str, An
                     return []
                 pack['_render_reference_ids']=sorted(set(pack.get('_render_reference_ids',[]))|set(joint_references(verified_notes)))
                 envelope=record['envelope']
+            elif record.get("requested", {}).get("provider") == "codex" and "--json" in record.get("command", []):
+                from .codex_notes import certified
+                from .batch import batch_notes_schema
+                from .providers import ProviderRequest, RequestedModel
+                certified(record, ProviderRequest(lecture_id, {}, {}, RequestedModel(**record['requested']),
+                    response_schema=batch_notes_schema(autonomous_organization=True)))
+                envelope = record.get('envelope', {})
             elif record.get("envelope", {}).get("transport") == "agy_parts_v1":
                 from .agy_parts import verify_receipt
                 verify_receipt(record, workspace.root)

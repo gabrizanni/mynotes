@@ -47,6 +47,7 @@ PUBLIC_FILES = (
     "docs/GENERATION.md",
     "docs/NOTES_DELIVERY.md",
     "docs/NOTES_FLOW.md",
+    "docs/CODEX_NOTES.md",
     "docs/MODEL-CATALOG.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",

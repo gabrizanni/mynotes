@@ -122,6 +122,11 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
         prompt = context + style_guidance + "\nHandle this user request directly; load the relevant activity context first. User request: " + message
     else:
         prompt = context + style_guidance + "\nOpen the interactive session and briefly greet the user, then wait for a request. Do not run commands, inspect files or scan libraries before the user asks."
+    if selected == 'codex':
+        prompt += (" If MyNotes reports CODEX_LAUNCH_DENIED, the writing CLI could not initialize inside the coordinator's permissions. "
+                   "Use your supported command permission/escalation mechanism for the exact MyNotes command. "
+                   "Never use danger-full-access, change credentials, or repeat paid generation to bypass it. "
+                   "If permission is denied, preserve the attempt and report that denial explicitly.")
     overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
     if selected == "agy":
         command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
