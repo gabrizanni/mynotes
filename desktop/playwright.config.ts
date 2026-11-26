@@ -6,7 +6,8 @@ import { defineConfig, devices } from "@playwright/test";
  * - `npm run test:e2e`: tests/e2e/*.spec.ts, mocked end-to-end flows.
  * Playwright starts the dev server on its own port and stops it when the run ends.
  */
-const PORT = 5181;
+// Parallel worktrees can pick another port: MYNOTES_E2E_PORT=5191 npm run shots
+const PORT = Number(process.env.MYNOTES_E2E_PORT ?? 5181);
 
 export default defineConfig({
   outputDir: "test-results",

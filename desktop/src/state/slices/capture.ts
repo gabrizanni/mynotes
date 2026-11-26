@@ -1,6 +1,7 @@
 /** Recorder snapshot (`capture.dashboard`, pushed by `capture.changed`). */
-import type { CaptureDashboard, MethodParams } from "../../rpc";
+import type { CaptureDashboard, LessonInput, LessonPatch, MethodParams } from "../../rpc";
 import { failed, idle, loading, ready, type Load } from "../load";
+import { attempt } from "../result";
 import type { SliceContext } from "../types";
 
 export interface CaptureState {
@@ -42,5 +43,52 @@ export function captureActions(ctx: SliceContext<"capture">) {
         ctx.set({ pendingAction: null });
       }
     },
+    // BEGIN workspace screens: calendar and recording settings. The server pushes
+    // `capture.changed` after each change; patches below only make the UI answer at once.
+    addLesson: (lesson: LessonInput) => attempt(async () => (await ctx.rpc.call("capture.addLesson", { file: lesson })).data),
+    editLesson: (event: string, patch: LessonPatch) => attempt(async () => (await ctx.rpc.call("capture.editLesson", { event, file: patch })).data),
+    resetLesson: (event: string) => attempt(async () => (await ctx.rpc.call("capture.resetLesson", { event })).data),
+    syncCalendars: (source?: string) => attempt(async () => (await ctx.rpc.call("capture.sync", source ? { source } : {})).data),
+    connectCalendar: (file: MethodParams<"capture.connect">["file"]) => attempt(async () => (await ctx.rpc.call("capture.connect", { file })).data),
+    removeCalendar: (source: string) =>
+      attempt(async () => {
+        const { data } = await ctx.rpc.call("capture.unsubscribe", { source });
+        const dashboard = ctx.get().dashboard;
+        if (dashboard) ctx.set({ dashboard: { ...dashboard, sources: dashboard.sources.filter((item) => item.sourceID !== source) } });
+        return data;
+      }),
+    setImportMode: (source: string, mode: "mapped" | "all_timed") =>
+      attempt(async () => {
+        const { data } = await ctx.rpc.call("capture.setImportMode", { source, mode });
+        const dashboard = ctx.get().dashboard;
+        if (dashboard) ctx.set({ dashboard: { ...dashboard, sources: dashboard.sources.map((item) => (item.sourceID === source ? { ...item, importMode: mode } : item)) } });
+        return data;
+      }),
+    configure: (file: MethodParams<"capture.configure">["file"]) =>
+      attempt(async () => {
+        const { data } = await ctx.rpc.call("capture.configure", { file });
+        const dashboard = ctx.get().dashboard;
+        if (dashboard) ctx.set({ dashboard: { ...dashboard, ...file } });
+        return data;
+      }),
+    /** Recorder on/off (`capture enable|disable`). */
+    setEnabled: (enabled: boolean) =>
+      attempt(async () => {
+        const { data } = await ctx.rpc.call(enabled ? "capture.enable" : "capture.disable");
+        const dashboard = ctx.get().dashboard;
+        if (dashboard) ctx.set({ dashboard: { ...dashboard, enabled } });
+        return data;
+      }),
+    /** Automatic recording of scheduled lessons (`capture resume|pause`). */
+    setAutomatic: (automatic: boolean) =>
+      attempt(async () => {
+        const { data } = await ctx.rpc.call(automatic ? "capture.resume" : "capture.pause");
+        const dashboard = ctx.get().dashboard;
+        if (dashboard) ctx.set({ dashboard: { ...dashboard, paused: !automatic } });
+        return data;
+      }),
+    testMicrophone: () => attempt(async () => (await ctx.rpc.call("capture.test", { waitSeconds: 0 })).data),
+    recoverAudio: () => attempt(async () => (await ctx.rpc.call("capture.recover", { waitSeconds: 0 })).data),
+    // END workspace screens
   };
 }

@@ -5,6 +5,7 @@ import type { ConfigState } from "./slices/config";
 import type { JobsState } from "./slices/jobs";
 import type { LibraryState } from "./slices/library";
 import type { QueueState } from "./slices/queue";
+import type { SettingsState } from "./slices/settings";
 import type { UiState } from "./slices/ui";
 
 /** The whole app state: one slice per server topic, plus jobs, assistant and UI. */
@@ -16,6 +17,8 @@ export interface AppState {
   readonly jobs: JobsState;
   readonly assistant: AssistantState;
   readonly ui: UiState;
+  /** Settings screen data read on demand (workspace screens). */
+  readonly settings: SettingsState;
 }
 
 export type SliceKey = keyof AppState;
