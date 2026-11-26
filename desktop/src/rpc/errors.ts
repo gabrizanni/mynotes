@@ -14,6 +14,10 @@ export const RpcCode = {
   /** `system.hello` with a protocol the server does not speak. */
   UnsupportedProtocol: -32005,
   ShuttingDown: -32006,
+  /** `assistant.*` with an unknown session id. */
+  UnknownAssistantSession: -32007,
+  /** A reply is still running in this conversation, or three already run. */
+  AssistantBusy: -32008,
   /** Cancelled before it started (`$/cancelRequest`, or the server stopping). */
   RequestCancelled: -32800,
   BackendRestarted: -32010,

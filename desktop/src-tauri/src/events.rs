@@ -1,7 +1,9 @@
 //! What the supervisor reports, turned into Tauri events and native side effects.
 //!
 //! Events (names shared with `src/rpc/transports/tauri.ts`):
-//! - `rpc://notification` `{method, params}`: every server notification, unchanged;
+//! - `rpc://notification` `{method, params}`: every server notification, unchanged, including the
+//!   assistant's streamed turn (`assistant.delta`, `assistant.tool`, `assistant.done`,
+//!   `assistant.error`), which the webview's `rpc.on` checks against its schemas;
 //! - `backend://status`: [`BackendStatus`] at every lifecycle change;
 //! - `app://action` `{action}`: a tray item, the global shortcut or a second launch asked for
 //!   an action (see `actions.rs`).

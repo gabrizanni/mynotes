@@ -1,0 +1,19 @@
+{
+  "title": "Quiz me on lessons 1–4",
+  "turns": [
+    {
+      "id": "turn-1",
+      "message": "Quiz me on lessons 1–4",
+      "context": null,
+      "state": "FAILED",
+      "text": "",
+      "tools": [],
+      "error": {
+        "code": "AUTH",
+        "message": "Invalid API key · Please run /login"
+      },
+      "startedAt": 1795685400,
+      "finishedAt": 1795685403
+    }
+  ]
+}

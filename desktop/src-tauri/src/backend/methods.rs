@@ -39,6 +39,13 @@ pub const RUST_ONLY_METHODS: &[&str] = &["system.shutdown"];
 
 /// Every method of protocol 1, sorted by name.
 pub const METHODS: &[(&str, Lane)] = &[
+    // The assistant panel's chat turns: `start` and `send` answer `{sessionId, turnId}` at once,
+    // then stream `assistant.delta|tool|done|error`.
+    ("assistant.cancel", Lane::Fast),
+    ("assistant.get", Lane::Fast),
+    ("assistant.list", Lane::Fast),
+    ("assistant.send", Lane::Job),
+    ("assistant.start", Lane::Job),
     ("capture.addLesson", Lane::Slow),
     ("capture.assign", Lane::Slow),
     ("capture.configure", Lane::Slow),

@@ -131,3 +131,13 @@ test("course tabs are links with their own address", async ({ page }) => {
   await expect(tabs.getByRole("link", { name: "Style" })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("radiogroup", { name: "Detail" })).toBeVisible();
 });
+
+test("a conflict outcome hands over to the assistant with the message prefilled, unsent", async ({ page }) => {
+  await page.goto("/?lang=en&scenario=notes-conflict#/lessons/STAT-L06");
+  await page.getByRole("button", { name: "See details" }).click();
+  await sheet(page).getByRole("button", { name: "Ask the assistant to merge" }).click();
+  await expect(sheet(page)).toBeHidden();
+  const message = page.getByRole("textbox", { name: "Message" });
+  await expect(message).toHaveValue(/^My edits in the Statistics \(STAT\) course notes overlap the new notes for Lesson 6/);
+  await expect(message).toBeFocused();
+});

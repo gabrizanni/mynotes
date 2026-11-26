@@ -9,6 +9,7 @@ import type { Job } from "../../../rpc";
 import { useActions, useAppState, useRpc } from "../../../state";
 import type { StageTiming } from "../../../state/slices/jobs";
 import { courseFiles, courseRecord, reviewFirst, withPublicationMode } from "../../courses/model";
+import { useOpenAssistant } from "../../assistant";
 import { assistantName, copyText, openPath } from "../platform";
 import { useRpcData } from "../useRpcData";
 import {
@@ -414,6 +415,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
   const o = t.lesson.outcome;
   const actions = useActions();
   const rpc = useRpc();
+  const openAssistant = useOpenAssistant();
   const config = useAppState((state) => state.config.config);
   const stages = useStages();
   const [listOpen, setListOpen] = useState(false);
@@ -430,6 +432,8 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
   if (!args) return null;
   const { outcome, job, history, courseCode, courseName, lessons, count, missingLectures, assistant, now, numbers, options, onClose, onRun, openFile } = args;
   const files = courseFiles(courseRecord(config, courseCode));
+  // The code lets the assistant find the course; the name is what the student recognises.
+  const courseLabel = courseName === courseCode ? courseCode : `${courseName} (${courseCode})`;
   const warnings = warningsOf(job?.result ?? null);
 
   const open = (path: string | null) => {
@@ -450,9 +454,9 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
     }
   };
 
+  // The assistant panel opens beside the sheet's screen with the message prefilled; nothing is sent.
   const ask = (text: string) => {
-    actions.assistant.prefill(text);
-    actions.ui.setAssistantOpen(true);
+    openAssistant(text);
     onClose();
   };
 
@@ -488,7 +492,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
             await rpc.call("notes.publish", path ? { lectureId, candidate: path } : { lectureId });
           }
           // The job record keeps AWAITING_APPROVAL; publishing is what completes it.
-          if (job) actions.jobs.finished({ jobId: job.jobId, state: "succeeded", exitCode: 0, result: { status: "COMPLETED" }, at: new Date().toISOString() });
+          if (job) actions.jobs.finished({ jobId: job.jobId, state: "COMPLETED", exitCode: 0, result: { exitCode: 0, data: { status: "COMPLETED" } } });
           completedToast({ rpc, actions, t, course: courseCode, lessons, count });
         } catch {
           actions.ui.toast({ message: o.approveError, tone: "danger" });
@@ -498,7 +502,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
         return;
       }
       case "askAssistant":
-        ask(outcome.kind === "conflict" ? o.mergePrompt(lessons, courseName) : o.reviewPrompt(lessons, courseName));
+        ask(outcome.kind === "conflict" ? t.assistant.handoff.personalContentConflict(courseLabel, lessons) : t.assistant.handoff.needsReview(courseLabel, lessons));
         return;
       case "copyDetails": {
         const copied = job ? await copyText(jobDetails(job)) : false;

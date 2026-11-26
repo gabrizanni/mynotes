@@ -578,6 +578,105 @@ export const notesRestoreSchema = z.looseObject({ status: str, backup_id: optStr
 export const notesPublishSchema = z.looseObject({ status: str, lecture_id: optStr, output: optStr });
 
 // ---------------------------------------------------------------------------------------------
+// assistant: the chat agent streamed through `mynotes serve` (serve_assistant.py, docs/SERVE.md
+// "Assistant"). `start` and `send` run in the job lane but answer `{sessionId, turnId}`; the
+// turn then streams `assistant.delta|tool`, then exactly one `assistant.done|error`.
+// ---------------------------------------------------------------------------------------------
+
+/** The page the user is on, sent with each message as data (the server checks it again). */
+export const assistantContextSchema = z.object({
+  course: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/).optional(),
+  lesson: z.number().int().min(1).max(999).optional(),
+  lectureId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}-L\d{1,3}$/).optional(),
+  page: z.string().min(1).max(80).optional(),
+});
+
+/** One tool call; `status`: running · completed · failed · denied. */
+export const assistantToolSchema = z.looseObject({
+  toolId: str,
+  name: str,
+  summary: str,
+  status: str,
+  command: optStr,
+  durationMs: optNum,
+});
+
+/** `state`: RUNNING · COMPLETED · FAILED · CANCELLED · INTERRUPTED. */
+export const assistantTurnSchema = z.looseObject({
+  id: str,
+  message: str,
+  state: str,
+  text: str,
+  tools: z.array(assistantToolSchema),
+  error: z.looseObject({ code: str, message: str }).nullable().optional(),
+  startedAt: optNum,
+  finishedAt: optNum,
+});
+
+export const assistantSessionSchema = z.looseObject({
+  id: str,
+  provider: str,
+  model: optStr,
+  providerSession: optStr,
+  /** native · replay (the agent reported no resumable session) */
+  resume: optStr,
+  title: optStr,
+  updatedAt: optNum,
+  turns: z.array(assistantTurnSchema),
+});
+
+export const assistantSummarySchema = z.looseObject({
+  id: str,
+  title: optStr,
+  provider: str,
+  updatedAt: optNum,
+  turns: z.number().int(),
+  state: optStr,
+  running: z.boolean(),
+});
+
+const assistantMessage = z.string().trim().min(1).max(20_000);
+const assistantTurnRef = z.looseObject({ sessionId: str, turnId: str });
+
+const assistantMethods = {
+  "assistant.start": {
+    params: z.object({
+      message: assistantMessage,
+      provider: providerIdSchema.optional(),
+      model: str.optional(),
+      effort: str.optional(),
+      context: assistantContextSchema.optional(),
+    }),
+    result: assistantTurnRef,
+  },
+  "assistant.send": { params: z.object({ sessionId: str, message: assistantMessage, context: assistantContextSchema.optional() }), result: assistantTurnRef },
+  "assistant.cancel": {
+    params: z.object({ sessionId: str, force: z.boolean().optional() }),
+    result: z.looseObject({ sessionId: str, cancelRequested: z.boolean() }),
+  },
+  "assistant.list": {
+    params: z.object({ limit: z.number().int().min(1).max(200).optional() }).optional(),
+    result: z.looseObject({ sessions: z.array(assistantSummarySchema) }),
+  },
+  "assistant.get": { params: z.object({ sessionId: str }), result: assistantSessionSchema },
+} as const;
+
+const assistantNotifications = {
+  "assistant.delta": z.looseObject({ sessionId: str, turnId: str, text: str }),
+  "assistant.tool": assistantToolSchema.extend({ sessionId: str, turnId: str }),
+  "assistant.done": z.looseObject({ sessionId: str, turnId: str, text: str, providerSession: optStr, usage: z.unknown().optional() }),
+  /** `code`: QUOTA · AUTH · NETWORK · TIMEOUT · UNAVAILABLE · CANCELLED · PROVIDER */
+  "assistant.error": z.looseObject({ sessionId: str, turnId: str, code: str, message: str }),
+} as const;
+
+export type AssistantContext = z.input<typeof assistantContextSchema>;
+export type AssistantSession = z.output<typeof assistantSessionSchema>;
+export type AssistantToolRow = z.output<typeof assistantToolSchema>;
+export type AssistantNotification = {
+  [N in keyof typeof assistantNotifications]: { readonly type: N } & z.output<(typeof assistantNotifications)[N]>;
+}[keyof typeof assistantNotifications];
+
+// ---------------------------------------------------------------------------------------------
 // Method table: one entry per method. Names, params and lanes follow docs/SERVE.md in the serve
 // repository (params are the command's flags in camelCase; a `json` param is written to a private
 // request file by the server). `setup.*` is answered by the desktop shell's installer, not by
@@ -769,6 +868,9 @@ export const methods = {
   "word.verifyRenderer": { params: none, result: jobRefSchema },
   "speech.installModel": { params: none, result: jobRefSchema },
   "speech.verify": { params: z.object({ audio: str.optional(), language: z.enum(["en", "it"]).optional() }).optional(), result: jobRefSchema },
+
+  // assistant (block above)
+  ...assistantMethods,
 } as const;
 
 export type MethodName = keyof typeof methods;
@@ -800,6 +902,7 @@ export const notifications = {
     error: z.unknown().optional(),
     resumeHint: z.looseObject({ method: str, params: z.record(str, z.unknown()).optional() }).nullable().optional(),
   }),
+  ...assistantNotifications,
 } as const;
 
 export type NotificationName = keyof typeof notifications;

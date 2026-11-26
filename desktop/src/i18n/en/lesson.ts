@@ -218,8 +218,6 @@ export const lesson = {
     undone: "Update undone. A safety copy is saved.",
     undoError: "The update couldn't be undone. Try again from Course notes.",
     newRun: "Start over",
-    mergePrompt: (lessons: string, course: string) => `Merge my edits with the new ${lessons} in my ${course} course notes.`,
-    reviewPrompt: (lessons: string, course: string) => `Help me finish the notes for ${lessons} of ${course}.`,
     openError: "The file couldn't open. Check that it still exists.",
     opening: (name: string) => `Opening ${name}…`,
   },

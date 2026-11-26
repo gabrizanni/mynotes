@@ -219,8 +219,6 @@ export const lesson: Messages["lesson"] = {
     undone: "Aggiornamento annullato. C'è una copia di sicurezza.",
     undoError: "L'aggiornamento non è stato annullato. Riprova dalla dispensa.",
     newRun: "Ricomincia",
-    mergePrompt: (lessons: string, course: string) => `Unisci le mie modifiche alla nuova ${lessons} nella dispensa di ${course}.`,
-    reviewPrompt: (lessons: string, course: string) => `Aiutami a finire gli appunti di ${lessons} di ${course}.`,
     openError: "Il file non si è aperto. Controlla che esista ancora.",
     opening: (name: string) => `Apertura di ${name}…`,
   },

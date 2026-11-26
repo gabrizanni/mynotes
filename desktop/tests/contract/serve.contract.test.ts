@@ -71,6 +71,8 @@ const NOT_CALLED: Partial<Record<MethodName, string>> = {
   "library.importAudio": "copies audio into the library (covered by inspectAudio)",
   "preferences.saveModels": "needs a provider and a saved revision",
   "notes.restore": "needs a saved backup",
+  "assistant.start": "starts an agent turn",
+  "assistant.send": "starts an agent turn",
 };
 
 type Expectation = { parses: true } | { drift: string } | { error: number; why: string };
@@ -258,6 +260,9 @@ function paramsFor(method: MethodName): unknown {
     "job.get": { jobId },
     "job.wait": { jobId, timeoutSeconds: 5 },
     "job.cancel": { jobId },
+    "assistant.list": { limit: 20 },
+    "assistant.get": { sessionId: "session-missing" },
+    "assistant.cancel": { sessionId: "session-missing" },
   };
   return params[method];
 }
@@ -308,6 +313,9 @@ const EXPECTED: Record<string, Expectation> = {
   "job.get": { parses: true },
   "job.wait": { parses: true },
   "job.cancel": { parses: true },
+  "assistant.list": { parses: true },
+  "assistant.get": { error: RpcCode.UnknownAssistantSession, why: "unknown assistant session" },
+  "assistant.cancel": { error: RpcCode.UnknownAssistantSession, why: "unknown assistant session" },
 };
 
 const NOTIFICATION_EXPECTED: Partial<Record<NotificationName, Expectation>> = {
