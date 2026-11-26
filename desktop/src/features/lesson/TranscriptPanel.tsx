@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronUp, FileText, Search, X } from "lucide-react";
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
-import { Banner, Button, Card, Icon, IconButton } from "../../components";
+import { Banner, Button, Card, fieldStyles, Icon, IconButton } from "../../components";
 import { cx } from "../../design/cx";
 import { useI18n } from "../../i18n";
 import type { TranscriptSegment } from "../../rpc";
@@ -92,7 +92,7 @@ export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps
           <input
             ref={input}
             type="search"
-            className={styles.searchInput}
+            className={cx(fieldStyles.control, styles.searchInput)}
             aria-label={s.label}
             aria-describedby={countId}
             aria-keyshortcuts="Meta+F Control+F"

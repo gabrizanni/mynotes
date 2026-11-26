@@ -601,7 +601,9 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
   const body = (
     <div className={styles.stack}>
       <div className={cx(styles.outcome, styles[outcome.tone])} role={outcome.tone === "danger" ? "alert" : "status"}>
-        <Icon icon={toneIcon[outcome.tone]} size={24} className={styles.outcomeIcon} />
+        <span className={styles.outcomeBadge} aria-hidden="true">
+          <Icon icon={toneIcon[outcome.tone]} size={20} />
+        </span>
         <div className={styles.outcomeText}>
           <p className={styles.outcomeHeadline}>{headline}</p>
           {detail && <p className={styles.outcomeDetail}>{detail}</p>}
