@@ -15,7 +15,9 @@ from mynotes.cli import main
 from mynotes.lesson_pipeline import process_lesson
 from mynotes.utils import atomic_json_write
 from test_batch_generation import Adapter, workspace_and_deck
+from test_capture_queue import audio as capture_audio, ws  # noqa: F401 (ws is a fixture)
 from test_publication import fake_render
+from test_transcription_reliability import Fake
 
 
 @pytest.fixture
@@ -43,8 +45,13 @@ def fake_steps(monkeypatch, *, pending_before, pending_after=(), transcription=N
         kwargs["progress"]("GENERATING", {})
         kwargs["progress"](notes_status, {})
         return {"status": notes_status, "batch_id": f"{course}-0123456789ab", "provider_invoked": True}
+    def prepare_audio(workspace, lecture_id, audio=None, **kwargs):
+        transcribe(workspace, lecture_id, audio)
+        return {"lecture_id": lecture_id, "availability": {"transcript": True},
+                "transcription": {"status": "COMPLETED", "segments": [{}, {}, {}]}}
     monkeypatch.setattr("mynotes.cli._notes_preparation", prepare)
     monkeypatch.setattr("mynotes.transcription.run_transcription", transcribe)
+    monkeypatch.setattr("mynotes.sourcepack.build_source_pack", prepare_audio)
     monkeypatch.setattr("mynotes.notes_run.run_notes", notes)
     return calls
 
@@ -110,6 +117,28 @@ def test_unknown_course_or_lesson_is_a_plain_failure(ops, capsys):
     assert capsys.readouterr().out == "mynotes: Course not found: XYZ\n"
     assert main(["lesson", "process", "OPS-1", "--workspace", str(ops.root)]) == 2
     assert capsys.readouterr().out.startswith("mynotes: Identificativo lezione non valido")
+
+
+def test_explicit_audio_listed_by_the_library_is_bound_to_the_lesson(ws, monkeypatch):
+    # The real case: a student links a course folder, its Recordings folder lists
+    # the file as an unassigned library recording, then asks for one lesson.
+    from mynotes import asr
+    from mynotes.capture_courses import add_course
+    path, _ = capture_audio(ws, "Faraday candle part 1")
+    engine = Fake()
+    monkeypatch.setattr(asr, "default_engines", lambda *args: {"argmax": engine, "whispercpp": engine})
+    code = add_course(ws, "Chemistry")["course"]["code"]
+    notes = []
+    def run_notes(workspace, course, numbers, **kwargs):
+        notes.append((course, numbers))
+        return {"status": "COMPLETED", "provider_invoked": True}
+    monkeypatch.setattr("mynotes.notes_run.run_notes", run_notes)
+    status, result = process_lesson(ws, f"{code}-L01", audio=path)
+    assert status == 0, result
+    assert notes == [(code, [1])] and engine.calls == 1
+    pack = json.loads((ws.runs_dir / f"{code}-L01" / "source_pack.json").read_text())
+    assert pack["availability"]["transcript"] is True
+    assert [Path(s["path"]) for s in pack["sources"] if s.get("role") == "recording"] == [path]
 
 
 def test_transcription_phase_is_reported_while_it_runs(ops, monkeypatch):
@@ -182,7 +211,9 @@ def test_a_transcript_is_imported_like_prepare_and_never_transcribed(ops, monkey
 
 
 def test_an_unusable_transcript_stops_before_notes(ops, monkeypatch, tmp_path, capsys):
+    from mynotes.sourcepack import build_source_pack
     calls = fake_steps(monkeypatch, pending_before=[])
+    monkeypatch.setattr("mynotes.sourcepack.build_source_pack", build_source_pack)  # The real import rejects the file.
     empty = tmp_path / "empty.txt"
     empty.write_text("   \n", encoding="utf-8")
     assert main(["lesson", "process", "OPS-L01", "--transcript", str(empty), "--workspace", str(ops.root), "--json"]) == 2

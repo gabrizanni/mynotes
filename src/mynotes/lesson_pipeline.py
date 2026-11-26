@@ -5,7 +5,8 @@ Stages, reported through `progress(stage, detail)`:
 1. CHECKING: the lesson ID and course, then the existing preparation, which
    reuses a transcript already on disk (never starting transcription itself).
 2. TRANSCRIBING: only when no usable transcript exists, or `audio` is given.
-   A side thread reports the persisted transcription phase every second.
+   A side thread reports the persisted transcription phase every second. An
+   explicit `audio` is prepared for this lesson (see `_prepare_with_audio`).
    A given `transcript` skips this stage: it is imported exactly as
    `prepare --transcript` imports it (`audio` and `transcript` exclude each
    other).
@@ -45,6 +46,34 @@ def _watch_transcription(workspace: Workspace, lecture_id: str, emit: Progress, 
                                   "elapsed_seconds": state.get("elapsed_seconds")})
 
 
+def _prepare_with_audio(workspace: Workspace, lecture_id: str, audio: Path, engines=None) -> dict:
+    """Bind an explicit recording to this lesson, as `prepare LECTURE --audio FILE` does.
+
+    `run_transcription` keeps the library identity of a recording it lists, so a
+    file from a linked Recordings folder that is not yet assigned to a lesson
+    would be transcribed as an unassigned recording and the lesson would still
+    have no transcript. Preparation transcribes it for the lesson instead (a
+    recording already linked to this lesson keeps its own transcript) and
+    writes the source pack in the same step.
+    """
+    from .asr import ASRBusyError
+    from .sourcepack import build_source_pack
+    from .transcription import transcription_status
+    from .workflow import WorkflowError
+    try:
+        pack = build_source_pack(workspace, lecture_id, audio=audio, **({"engines": engines} if engines is not None else {}))
+    except WorkflowError as error:
+        if isinstance(error.__cause__, BlockingIOError):  # the lesson lock is held by another run
+            raise ASRBusyError(f"BUSY: {error}", transcription_status(workspace, lecture_id)) from error
+        raise
+    manifest = pack.get("transcription") or {}
+    has_transcript = bool(pack.get("availability", {}).get("transcript"))
+    return {"lecture_id": lecture_id, "status": manifest.get("status") or ("COMPLETED" if has_transcript else "MISSING"),
+            "cache_reused": manifest.get("cache_reused", False), "segments": len(manifest.get("segments") or []),
+            "audio_duration_seconds": manifest.get("audio_duration_seconds"),
+            "source_pack": str(workspace.runs_dir / lecture_id / "source_pack.json")}
+
+
 def _transcribe(workspace: Workspace, lecture_id: str, audio: Path | None, emit: Progress, engines=None) -> tuple[int, dict]:
     """Run transcription like `transcribe --json`; returns (exit code, result)."""
     from .asr import ASRBusyError, ASRError, ASRReviewError
@@ -59,8 +88,11 @@ def _transcribe(workspace: Workspace, lecture_id: str, audio: Path | None, emit:
     watcher = threading.Thread(target=_watch_transcription, args=(workspace, lecture_id, emit, stop), daemon=True)
     watcher.start()
     try:
-        result = run_transcription(workspace, lecture_id, audio=audio, progress=False,
-                                   **({"engines": engines} if engines is not None else {}))
+        if audio is not None:
+            result = _prepare_with_audio(workspace, lecture_id, audio, engines)
+        else:
+            result = run_transcription(workspace, lecture_id, audio=None, progress=False,
+                                       **({"engines": engines} if engines is not None else {}))
     except ASRBusyError as error:
         return 3, {"status": "BUSY", **identity, "message": str(error), "current": getattr(error, "state", {})}
     except ASRReviewError as error:
