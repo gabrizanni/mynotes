@@ -101,7 +101,10 @@ def _codex_catalog(home: Path) -> tuple[list[dict], str]:
 
 
 def _cache_path(provider: str) -> Path:
-    root = Path(os.environ.get("MYNOTES_HOME", Path.home() / "Library/Application Support/MyNotes"))
+    from .platform_paths import default_runtime_home, is_linux
+    # Only Linux changes here; Windows keeps today's fallback for a separate fix.
+    fallback = default_runtime_home() if is_linux() else Path.home() / "Library/Application Support/MyNotes"
+    root = Path(os.environ.get("MYNOTES_HOME", fallback))
     return root / "model-catalogs" / (provider + ".json")
 
 

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import file_lock
+from .platform_paths import is_linux
 from .utils import atomic_json_write, now_compact_utc
 
 ONBOARDING_GROUPS = ("personal", "paths", "courses", "style", "providers")
@@ -117,8 +118,8 @@ def course_template() -> dict[str, Any]:
             "language": "en",
             "vocabulary": [],
             "accent": "",
-            "primary_engine": "whispercpp" if os.name == "nt" else "argmax",
-            "primary_model": "large-v3-turbo" if os.name == "nt" else "large-v3-v20240930_626MB",
+            "primary_engine": "whispercpp" if os.name == "nt" or is_linux() else "argmax",
+            "primary_model": "large-v3-turbo" if os.name == "nt" or is_linux() else "large-v3-v20240930_626MB",
             "secondary_engine": None,
             "secondary_model": "v2",
             "extra_pass_engine": None,

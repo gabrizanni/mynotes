@@ -249,6 +249,7 @@ def test_config_invalid_or_unsafe_fields_rejected(store, patch):
         capture.configure(store, patch)
 
 
+@pytest.mark.skipif(shutil.which("zsh") is None, reason="the macOS installer script runs under zsh")
 def test_installer_rollback_guard_reenters_script_from_any_directory(tmp_path):
     root = Path(__file__).resolve().parents[1]
     app_home = tmp_path / "application"

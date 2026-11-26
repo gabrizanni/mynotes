@@ -10,6 +10,8 @@ classifiers = [
   "Development Status :: 4 - Beta",
   "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
 ]
@@ -42,3 +44,4 @@ artifacts = ["src/mynotes/resources/*.json", "src/mynotes/resources/*.docx", "sr
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["linux_defaults: use the host platform's course transcription defaults"]
