@@ -6,7 +6,7 @@ import { OnboardingWindow, useOnboardingLaunch } from "../features/onboarding";
 import { I18nProvider } from "../i18n";
 import { StoreProvider, useAppState, type AppStore } from "../state";
 import { BackendFailure } from "./BackendFailure";
-import { shownFailure } from "./backendFailure";
+import { shownFailure } from "./backendFailureModel";
 import { Shell } from "./Shell";
 import { useBackendStatus } from "./useBackendStatus";
 

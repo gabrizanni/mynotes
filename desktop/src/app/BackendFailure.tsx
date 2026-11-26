@@ -4,7 +4,7 @@ import { version } from "../../package.json";
 import { Button } from "../components";
 import { useT } from "../i18n";
 import { restartBackend } from "../rpc/native";
-import { detailLines, failureDetails, type FailedStatus } from "./backendFailure";
+import { detailLines, failureDetails, type FailedStatus } from "./backendFailureModel";
 import styles from "./BackendFailure.module.css";
 
 export interface BackendFailureProps {

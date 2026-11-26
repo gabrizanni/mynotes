@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../i18n";
 import type { BackendStatus } from "../rpc/native";
 import { BackendFailure } from "./BackendFailure";
-import { failureDetails, MAX_DETAIL_LINES, shownFailure, type FailedStatus } from "./backendFailure";
+import { failureDetails, MAX_DETAIL_LINES, shownFailure, type FailedStatus } from "./backendFailureModel";
 
 const crashLoop: FailedStatus = {
   state: "failed",
