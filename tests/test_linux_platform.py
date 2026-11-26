@@ -124,7 +124,7 @@ def test_linux_engines_use_the_installed_speech_model_directory(home, monkeypatc
 
 
 def test_linux_verification_requires_a_spoken_sample(tmp_path, monkeypatch):
-    monkeypatch.setattr(windows_speech.os, "name", "posix")
+    monkeypatch.setattr(sys, "platform", "linux")
     with pytest.raises(ValueError, match="--audio"):
         windows_speech.verify_transcription(str(tmp_path / "whisper-cli"), tmp_path)
 

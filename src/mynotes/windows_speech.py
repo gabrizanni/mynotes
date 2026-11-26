@@ -163,7 +163,7 @@ def verify_transcription(executable: str, model_dir: Path, *, model: str = DEFAU
     from .asr import WhisperCppEngine, audio_duration, normalize_audio
     if audio is None and language != "en":
         raise ValueError("Supply a short audio sample to verify a language other than English.")
-    if audio is None and os.name != "nt":
+    if audio is None and sys.platform.startswith("linux"):
         raise ValueError("Supply a short spoken sample with --audio, for example the public whisper.cpp samples/jfk.wav.")
     weights = model_dir / f"ggml-{model}.bin"
     if not weights.is_file():

@@ -98,6 +98,9 @@ was recorded. "Not proved" rows still need a run.
   On this machine 8 threads took 23% less time on the 120 s excerpt.
 - The service runs the Python of the version that enabled it. After an update,
   run `mynotes capture enable` again to point it at the new version.
+- Until `mynotes capture enable` has installed the service, unassigned recordings and
+  all-timed calendar imports are refused, as on a computer without the recorder app.
+  Enable Capture first.
 - FluidAudio recovery passes and diarization are not available on Linux.
 - There is no tray icon or Linux desktop app yet; the notification is the only
   recording indicator while the CLI is closed.
