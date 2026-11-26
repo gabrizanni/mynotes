@@ -3,6 +3,13 @@
   gap: var(--space-3);
 }
 
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: var(--space-2);
+}
+
 .toggle {
   justify-self: start;
   display: inline-flex;

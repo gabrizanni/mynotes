@@ -33,7 +33,7 @@ export type OutcomeKind =
 export type OutcomeFix = "openWord" | "viewWarnings" | "transcribe" | "resume" | "signIn" | "openPreview" | "askAssistant";
 
 /** At most one quieter action next to the fix. */
-export type OutcomeSecondary = "approve" | "copyDetails" | "resume" | null;
+export type OutcomeSecondary = "approve" | "copyDetails" | "resume" | "undo" | null;
 
 export interface Outcome {
   kind: OutcomeKind;
@@ -49,7 +49,7 @@ export interface Outcome {
 type OutcomeSpec = Omit<Outcome, "status" | "resumable"> & { resumable?: boolean };
 
 const OUTCOMES: Record<string, OutcomeSpec> = {
-  COMPLETED: { kind: "completed", tone: "success", fix: "openWord", secondary: null },
+  COMPLETED: { kind: "completed", tone: "success", fix: "openWord", secondary: "undo" },
   COMPLETED_WITH_WARNINGS: { kind: "warnings", tone: "warning", fix: "viewWarnings", secondary: null },
   NEEDS_TRANSCRIPT: { kind: "needsTranscript", tone: "warning", fix: "transcribe", secondary: null },
   PAUSED_QUOTA: { kind: "pausedQuota", tone: "warning", fix: "resume", secondary: null, resumable: true },

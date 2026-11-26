@@ -107,10 +107,9 @@
 }
 
 .playerHint {
-  flex: 1 1 200px;
+  flex: 1 1 100%;
   font: var(--text-small);
   color: var(--color-text-muted);
-  text-align: right;
 }
 
 .alternatives {

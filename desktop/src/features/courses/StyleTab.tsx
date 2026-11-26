@@ -174,7 +174,6 @@ export function StyleTab({ code }: { code: string }) {
 function StylePreview({ draft }: { draft: StyleDraft }) {
   const { t } = useI18n();
   const s = t.courses.style;
-  const lines = draft.writing_style === "concise" ? 1 : draft.writing_style === "detailed" ? 3 : 2;
   const prose = draft.list_density !== "list_first";
   const points = draft.list_density !== "prose_first";
   const figures = draft.image_policy === "none" ? 0 : Math.min(draft.image_limit ?? 1, 1);
@@ -183,12 +182,8 @@ function StylePreview({ draft }: { draft: StyleDraft }) {
       <div className={styles.page} aria-hidden="true">
         <p className={styles.pageHeading}>{s.previewHeading}</p>
         <p className={styles.pageSection}>{s.previewSection}</p>
-        {prose &&
-          Array.from({ length: lines }, (_, index) => (
-            <p key={index} className={styles.pageProse}>
-              {s.previewProse}
-            </p>
-          ))}
+        {prose && <p className={styles.pageProse}>{s.previewProse}</p>}
+        {prose && draft.writing_style === "detailed" && <p className={styles.pageProse}>{s.previewProseMore}</p>}
         {points && (
           <ul className={styles.pagePoints}>
             {s.previewPoints.slice(0, draft.writing_style === "concise" ? 2 : 3).map((point) => (

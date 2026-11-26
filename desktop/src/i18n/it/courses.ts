@@ -119,6 +119,7 @@ export const courses: Messages["courses"] = {
     previewHeading: "Lezione 7 · Test di ipotesi",
     previewSection: "La statistica test",
     previewProse: "Sotto l'ipotesi nulla la statistica segue una normale standard, quindi le code dicono quanto è sorprendente il campione.",
+    previewProseMore: "Un p-value piccolo dice che il campione sarebbe raro se H₀ fosse vera.",
     previewPoints: ["Formula H₀ e H₁", "Calcola z dal campione", "Confronta con il valore critico"],
     previewFigure: "Figura",
     previewRecap: "Riepilogo",

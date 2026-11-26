@@ -197,6 +197,7 @@ export const lesson = {
     pausedSleep: "Your computer slept. Progress is saved.",
     cancelled: "Notes stopped. Progress is saved.",
     resume: "Resume",
+    resumeHint: "Resume picks up where it stopped.",
     signIn: "Sign in",
     awaitingApproval: "Review the new pages before they join your course notes.",
     openPreview: "Open preview",

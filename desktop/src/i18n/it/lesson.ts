@@ -198,6 +198,7 @@ export const lesson: Messages["lesson"] = {
     pausedSleep: "Il computer è andato in sospensione. Il lavoro è salvato.",
     cancelled: "Appunti fermati. Il lavoro è salvato.",
     resume: "Riprendi",
+    resumeHint: "Riprendi continua da dove si era fermato.",
     signIn: "Accedi",
     awaitingApproval: "Rivedi le nuove pagine prima che entrino nella dispensa.",
     openPreview: "Apri l'anteprima",

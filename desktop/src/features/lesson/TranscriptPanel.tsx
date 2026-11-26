@@ -51,12 +51,16 @@ export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps
 
   const matches = useMemo(() => findMatches(segments, query), [segments, query]);
   useEffect(() => setCurrent(matches.length > 0 ? 0 : -1), [matches]);
-  const playing = activeSegment(segments, position);
+  const playing = position > 0 ? activeSegment(segments, position) : -1;
 
   useEffect(() => {
     if (current < 0) return;
-    const mark = list.current?.querySelector<HTMLElement>(`[data-match="${current}"]`);
-    mark?.scrollIntoView({ block: "center", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+    const container = list.current;
+    const mark = container?.querySelector<HTMLElement>(`[data-match="${current}"]`);
+    if (!container || !mark) return;
+    // Scroll the transcript only, never the page around it.
+    const top = mark.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - container.clientHeight / 2;
+    container.scrollTo({ top: Math.max(0, top), behavior: prefersReducedMotion() ? "auto" : "smooth" });
   }, [current]);
 
   const step = (direction: 1 | -1) => setCurrent((value) => stepMatch(value, matches.length, direction));

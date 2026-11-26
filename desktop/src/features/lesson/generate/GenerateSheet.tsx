@@ -1,4 +1,4 @@
-import { Check, CircleAlert, CircleCheck, Minus, Send, Square, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Check, CircleAlert, CircleCheck, CircleStop, Send, TriangleAlert, Undo2, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useNow } from "../../../app/useNow";
@@ -28,7 +28,7 @@ import {
   type Outcome,
   type SourceRow,
 } from "./model";
-import { afterTranscriptions, completedToast, watchNotesJob } from "./watch";
+import { afterTranscriptions, completedToast, undoLastUpdate, watchNotesJob } from "./watch";
 import styles from "./Generate.module.css";
 
 export interface GenerateSheetProps {
@@ -197,10 +197,10 @@ export function GenerateSheet({ open, onClose, courseCode, lectureIds, initialJo
     body = <RunningView current={timeline.current} timings={timeline.timings} totalSeconds={timeline.totalSeconds} now={now} />;
     footer = (
       <>
-        <Button variant="ghost" icon={Square} disabled={starting} onClick={() => void stop()}>
+        <Button variant="ghost" icon={CircleStop} disabled={starting} onClick={() => void stop()}>
           {g.stop}
         </Button>
-        <Button variant="primary" icon={Minus} onClick={close}>
+        <Button variant="primary" onClick={close}>
           {g.minimize}
         </Button>
       </>
@@ -456,8 +456,11 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
     onClose();
   };
 
-  const run = async (fix: Outcome["fix"] | "approve" | "copyDetails" | "resume") => {
+  const run = async (fix: Outcome["fix"] | "approve" | "copyDetails" | "resume" | "undo") => {
     switch (fix) {
+      case "undo":
+        undoLastUpdate({ rpc, actions, t, course: courseCode });
+        return;
       case "openWord":
         open(files.handout);
         return;
@@ -539,6 +542,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
       break;
     case "pausedQuota":
       headline = o.pausedQuota(assistant);
+      detail = o.resumeHint;
       break;
     case "pausedAuth":
       headline = o.pausedAuth(assistant);
@@ -546,9 +550,11 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
       break;
     case "pausedNetwork":
       headline = o.pausedNetwork;
+      detail = o.resumeHint;
       break;
     case "pausedSleep":
       headline = o.pausedSleep;
+      detail = o.resumeHint;
       break;
     case "awaitingApproval":
       headline = o.awaitingApproval;
@@ -561,6 +567,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
       break;
     case "cancelled":
       headline = o.cancelled;
+      detail = outcome.resumable ? o.resumeHint : null;
       break;
   }
 
@@ -576,7 +583,8 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
   // After the preview, approving becomes the one primary action and the preview steps back.
   const primary: Outcome["fix"] | "approve" = outcome.fix === "openPreview" && previewed ? "approve" : outcome.fix;
   const secondary = outcome.fix === "openPreview" ? (previewed ? "openPreview" : null) : outcome.secondary;
-  const secondaryLabel = secondary === "openPreview" ? o.openPreviewAgain : secondary === "copyDetails" ? o.copyDetails : secondary === "resume" ? o.resume : secondary === "approve" ? o.approve : null;
+  const secondaryLabel =
+    secondary === "openPreview" ? o.openPreviewAgain : secondary === "copyDetails" ? o.copyDetails : secondary === "resume" ? o.resume : secondary === "approve" ? o.approve : secondary === "undo" ? o.undo : null;
   const canResume = outcome.fix !== "resume" || outcome.resumable;
   const timeline = job && (outcome.kind === "completed" || outcome.kind === "warnings") ? stageTimeline(job, history, now) : null;
 
@@ -586,7 +594,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
         {t.common.close}
       </Button>
       {secondary && secondaryLabel && (secondary !== "resume" || outcome.resumable) && (
-        <Button variant="soft" onClick={() => void run(secondary)}>
+        <Button variant="soft" icon={secondary === "undo" ? Undo2 : undefined} onClick={() => void run(secondary)}>
           {secondaryLabel}
         </Button>
       )}

@@ -20,11 +20,18 @@ export function Disclosure({ label, summary, defaultOpen = false, children }: Di
   const regionId = useId();
   return (
     <div className={styles.disclosure}>
-      <button type="button" className={styles.toggle} aria-expanded={open} aria-controls={regionId} onClick={() => setOpen((value) => !value)}>
-        <Icon icon={ChevronDown} size={16} className={cx(styles.chevron, open && styles.open)} />
-        <span className={styles.label}>{label}</span>
-        {!open && summary && <span className={styles.summary}>{summary}</span>}
-      </button>
+      <div className={styles.head}>
+        <button type="button" className={styles.toggle} aria-expanded={open} aria-controls={regionId} onClick={() => setOpen((value) => !value)}>
+          <Icon icon={ChevronDown} size={16} className={cx(styles.chevron, open && styles.open)} />
+          <span className={styles.label}>{label}</span>
+        </button>
+        {/* Outside the button so its name stays the label alone. */}
+        {!open && summary && (
+          <span className={styles.summary} aria-hidden="true">
+            {summary}
+          </span>
+        )}
+      </div>
       <div id={regionId} className={styles.region} hidden={!open}>
         {children}
       </div>

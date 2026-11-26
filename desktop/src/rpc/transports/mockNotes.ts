@@ -67,13 +67,14 @@ export function createNotesMock(ctx: NotesMockContext) {
     if (isObject(list) && Array.isArray(list.jobs)) list.jobs.unshift(job);
     else ctx.state.set("job.list", { jobs: [job] });
   };
-  const simulation = (): { outcome: string; stopAt: string | null; warnings: Json[] } => {
+  const simulation = (): { outcome: string; stopAt: string | null; warnings: Json[]; weights: number[] } => {
     const fixture = ctx.state.get("notes.run");
     const value = isObject(fixture) && isObject(fixture.simulation) ? fixture.simulation : {};
     return {
       outcome: str(value.outcome) ?? "COMPLETED",
       stopAt: str(value.stopAt),
       warnings: Array.isArray(value.warnings) ? value.warnings : [],
+      weights: Array.isArray(value.weights) ? value.weights.map((weight) => (typeof weight === "number" && weight > 0 ? weight : 1)) : [],
     };
   };
   const finish = (job: JsonObject, state: string, exitCode: number, result: JsonObject | null) => {
@@ -115,19 +116,22 @@ export function createNotesMock(ctx: NotesMockContext) {
     };
     addJob(job);
     later(jobId, ctx.latencyMs, () => ctx.emit("job.started", structuredClone(job)));
-    const plan = resume ? { outcome: "COMPLETED", stopAt: null, warnings: [] } : simulation();
+    const fixture = simulation();
+    const plan = resume ? { ...fixture, outcome: "COMPLETED", stopAt: null, warnings: [] } : fixture;
     const stopIndex = plan.stopAt ? STAGES.findIndex((stage) => stage === plan.stopAt) : -1;
     const lastStage = stopIndex >= 0 ? stopIndex : STAGES.length - 1;
+    // `weights` stretch stages relative to each other (writing takes longest), times stageMs.
+    const startOf = (index: number) => STAGES.slice(0, index).reduce((sum, _stage, i) => sum + ctx.stageMs * (plan.weights[i] ?? 1), 0);
     for (let index = 1; index <= lastStage; index += 1) {
       const stage = STAGES[index] ?? "UPDATING_WORD";
-      later(jobId, ctx.stageMs * index, () => {
+      later(jobId, startOf(index), () => {
         const at = iso(ctx.now());
         job.stage = stage;
         job.stageStartedAt = at;
         ctx.emit("job.progress", { jobId, stage, detail: null, at });
       });
     }
-    later(jobId, ctx.stageMs * (lastStage + 1), () => {
+    later(jobId, startOf(lastStage + 1), () => {
       timersByJob.delete(jobId);
       const outcome = plan.outcome;
       const succeeded = ["COMPLETED", "COMPLETED_WITH_WARNINGS", "AWAITING_APPROVAL"].includes(outcome);

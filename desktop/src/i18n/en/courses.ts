@@ -117,6 +117,7 @@ export const courses = {
     previewHeading: "Lesson 7 · Hypothesis testing",
     previewSection: "The test statistic",
     previewProse: "Under the null hypothesis, the statistic follows a standard normal distribution, so its tails tell us how surprising the sample is.",
+    previewProseMore: "A small p-value means this sample would be rare if H₀ were true.",
     previewPoints: ["State H₀ and H₁", "Compute z from the sample", "Compare with the critical value"],
     previewFigure: "Figure",
     previewRecap: "Recap",
