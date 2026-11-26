@@ -1,0 +1,16 @@
+export const capture = {
+  label: "Recorder",
+  upcoming: (course: string, minutes: number) => `${course} in ${minutes} min`,
+  skip: "Skip",
+  starting: "Starting…",
+  rec: "REC",
+  stop: "Stop",
+  saving: "Saving audio…",
+  saved: (duration: string) => `Saved · ${duration}`,
+  transcribe: "Transcribe",
+  micBlocked: "Microphone blocked",
+  failed: "Recording failed",
+  fix: "Fix",
+  details: "Details",
+  expand: "Show recorder details",
+};

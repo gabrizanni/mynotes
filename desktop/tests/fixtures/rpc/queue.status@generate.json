@@ -1,0 +1,45 @@
+{
+  "data": {
+    "jobs": [
+      {
+        "id": "q-dircom-02",
+        "created_at": "2026-11-26T09:36:02Z",
+        "recording_id": "rdircom02aa71c2",
+        "title": "DIRCOM-L02",
+        "course_code": "DIRCOM",
+        "source_present": true,
+        "status": "NEEDS_REVIEW",
+        "error": null,
+        "phase": null,
+        "elapsed_seconds": null,
+        "actions": [
+          "restart"
+        ],
+        "queue_position": null,
+        "review_summary": "Ampie parti senza parlato: verifica l'audio."
+      },
+      {
+        "id": "q-stat-07",
+        "created_at": "2026-11-26T09:36:02Z",
+        "recording_id": "rstat07aa71c2",
+        "title": "STAT-L07",
+        "course_code": "STAT",
+        "source_present": true,
+        "status": "COMPLETED",
+        "error": null,
+        "phase": null,
+        "elapsed_seconds": null,
+        "actions": [
+          "finish"
+        ],
+        "queue_position": null,
+        "review_summary": null
+      }
+    ],
+    "activity_counts": {
+      "running": 0,
+      "queued": 0,
+      "review": 1
+    }
+  }
+}

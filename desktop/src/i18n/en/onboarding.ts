@@ -1,0 +1,21 @@
+export const onboarding = {
+  segments: { setup: "Setup", course: "Your course", recording: "Recording" },
+  steps: {
+    language: "Your lectures, turned into study notes.",
+    assistant: "Choose your AI assistant",
+    "sign-in": "Sign in to your AI assistant",
+    privacy: "What stays on this computer",
+    studies: "What do you study?",
+    course: "Add your first course",
+    style: "How should your notes read?",
+    files: "Where are your course files?",
+    schedule: "Add your class schedule",
+    microphone: "Let MyNotes hear your lectures",
+    automatic: "Record scheduled lessons automatically?",
+    "first-notes": "Make your first notes",
+    ready: "You're ready.",
+  },
+  intro: "Record, transcribe on this computer, and get one Word file per course that grows lesson by lesson.",
+  getStarted: "Get started",
+  settingUp: (percent: number) => `Setting up · ${percent}%`,
+};

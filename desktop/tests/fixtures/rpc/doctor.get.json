@@ -1,0 +1,28 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "ready",
+    "checks": {
+      "installation": {
+        "status": "ready",
+        "message": null
+      },
+      "agent": {
+        "status": "ready",
+        "message": null
+      },
+      "transcription": {
+        "status": "ready",
+        "message": null
+      },
+      "word": {
+        "status": "ready",
+        "message": null
+      },
+      "capture": {
+        "status": "ready",
+        "message": null
+      }
+    }
+  }
+}

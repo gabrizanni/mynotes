@@ -1,0 +1,56 @@
+{
+  "exitCode": 0,
+  "data": {
+    "onboarding": {
+      "status": "complete",
+      "completed_groups": [
+        "paths",
+        "courses",
+        "style",
+        "providers"
+      ],
+      "next_group": null
+    },
+    "personal": {
+      "interface_language": "en",
+      "background": ""
+    },
+    "courses": [
+      {
+        "code": "STAT",
+        "name": "Statistics",
+        "notes_language": "en",
+        "kind": "exercises"
+      },
+      {
+        "code": "MICRO",
+        "name": "Microeconomics",
+        "notes_language": "en",
+        "kind": "theory"
+      },
+      {
+        "code": "CORPFIN",
+        "name": "Corporate Finance",
+        "notes_language": "en",
+        "kind": "case_studies"
+      },
+      {
+        "code": "DIRCOM",
+        "name": "Diritto commerciale",
+        "notes_language": "it",
+        "kind": "theory"
+      }
+    ],
+    "providers": {
+      "default": "claude",
+      "configured": {
+        "claude": {}
+      }
+    },
+    "paths": {
+      "recording_dirs": [
+        "~/Documents/MyNotes/Recordings"
+      ]
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "data": {
+    "runtime": {
+      "microphonePermission": "DENIED",
+      "title": "Microphone blocked",
+      "sessions": [
+        {
+          "id": "s-stat-06",
+          "event": {
+            "id": "uni-timetable:STAT-L06",
+            "courseCode": "STAT",
+            "lessonNumber": 6,
+            "title": "Statistics"
+          },
+          "status": "COMPLETED",
+          "actualStart": "2026-11-24T07:58:20Z",
+          "outputPath": "~/Documents/MyNotes/Recordings/STAT-L06.m4a"
+        },
+        {
+          "id": "s-dircom-02",
+          "event": {
+            "id": "uni-timetable:DIRCOM-L02",
+            "courseCode": "DIRCOM",
+            "lessonNumber": 2,
+            "title": "Diritto commerciale"
+          },
+          "status": "COMPLETED",
+          "actualStart": "2026-11-24T12:58:05Z",
+          "outputPath": "~/Documents/MyNotes/Recordings/DIRCOM-L02.m4a"
+        },
+        {
+          "id": "s-micro-04",
+          "event": {
+            "id": "uni-timetable:MICRO-L04",
+            "courseCode": "MICRO",
+            "lessonNumber": 4,
+            "title": "Microeconomics"
+          },
+          "status": "COMPLETED",
+          "actualStart": "2026-11-25T09:58:11Z",
+          "outputPath": "~/Documents/MyNotes/Recordings/MICRO-L04.m4a"
+        },
+        {
+          "id": "s-corpfin-03",
+          "event": {
+            "id": "uni-timetable:CORPFIN-L03",
+            "courseCode": "CORPFIN",
+            "lessonNumber": 3,
+            "title": "Corporate Finance"
+          },
+          "status": "COMPLETED",
+          "actualStart": "2026-11-25T13:28:02Z",
+          "outputPath": "~/Documents/MyNotes/Recordings/CORPFIN-L03.m4a"
+        }
+      ]
+    }
+  }
+}
