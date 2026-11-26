@@ -546,6 +546,39 @@ def test_close_kills_running_replies(fakes):
     assert gone(runs(log)[0]["pid"]) and gone(runs(log, "child")[0]["pid"])
 
 
+def test_concurrent_starts_never_exceed_the_reply_limit(fakes, monkeypatch):
+    workspace, _, log = fakes
+    assistant = open_assistant(workspace, Recorder())
+    original = Assistant._new_turn
+
+    def slow_new_turn(self, session, params):
+        time.sleep(0.05)  # Widen the gap between the capacity check and the RUNNING record.
+        return original(self, session, params)
+
+    monkeypatch.setattr(Assistant, "_new_turn", slow_new_turn)
+    attempts = 2 * serve_assistant.MAX_RUNNING_TURNS
+    barrier, accepted, refused = threading.Barrier(attempts), [], []
+
+    def attempt():
+        barrier.wait()
+        try:  # Answers only: no reply is launched, so nothing ends meanwhile.
+            accepted.append(assistant.dispatch("assistant.start", {"provider": "claude", "message": "Hi"}).result)
+        except RpcError as error:
+            refused.append(error.code)
+
+    threads = [threading.Thread(target=attempt) for _ in range(attempts)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert len(accepted) == serve_assistant.MAX_RUNNING_TURNS and assistant.running() == serve_assistant.MAX_RUNNING_TURNS
+    assert refused == [TURN_RUNNING] * serve_assistant.MAX_RUNNING_TURNS
+    first = accepted[0]["sessionId"]
+    assistant.dispatch("assistant.cancel", {"sessionId": first})  # Not launched yet: recorded on the turn.
+    record = assistant.dispatch("assistant.get", {"sessionId": first})
+    assert record["turns"][-1]["cancelRequested"] is True and not runs(log)
+
+
 # Parameters -----------------------------------------------------------------------------
 @pytest.mark.parametrize(("method", "params", "code"), [
     ("assistant.start", {}, INVALID_PARAMS),
