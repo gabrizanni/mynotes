@@ -52,10 +52,12 @@ describe("token file", () => {
     });
     const missing = new Set<string>();
     for (const [path, text] of Object.entries(sources)) {
+      // Component-local custom properties (declared in the same file, e.g. a layout gutter) are allowed.
+      const local = new Set([...text.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((declared) => declared[1]));
       // Complete references only: `var(--color-${name})` built at runtime is skipped.
       for (const match of text.matchAll(/var\((--[a-z0-9-]+)\s*[,)]/g)) {
         const name = match[1];
-        if (name && !(name in light)) missing.add(`${name} (${path})`);
+        if (name && !(name in light) && !local.has(name)) missing.add(`${name} (${path})`);
       }
     }
     expect([...missing]).toEqual([]);

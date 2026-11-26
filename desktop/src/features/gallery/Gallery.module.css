@@ -165,3 +165,8 @@
 .dockFrame {
   height: 100%;
 }
+
+/* workspace screens: room under the open menu specimen */
+.menuStage {
+  min-height: 200px;
+}

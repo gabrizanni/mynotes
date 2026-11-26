@@ -1,0 +1,31 @@
+{
+  "data": {
+    "ready": false,
+    "capture_optional": true,
+    "checks": {
+      "installation": {
+        "status": "ready",
+        "action": "Open MyNotes setup.",
+        "workspace": "~/Documents/MyNotes/workspace"
+      },
+      "agent": {
+        "status": "ready",
+        "action": "Claude Code is signed in.",
+        "provider": "claude"
+      },
+      "transcription": {
+        "status": "ready",
+        "action": "Open MyNotes setup to download local transcription components."
+      },
+      "word": {
+        "status": "missing",
+        "action": "Open MyNotes setup to install the Word renderer.",
+        "execution_verified": false
+      },
+      "capture": {
+        "status": "optional",
+        "action": "Configure Capture, record a microphone test, listen to it and confirm audibility."
+      }
+    }
+  }
+}

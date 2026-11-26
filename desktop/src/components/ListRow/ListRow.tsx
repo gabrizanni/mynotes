@@ -17,10 +17,12 @@ export interface ListRowProps {
   href?: string;
   chevron?: boolean;
   className?: string;
+  /** The row whose details are open next to the list (master–detail); sets aria-current. */
+  selected?: boolean;
 }
 
 /** A 48 px row. Interactive rows are one big button or link, never a div with a click handler. */
-export function ListRow({ title, description, leading, meta, onSelect, href, chevron, className }: ListRowProps) {
+export function ListRow({ title, description, leading, meta, onSelect, href, chevron, className, selected = false }: ListRowProps) {
   const interactive = Boolean(onSelect ?? href);
   const content = (
     <>
@@ -33,7 +35,7 @@ export function ListRow({ title, description, leading, meta, onSelect, href, che
       {(chevron ?? interactive) && interactive && <Icon icon={ChevronRight} size={16} className={styles.chevron} />}
     </>
   );
-  const classes = cx(styles.row, interactive && styles.interactive, className);
+  const classes = cx(styles.row, interactive && styles.interactive, selected && styles.selected, className);
   if (href) {
     return (
       <a href={href} className={classes}>
@@ -43,7 +45,7 @@ export function ListRow({ title, description, leading, meta, onSelect, href, che
   }
   if (onSelect) {
     return (
-      <button type="button" className={classes} onClick={onSelect}>
+      <button type="button" className={classes} aria-current={selected ? "true" : undefined} onClick={onSelect}>
         {content}
       </button>
     );

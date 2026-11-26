@@ -85,4 +85,9 @@ export const CONTRAST_PAIRS: readonly ContrastPair[] = [
   ...onSurfaces("Strong control (toggle on, progress, step)", "--color-control-strong", "ui", ["--color-bg-canvas", "--color-bg-card", "--color-bg-emphasis"]),
   { role: "Toggle mark on strong control", fg: "--color-on-control-strong", bg: ["--color-control-strong"], level: "ui" },
   { role: "Live dot on canvas", fg: "--color-danger", bg: ["--color-bg-canvas"], level: "ui" },
+  // Calendar lesson blocks: neutral course tints laid over the card surface.
+  ...[1, 2, 3, 4, 5, 6].flatMap((n): ContrastPair[] => [
+    { role: `Lesson title on course tint ${n}`, fg: "--color-text-primary", bg: [`--color-course-${n}`, "--color-bg-card"], level: "text" },
+    { role: `Lesson time on course tint ${n}`, fg: "--color-text-muted", bg: [`--color-course-${n}`, "--color-bg-card"], level: "text" },
+  ]),
 ];

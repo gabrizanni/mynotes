@@ -11,6 +11,7 @@ import { configActions, configInitial } from "./slices/config";
 import { jobsActions, jobsInitial } from "./slices/jobs";
 import { libraryActions, libraryInitial } from "./slices/library";
 import { queueActions, queueInitial } from "./slices/queue";
+import { settingsActions, settingsInitial } from "./slices/settings";
 import { uiActions, uiInitial, type UiState } from "./slices/ui";
 import { createStore, type Store } from "./store";
 import type { AppState, SliceContext, SliceKey } from "./types";
@@ -24,6 +25,7 @@ export function initialAppState(ui: Partial<UiState> = {}): AppState {
     jobs: jobsInitial,
     assistant: assistantInitial,
     ui: { ...uiInitial, ...ui },
+    settings: settingsInitial,
   };
 }
 
@@ -48,6 +50,7 @@ function bindActions(store: Store<AppState>, rpc: RpcClient) {
     jobs: jobsActions(context("jobs")),
     assistant: assistantActions(context("assistant")),
     ui: uiActions(context("ui")),
+    settings: settingsActions(context("settings")),
   };
 }
 

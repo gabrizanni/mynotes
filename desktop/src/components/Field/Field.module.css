@@ -70,3 +70,25 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Leading icon inside a text control (search). The icon is decorative; the label names it. */
+.withIcon {
+  position: relative;
+}
+
+.leadingIcon {
+  position: absolute;
+  top: 50%;
+  left: var(--space-3);
+  color: var(--color-text-muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.controlWithIcon {
+  padding-left: 36px;
+}
+
+.controlWithIcon[type="search"]::-webkit-search-cancel-button {
+  cursor: pointer;
+}

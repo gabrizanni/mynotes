@@ -162,6 +162,14 @@
   --control-height: 40px;
   --control-height-sm: 32px;
   --row-height: 48px;
+
+  /* Course tints (calendar blocks, library rows). Decorative: the course name is always written on the tint. */
+  --color-course-1: #e7eaeb; /* mist */
+  --color-course-2: #e3ece3; /* sage */
+  --color-course-3: #f1e7d3; /* sand */
+  --color-course-4: #ebe4ee; /* heather */
+  --color-course-5: #e8e5df; /* stone */
+  --color-course-6: #f0e2db; /* clay */
 }
 
 /*
@@ -220,6 +228,14 @@
     --shadow-e1: 0 0 0 0 transparent;
     --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px -8px rgba(0, 0, 0, 0.5);
     --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+
+    /* Course tints: 9-12% washes under cream text. */
+    --color-course-1: rgba(200, 215, 220, 0.11);
+    --color-course-2: rgba(130, 205, 160, 0.12);
+    --color-course-3: rgba(242, 200, 120, 0.12);
+    --color-course-4: rgba(205, 165, 225, 0.12);
+    --color-course-5: rgba(243, 235, 221, 0.09);
+    --color-course-6: rgba(255, 165, 135, 0.12);
   }
 }
 
@@ -274,6 +290,14 @@
   --shadow-e1: 0 0 0 0 transparent;
   --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px -8px rgba(0, 0, 0, 0.5);
   --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 48px -12px rgba(0, 0, 0, 0.6);
+
+  /* Course tints: 9-12% washes under cream text. */
+  --color-course-1: rgba(200, 215, 220, 0.11);
+  --color-course-2: rgba(130, 205, 160, 0.12);
+  --color-course-3: rgba(242, 200, 120, 0.12);
+  --color-course-4: rgba(205, 165, 225, 0.12);
+  --color-course-5: rgba(243, 235, 221, 0.09);
+  --color-course-6: rgba(255, 165, 135, 0.12);
 }
 
 /* Reduced motion: opacity-only at 150 ms, no movement, no pulsing (see base.css). */

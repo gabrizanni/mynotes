@@ -3,14 +3,26 @@
   "data": {
     "default": {
       "provider": "claude",
-      "model": "",
-      "effort": ""
+      "model": "claude-sonnet",
+      "effort": "medium"
     },
     "overrides": {
       "chat": null,
       "notes": null
     },
+    "effective": {
+      "chat": {
+        "provider": "claude",
+        "model": "claude-sonnet",
+        "effort": "medium"
+      },
+      "notes": {
+        "provider": "claude",
+        "model": "claude-sonnet",
+        "effort": "medium"
+      }
+    },
     "language": "en",
-    "revision": "mock-revision-1"
+    "revision": "3f0c9a51d2e84b7a"
   }
 }

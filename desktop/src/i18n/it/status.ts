@@ -45,5 +45,13 @@ export const status: Messages["status"] = {
     unchecked: "Non verificato",
     ready: "Pronto",
   },
+  // workspace screens: Settings › Check setup
+  check: {
+    ready: "Pronto",
+    missing: "Tocca a te",
+    optional: "Facoltativo",
+    incompatible: "Aggiornamento necessario",
+    signIn: "Accedi",
+  },
   unknown: "Stato sconosciuto",
 };

@@ -44,5 +44,13 @@ export const status = {
     unchecked: "Not checked",
     ready: "Ready",
   },
+  // workspace screens: Settings › Check setup
+  check: {
+    ready: "Ready",
+    missing: "Needs you",
+    optional: "Optional",
+    incompatible: "Update needed",
+    signIn: "Sign in",
+  },
   unknown: "Status unknown",
 };

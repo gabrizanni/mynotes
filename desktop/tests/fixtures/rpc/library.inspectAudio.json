@@ -1,0 +1,35 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "files": [
+      {
+        "path": "~/Downloads/Statistics 17 Nov.m4a",
+        "name": "Statistics 17 Nov.m4a",
+        "duration": 5394.0,
+        "recorded_at": "2026-11-17T09:01:12+01:00",
+        "size": 52428800,
+        "duplicate": false,
+        "name_collision": false
+      },
+      {
+        "path": "~/Downloads/Statistics review session.mp3",
+        "name": "Statistics review session.mp3",
+        "duration": 2702.5,
+        "recorded_at": null,
+        "size": 21495808,
+        "duplicate": false,
+        "name_collision": false
+      },
+      {
+        "path": "~/Downloads/STAT-L06 copy.m4a",
+        "name": "STAT-L06 copy.m4a",
+        "duration": 5530.0,
+        "recorded_at": "2026-11-24T08:58:20+01:00",
+        "size": 53100000,
+        "duplicate": true,
+        "name_collision": false
+      }
+    ]
+  }
+}

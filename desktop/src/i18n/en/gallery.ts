@@ -13,6 +13,7 @@ export const gallery = {
     overlays: "Overlays",
     capsule: "Recorder capsule",
     shell: "Shell",
+    workspace: "Workspace screens", // workspace screens
   },
   sample: {
     courseName: "Course name",

@@ -1,0 +1,76 @@
+{
+  "data": {
+    "jobs": [
+      {
+        "id": "q-dircom-02",
+        "created_at": "2026-11-26T09:36:02Z",
+        "recording_id": "rdircom02aa71c2",
+        "title": "DIRCOM-L02",
+        "course_code": "DIRCOM",
+        "source_present": true,
+        "status": "NEEDS_REVIEW",
+        "error": null,
+        "phase": null,
+        "elapsed_seconds": null,
+        "actions": [
+          "restart"
+        ],
+        "queue_position": null,
+        "review_summary": "Ampie parti senza parlato: verifica l'audio."
+      },
+      {
+        "id": "q-stat-07",
+        "created_at": "2026-11-26T09:36:02Z",
+        "recording_id": "rstat07aa71c2",
+        "title": "STAT-L07",
+        "course_code": "STAT",
+        "source_present": true,
+        "status": "RUNNING",
+        "error": null,
+        "phase": "transcribing",
+        "elapsed_seconds": 412.0,
+        "actions": [
+          "cancel"
+        ],
+        "queue_position": null,
+        "review_summary": null
+      },
+      {
+        "id": "q-corpfin-03",
+        "created_at": "2026-11-25T15:05:10Z",
+        "recording_id": "rcorpfin03aa71c2",
+        "title": "CORPFIN-L03",
+        "course_code": "CORPFIN",
+        "source_present": true,
+        "status": "COMPLETED",
+        "error": null,
+        "phase": null,
+        "elapsed_seconds": 1873.0,
+        "actions": [],
+        "queue_position": null,
+        "review_summary": null
+      },
+      {
+        "id": "q-micro-04",
+        "created_at": "2026-11-25T11:40:00Z",
+        "recording_id": "rmicro04aa71c2",
+        "title": "MICRO-L04",
+        "course_code": "MICRO",
+        "source_present": true,
+        "status": "COMPLETED",
+        "error": null,
+        "phase": null,
+        "elapsed_seconds": 1790.0,
+        "actions": [],
+        "queue_position": null,
+        "review_summary": null
+      }
+    ],
+    "parallel": 2,
+    "activity_counts": {
+      "running": 1,
+      "queued": 0,
+      "review": 1
+    }
+  }
+}

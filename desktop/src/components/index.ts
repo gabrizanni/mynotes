@@ -31,3 +31,8 @@ export * from "./TextArea";
 export * from "./TextField";
 export * from "./Toast";
 export * from "./Toggle";
+// BEGIN workspace screens
+export * from "./AnchoredPopover";
+export * from "./FilterChip";
+export * from "./Menu";
+// END workspace screens

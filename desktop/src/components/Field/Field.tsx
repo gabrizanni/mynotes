@@ -24,10 +24,12 @@ export interface FieldProps {
   children: (a11y: FieldA11y) => ReactNode;
   /** Use a <span> label for controls that are labelled by aria-labelledby (radiogroups). */
   labelAs?: "label" | "span";
+  /** Keep the label for screen readers only (search fields with a placeholder and an icon). */
+  hideLabel?: boolean;
 }
 
 /** Label, hint and error wiring shared by every input (one place for the a11y rules). */
-export function Field({ label, hint, error, optional = false, id, children, labelAs = "label" }: FieldProps) {
+export function Field({ label, hint, error, optional = false, id, children, labelAs = "label", hideLabel = false }: FieldProps) {
   const t = useT();
   const generated = useId();
   const controlId = id ?? `field-${generated}`;
@@ -43,11 +45,11 @@ export function Field({ label, hint, error, optional = false, id, children, labe
   return (
     <div className={styles.field}>
       {labelAs === "label" ? (
-        <label className={styles.label} htmlFor={controlId}>
+        <label className={hideLabel ? "visually-hidden" : styles.label} htmlFor={controlId}>
           {labelContent}
         </label>
       ) : (
-        <span className={styles.label} id={`${controlId}-label`}>
+        <span className={hideLabel ? "visually-hidden" : styles.label} id={`${controlId}-label`}>
           {labelContent}
         </span>
       )}

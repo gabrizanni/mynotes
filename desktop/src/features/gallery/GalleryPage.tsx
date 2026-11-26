@@ -37,6 +37,7 @@ import {
   type ChipKind,
 } from "../../components";
 import { useT } from "../../i18n";
+import { WorkspaceSpecimens } from "./WorkspaceSpecimens"; // workspace screens
 import styles from "./Gallery.module.css";
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -522,6 +523,11 @@ export function GalleryPage() {
             <AssistantDock context="Statistics · 7" assistantName="Claude Code" company="Anthropic" draft="" onDraftChange={() => undefined} onClose={() => undefined} available={false} />
           </div>
         </div>
+      </Section>
+
+      {/* workspace screens: Menu, FilterChip, AnchoredPopover, search field, selected row */}
+      <Section id="g-workspace" title={t.gallery.sections.workspace}>
+        <WorkspaceSpecimens />
       </Section>
     </div>
   );
