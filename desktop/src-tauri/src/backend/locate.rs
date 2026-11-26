@@ -1,10 +1,13 @@
 //! Finding the Python that runs `mynotes serve --stdio`.
 //!
-//! Lookup order (ARCHITECTURE.md section C, "Finding Python"):
+//! Lookup order (desktop/README.md, "Which backend the app starts"):
 //! 1. `MYNOTES_DESKTOP_PYTHON`, an explicit interpreter path;
 //! 2. `MYNOTES_DESKTOP_REPO`, a source checkout run with `uv run --project <repo>` (development);
-//! 3. the installed runtime: macOS and Linux `<runtime home>/app/current/venv/bin/python`,
-//!    Windows `<install dir>\runtime\python.exe` (Inno Setup layout).
+//! 3. the installed runtime: macOS and Linux `<runtime home>/app/current/venv/bin/python`;
+//!    Windows `runtime\python.exe` next to or above this executable, then the Inno Setup
+//!    install, `%LOCALAPPDATA%\Programs\MyNotes\runtime\python.exe` (`windows/setup/MyNotes.iss`
+//!    fixes that directory with `DisableDirPage=yes`; `windows/desktop/Backend.cs` reads the same
+//!    `runtime\python.exe`).
 //!
 //! An explicit variable that points nowhere is an error, never a silent fallback to another
 //! Python. [`locate_python`] is pure: the environment and the file system are injected, so the
@@ -115,8 +118,13 @@ pub struct LocateInput<'a> {
     pub mynotes_home: Option<PathBuf>,
     /// Directory of the running executable (Windows install layout).
     pub exe_dir: Option<PathBuf>,
+    /// `%LOCALAPPDATA%` (Windows), where Inno Setup installs MyNotes for the current user.
+    pub local_app_data: Option<PathBuf>,
     pub exists: &'a dyn Fn(&Path) -> bool,
 }
+
+/// Inno Setup's install directory below `%LOCALAPPDATA%` (`DefaultDirName` in MyNotes.iss).
+pub const WINDOWS_INSTALL_DIR: &str = "Programs/MyNotes";
 
 /// The runtime home used by `setup_runtime.py` on each platform.
 pub fn runtime_home(platform: Platform, home: &Path, mynotes_home: Option<&Path>) -> PathBuf {
@@ -125,7 +133,7 @@ pub fn runtime_home(platform: Platform, home: &Path, mynotes_home: Option<&Path>
     }
     match platform {
         Platform::MacOs => home.join("Library/Application Support/MyNotes"),
-        // Mirrors workspace.py and the Linux plan in ARCHITECTURE.md section B.
+        // Mirrors workspace.py and platform_paths.py.
         Platform::Linux => home.join(".local/share/mynotes"),
         Platform::Windows => home.join("AppData/Local/MyNotes"),
     }
@@ -156,11 +164,16 @@ pub fn locate_python(input: &LocateInput<'_>) -> Result<PythonCommand, LocateErr
 
 fn installed_candidates(input: &LocateInput<'_>) -> Vec<PathBuf> {
     match input.platform {
-        Platform::Windows => input
-            .exe_dir
-            .iter()
-            .flat_map(|dir| [dir.join("..").join("runtime").join("python.exe"), dir.join("runtime").join("python.exe")])
-            .collect(),
+        Platform::Windows => {
+            let beside = input.exe_dir.iter().flat_map(|dir| {
+                [dir.join("..").join("runtime").join("python.exe"), dir.join("runtime").join("python.exe")]
+            });
+            // This app installs apart from MyNotes for Windows; its runtime is where Inno Setup put it.
+            let local =
+                input.local_app_data.clone().or_else(|| input.home.as_ref().map(|home| home.join("AppData/Local")));
+            let inno = local.map(|local| local.join(WINDOWS_INSTALL_DIR).join("runtime").join("python.exe"));
+            beside.chain(inno).collect()
+        }
         Platform::MacOs | Platform::Linux => input
             .home
             .iter()
@@ -282,6 +295,7 @@ pub fn locate_from_environment(path: Option<&OsStr>) -> Result<PythonCommand, Lo
         home,
         mynotes_home: non_empty_env("MYNOTES_HOME"),
         exe_dir,
+        local_app_data: non_empty_env("LOCALAPPDATA"),
         exists: &exists,
     })
 }
@@ -317,6 +331,7 @@ mod tests {
             home: Some(PathBuf::from("/srv/student")),
             mynotes_home: None,
             exe_dir: None,
+            local_app_data: None,
             exists,
         }
     }
@@ -369,6 +384,32 @@ mod tests {
             locate_python(&lookup),
             Ok(PythonCommand::Interpreter("C:/Program Files/MyNotes/app/runtime/python.exe".into()))
         );
+    }
+
+    #[test]
+    fn windows_finds_the_runtime_inno_setup_installed() {
+        // The Tauri app's own installer puts it elsewhere; the runtime is MyNotes for Windows'.
+        let inno = "D:/Profiles/student/AppData/Local/Programs/MyNotes/runtime/python.exe";
+        let windows = files(&[inno]);
+        let mut lookup = input(Platform::Windows, &windows);
+        lookup.exe_dir = Some(PathBuf::from("D:/Profiles/student/AppData/Local/MyNotes Desktop"));
+        lookup.local_app_data = Some(PathBuf::from("D:/Profiles/student/AppData/Local"));
+        assert_eq!(locate_python(&lookup), Ok(PythonCommand::Interpreter(inno.into())));
+
+        // Without LOCALAPPDATA, the profile's AppData/Local is the same folder.
+        let fallback = files(&["/srv/student/AppData/Local/Programs/MyNotes/runtime/python.exe"]);
+        assert!(matches!(locate_python(&input(Platform::Windows, &fallback)), Ok(PythonCommand::Interpreter(_))));
+
+        // A runtime beside the executable still wins (portable and development layouts).
+        let both = files(&[inno, "D:/Portable/MyNotes/desktop/../runtime/python.exe"]);
+        let mut lookup = input(Platform::Windows, &both);
+        lookup.exe_dir = Some(PathBuf::from("D:/Portable/MyNotes/desktop"));
+        lookup.local_app_data = Some(PathBuf::from("D:/Profiles/student/AppData/Local"));
+        assert_eq!(
+            locate_python(&lookup),
+            Ok(PythonCommand::Interpreter("D:/Portable/MyNotes/desktop/../runtime/python.exe".into()))
+        );
+        assert_eq!(locate_python(&input(Platform::Windows, &files(&[]))), Err(LocateError::NotInstalled));
     }
 
     #[test]
