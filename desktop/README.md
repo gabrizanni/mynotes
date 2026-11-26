@@ -40,7 +40,8 @@ Useful URL parameters in the browser: `?lang=it`, `?theme=dark`, `?scenario=reco
 ```
 desktop/
   src/
-    design/        tokens.css (light + dark), fonts.css, base.css, theme.ts, cx.ts
+    design/        tokens.css (light + dark), fonts.css, base.css, theme.ts, cx.ts,
+                   contrast.ts + contrastPairs.ts (WCAG check, see contrast.test.ts)
     components/    one folder per component: Name.tsx + Name.module.css + index.ts
     rpc/           schema.ts (zod, per method), client.ts, transports/{tauri,mock}.ts
     state/         store.ts, slices/<topic>.ts, routes.ts, hooks.tsx, sync.ts
@@ -94,10 +95,15 @@ Rust first (`paths.rs`).
 
 - Components and tokens only: no raw colors, sizes or shadows outside `src/design/tokens.css`.
   Use `--space-*`, `--radius-*`, `--text-*`, `--shadow-e*`, `--duration-*`.
-- EB Garamond only at 24 px and up (page titles, hero); Figtree for all UI text; JetBrains Mono
-  for timestamps and diagnostics.
-- One primary button per screen (`variant="primary"`, or `onInverse` on the deep-blue hero).
-  Buttons have radius 12; pills are for chips and the recording capsule only.
+- Palette, roles and measured contrast: [`docs/DESIGN-TOKENS.md`](docs/DESIGN-TOKENS.md). A new
+  color on a new surface gets a pair in `src/design/contrastPairs.ts`; `npm test` fails below
+  WCAG AA.
+- EB Garamond only at 24 px and up (page titles, hero), in ink; Figtree for all UI text. Times
+  use Figtree tabular figures (`--text-time`, `.type-time`); JetBrains Mono is for diagnostics
+  only.
+- One lavender primary button per screen (`variant="primary"`). Buttons have radius 12; pills
+  are for chips and the recording capsule only. No dark blocks: `Card variant="inverse"` is the
+  light feature surface. Links use `--color-link`; "on" controls use `--color-control-strong`.
 - Coral (`--color-accent-coral`) is ornament only: never text, never the only state cue.
 - Status reaches the UI through `StatusChip` (icon + label) and its map in
   `components/StatusChip/statusMap.ts`; backend codes never appear in the UI.

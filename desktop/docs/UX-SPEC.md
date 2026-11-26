@@ -2,7 +2,7 @@
 
 **Core decisions:**
 - The UI is one calm window, plus a floating recorder capsule and a tray icon.
-- Pages use a Paper canvas with deep-blue ink. Primary buttons are filled deep blue with Paper text (10.75:1). Coral appears only as the bookmark ornament.
+- Pages use a pale cream Paper canvas with warm ink, close to Wispr Flow. Each screen has one lavender primary button with an ink label (13.15:1). Coral appears only as the bookmark ornament; the MyNotes blue is kept for links and the logo tile.
 - Onboarding asks its questions while about 1 GB downloads. The first value, a sample of your note style rendered in Word, arrives in about 3.5 minutes.
 - Every backend status gets one human label and one fix.
 
@@ -59,7 +59,7 @@
 - Closing the window leaves the app in the tray. Quitting during a job asks: "A notes job is running. Quit anyway? Progress is saved."
 
 **Today**
-- **Hero:** a deep-blue panel showing the next lesson, its time, course and recorder chip, plus **one** primary action chosen in this order: live recording (Stop), blocking error (Fix), `AWAITING_APPROVAL` (Review), a transcribed lesson without notes (Generate notes), otherwise Record now.
+- **Hero:** a light feature panel (deeper cream, hairline, coral bookmark) showing the next lesson, its time, course and recorder chip, plus **one** primary action chosen in this order: live recording (Stop), blocking error (Fix), `AWAITING_APPROVAL` (Review), a transcribed lesson without notes (Generate notes), otherwise Record now.
 - **Below the hero:** "Needs you" (up to 5 rows, "See all" goes to Activity), a timeline of today's lessons, and the Finish-setup card.
 - **Empty state:** "No lessons today. [Import a recording]".
 
@@ -165,47 +165,54 @@
 
 ## 4. Design system
 
+Full palette, measured contrast and token notes: [`DESIGN-TOKENS.md`](DESIGN-TOKENS.md). A unit test (`src/design/contrast.test.ts`) fails any pair below WCAG 2.2 AA.
+
+**Direction:** light and paper-like, close to Wispr Flow. Pale cream canvas, deeper cream for the sidebar and sunken areas, near-white cards, warm ink, one lavender primary action per screen. Flat surfaces with hairlines; warm shadows only for overlays. The coral bookmark is the one brand ornament; the MyNotes blue #163B66 is kept for links and the logo tile, never as a large surface.
+
 **Color (light)**
 
 | Token | Hex | Contrast |
 |---|---|---|
-| bg.canvas | #FFF8ED (Paper) | n/a |
-| bg.sunken (sidebar) | #F6ECDC | n/a |
-| bg.card / input | #FFFDF8 | n/a |
-| bg.emphasis (deep cream) | #EFE3CF | n/a |
-| bg.inverse (hero, dark panel) | #163B66 | n/a |
-| text.primary | #13233A | 14.97 on canvas |
-| text.brand (serif headings) | #163B66 | 10.75 |
-| text.muted | #5B6472 | 5.67 canvas / 4.72 emphasis |
-| text.onInverse / link.onInverse | #FFF8ED / #8CC8FF | 10.75 / 6.38 |
-| action.primary (fill / label / hover / pressed) | #163B66 / #FFF8ED / #1E4A7E / #102D4F | 10.75 / 8.52 |
-| action.soft (selected nav, user bubble) | #DDE8F6 with #163B66 text | 9.15 |
-| focus (2 px ring, 2 px offset) | #2B67C6 | 5.16 |
-| border.hairline / strong | rgba(19,35,58,.12) / .24 | n/a |
-| border.input | #9C8E78 | 3.04 (meets 1.4.11) |
-| success (text / bg) | #1D6B40 on #E2F2E7 | 5.6 |
-| warning (text / bg) | #8A4B00 on #FBEBCF | 5.79 |
-| danger and recording | #B42318 on #FBE4E0 | 5.41 |
-| accent.coral | #F47B62 | 2.53, ornament only: never text, never the only state cue |
+| bg.canvas | #FCFBF5 (Paper) | n/a |
+| bg.sunken (sidebar) | #F4F2E7 | n/a |
+| bg.card / input | #FFFFFC | n/a |
+| bg.emphasis (deep cream) | #EDEADC | n/a |
+| bg.inverse (feature surface: hero) | #F3F0E2 with a hairline | n/a |
+| text.primary / text.brand (headings) | #1B1A17 | 16.79 on canvas |
+| text.muted | #67645C | 5.70 canvas / 4.90 emphasis |
+| link | #163B66 | 10.94 |
+| action.primary (fill / label / hover / pressed / line) | #F0D7FF / #1B1A17 / #E8C6FF / #DFB6FB / #D6B2EF | 13.15 / 11.56 / 10.13 |
+| action.soft (soft buttons, selected nav, tags) | #EDEADC with #1B1A17 text | 14.42 |
+| control.strong (toggle on, progress, current step) | #1B1A17 | 16.79 |
+| focus (2 px ring, 2 px offset) | #2D62FF | 4.71 canvas / 4.04 emphasis / 3.69 lavender |
+| border.hairline / strong | ink at 10% / 20% | n/a |
+| border.input | #8B877B | 3.20–3.58 (meets 1.4.11) |
+| success (text / bg) | #1C6A3B on #E2F1E2 | 5.64 |
+| warning (text / bg) | #7C4805 on #F8EBCC | 6.37 |
+| danger and recording | #AD2A1E on #F9E6E0 | 5.57 |
+| info | #234F87 on #E5ECF5 | 6.95 |
+| accent.coral | #F47B62 | 2.58, ornament only: never text, never the only state cue |
 
-**Color (dark):** canvas #0E1726, sunken #0A121D, card #16233A, emphasis #1D2D47, inverse #24406A. Text #F3EBDD (15.17), muted #A7B1C0 (8.29). Primary #8CC8FF with label #0B1A2C (9.86), hover #A9D6FF. Focus #8CC8FF. Input border #5B6E8C (3.47). Success #6CD39A, warning #F2B84B, danger #FF8F80, tints at 14% alpha. The capsule stays dark in both themes (#13233A on #FFF8ED, 14.97).
+**Color (dark):** a warm counterpart, not an inversion. Canvas #171614, sunken #12110F, card and feature #201F1C, emphasis #2A2825. Text #F2EFE6 (15.73), muted #ACA79B (7.54). Primary lavender #E2C8FA with label #1B1A17 (11.50), hover #EAD6FC. Soft #2C2A26. Focus #7C9DFF (5.69 or more on every surface). Input border #7B776D (3.69 or more). Success #7FD6A0, warning #F2BC5A, danger #FF8F80, info #A9C4F5, tints at 14% alpha. The capsule stays dark in both themes (#1B1A17 in light, #2A2825 in dark, cream text).
+
+**Today hero:** the feature surface, not a dark block: deeper cream with a hairline, generous padding, an EB Garamond title in ink, the coral bookmark, one lavender primary action. While recording, only the live dot and its label use the warm red.
 
 **Type:** fonts are bundled locally (OFL), with no CDN.
 - **EB Garamond, only at 24 px and up:** Display 40/48 · 500; H1 32/40 · 500; H2 24/32 · 500.
 - **Figtree:** Title 20/28 · 600; Heading 16/24 · 600; Body 15/22 · 400; Small 13/20 · 400; Label 13/16 · 600; Caption 12/16 · 500 (12 px is the floor).
-- **JetBrains Mono 13/20:** timestamps and diagnostics.
+- **Times and durations:** Figtree 13/20 · 500 with tabular figures (`--text-time`).
+- **JetBrains Mono 13/20:** diagnostics only (raw commands, logs, Copy details).
 - Buttons hug their text, because Italian strings run about 30% longer.
 
 **Spacing:** 4 px base: 4, 8, 12, 16, 20, 24, 32, 40, 48, 64. Reading column max width 760 px.
 
 **Radii:** inputs 8, buttons 12, cards 16, dialogs 20, chips and capsule pill.
 
-**Elevation:**
-- e0: hairline only.
-- e1 (cards): 0 1px 2px rgba(60,40,10,.06).
-- e2 (menus): 0 8px 24px rgba(60,40,10,.12).
-- e3 (dialogs, capsule): 0 16px 48px rgba(22,59,102,.18).
-- Dark theme: black at 40% plus a 1 px top highlight at rgba(255,255,255,.06).
+**Elevation:** surfaces are flat; depth comes from cream-on-cream layering and hairlines.
+- e0 and e1 (cards): hairline only.
+- e2 (menus, popovers): 0 12px 24px -8px rgba(26,26,15,.10) plus 0 4px 8px -2px rgba(26,26,15,.05).
+- e3 (dialogs, capsule): 0 24px 48px -12px rgba(26,26,15,.16) plus 0 8px 16px -4px rgba(26,26,15,.06).
+- Dark theme: black at 50–60% plus a 1 px top highlight at rgba(255,255,255,.05).
 
 **Motion:** 150 ms (hover, press), 240 ms (panels, dialogs), 320 ms (capsule expand, step change), easing cubic-bezier(0.4,0,0.2,1). Reduced motion switches to opacity-only at 150 ms and stops any pulsing.
 
