@@ -167,8 +167,10 @@ sends `<topic>.changed` only when a snapshot's hash changes.
 Snapshot: `{topic, hash, data}`, or `{topic, hash, data: null, error}` when
 the computation fails (for example before the workspace is initialized).
 
-Every second while the window is visible (every 5 s after
-`session.setVisible {visible: false}`) the server compares the modification
+Every second while the window is visible (every 2 s once nothing has changed
+for 30 s and no queue job runs, no capture request is awaited and no request
+arrived; every 5 s after `session.setVisible {visible: false}`), the server
+compares the modification
 time, size and inode of each topic's files and folders. MyNotes writes JSON
 atomically (a temporary file, then a rename), so a folder's own signature
 changes on every write inside it. The queue database is compared by SQLite's
@@ -186,16 +188,17 @@ topic at a time and the others reuse its result.
 Queue jobs start only while a window lease is fresh. `session.open` renews
 that lease every 5 s with a new session UUID (the 15 s lease the native apps
 renew with `transcription-queue heartbeat`). A queue runner is started only
-when the queue has queued, running or cancelling jobs and no runner holds
-`runner.lock`, so an idle open window starts no process. `session.close`
+when the queue has queued, running or cancelling jobs (or a recorded memory
+hold to re-check) and no runner holds `runner.lock`, so an idle open window
+starts no process. `session.close`
 marks the window closed, which stops new queue jobs; send it when the window
 closes to the tray, unless the user chose background transcription
 (`release: false` only stops renewing). If the server dies, the lease lapses
 within 15 s.
 
-`transcription_queue.runner_active()` also stops `launch_runner` from
-starting a runner that would exit at once, which the heartbeat of the macOS
-and Windows apps did every time.
+This rule lives in `transcription_queue.launch_runner()` itself
+(`runner_active()` and `runner_needed()`), so the heartbeat of the macOS and
+Windows apps no longer starts a runner that would exit at once.
 
 ## Methods
 | Method | Lane | Params | Result | Notifications | Errors |
