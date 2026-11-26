@@ -2,6 +2,7 @@ export const gallery = {
   title: "Component gallery",
   intro: "Every component and state, in the current language and theme.",
   sections: {
+    color: "Color",
     type: "Type",
     buttons: "Buttons",
     inputs: "Inputs",

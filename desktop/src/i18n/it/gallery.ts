@@ -4,6 +4,7 @@ export const gallery: Messages["gallery"] = {
   title: "Galleria dei componenti",
   intro: "Ogni componente e stato, nella lingua e nel tema correnti.",
   sections: {
+    color: "Colore",
     type: "Tipografia",
     buttons: "Pulsanti",
     inputs: "Campi",

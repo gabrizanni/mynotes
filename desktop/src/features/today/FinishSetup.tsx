@@ -14,7 +14,7 @@ export function FinishSetup({ items }: { items: readonly SetupItem[] }) {
   const pending = items.filter((item) => !item.done);
   if (pending.length === 0) return null;
   return (
-    <Card variant="emphasis" title={t.today.finishSetup.title} description={t.today.finishSetup.progress(items.length - pending.length, items.length)}>
+    <Card title={t.today.finishSetup.title} description={t.today.finishSetup.progress(items.length - pending.length, items.length)}>
       <List className={styles.setupList}>
         {pending.map((item) => (
           <li key={item.id}>

@@ -57,6 +57,34 @@ function Specimen({ label, children, wide = false }: { label: string; children: 
   );
 }
 
+/** Palette swatches, grouped by role; the hex values and contrast live in docs/DESIGN-TOKENS.md. */
+const SWATCHES: ReadonlyArray<readonly [group: string, tokens: readonly string[]]> = [
+  ["surfaces", ["bg-canvas", "bg-sunken", "bg-card", "bg-emphasis", "bg-inverse"]],
+  ["ink", ["text-primary", "text-muted", "link", "border-input"]],
+  ["actions", ["action-primary", "action-soft", "control-strong", "focus"]],
+  ["meaning", ["success", "warning", "danger", "info", "accent-coral"]],
+];
+
+function Swatches() {
+  return (
+    <div className={styles.swatchGroups}>
+      {SWATCHES.map(([group, tokens]) => (
+        <div key={group} className={styles.chipRow}>
+          <span className={styles.chipKind}>{group}</span>
+          <ul role="list" className={styles.swatches}>
+            {tokens.map((token) => (
+              <li key={token} className={styles.swatch}>
+                <span className={styles.swatchTile} style={{ background: `var(--color-${token})` }} aria-hidden="true" />
+                <span className={styles.caption}>{token}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Fixed reference time so the gallery renders identically in every screenshot. */
 const REFERENCE = new Date("2026-11-26T09:47:00Z");
 const minutesAgo = (minutes: number) => new Date(REFERENCE.getTime() - minutes * 60_000).toISOString();
@@ -107,6 +135,10 @@ export function GalleryPage() {
     <div className={styles.page}>
       <PageHeader title={t.gallery.title} subtitle={t.gallery.intro} />
 
+      <Section id="g-color" title={t.gallery.sections.color}>
+        <Swatches />
+      </Section>
+
       <Section id="g-type" title={t.gallery.sections.type}>
         <div className={styles.typeStack}>
           <p className="type-display">Corporate Finance</p>
@@ -118,7 +150,8 @@ export function GalleryPage() {
           <p className="type-small text-muted">{s.cardBody}</p>
           <p className="type-label">{s.courseName}</p>
           <p className="type-caption text-muted">{t.status.notes.toReview}</p>
-          <p className="type-mono">09:00–10:30 · 01:04:20</p>
+          <p className="type-time">09:00–10:30 · 01:04:20</p>
+          <p className="type-mono text-muted">capture status --json</p>
         </div>
       </Section>
 
@@ -153,7 +186,7 @@ export function GalleryPage() {
               <IconButton label={s.icon} icon={MoreHorizontal} variant="outline" size="sm" />
             </div>
           </Specimen>
-          <Specimen label="onInverse · ghostOnInverse" wide>
+          <Specimen label="inverse card (feature surface) · onInverse · ghostOnInverse" wide>
             <Card variant="inverse" padding="md">
               <div className={styles.row}>
                 <Button variant="onInverse" icon={Mic}>

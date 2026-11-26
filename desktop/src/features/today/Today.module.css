@@ -6,6 +6,7 @@
 
 /* ---------- Hero ---------- */
 
+/* A light paper panel with a hairline: calm, no dark block. One lavender action in the footer. */
 .hero {
   position: relative;
   display: grid;
@@ -13,6 +14,7 @@
   padding: var(--space-8) var(--space-10) var(--space-6) var(--space-8);
   border-radius: var(--radius-card);
   background: var(--color-bg-inverse);
+  box-shadow: 0 0 0 1px var(--color-on-inverse-line);
   color: var(--color-text-on-inverse);
   overflow: hidden;
 }
@@ -50,7 +52,7 @@
 
 .heroTitle {
   font: var(--text-display);
-  letter-spacing: -0.015em;
+  letter-spacing: var(--tracking-display);
   color: var(--color-text-on-inverse);
   text-wrap: balance;
 }
@@ -75,9 +77,9 @@
 }
 
 .timerValue {
-  font: 600 40px/48px var(--font-sans);
+  font: 500 40px/48px var(--font-sans);
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   color: var(--color-text-on-inverse);
 }
 
@@ -108,11 +110,11 @@
 .heroNextIcon {
   flex: none;
   margin-top: 2px;
-  color: var(--color-link-on-inverse);
+  color: var(--color-text-on-inverse-muted);
 }
 
 .heroNextProblem {
-  color: var(--color-capsule-rec);
+  color: var(--color-danger);
 }
 
 /* ---------- Layout below the hero ---------- */
@@ -173,7 +175,7 @@
   padding: 0 var(--space-2);
   margin-right: calc(var(--space-2) * -1);
   border-radius: var(--radius-input);
-  color: var(--color-text-brand);
+  color: var(--color-link);
   font: var(--text-button-sm);
   text-decoration: none;
   transition: background-color var(--duration-fast) var(--ease-standard);
@@ -218,13 +220,13 @@
 
 .slotTime {
   display: grid;
-  font: var(--text-mono);
+  font: var(--text-time);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-primary);
 }
 
 .slotEnd {
-  font: 400 12px/16px var(--font-mono);
+  font: var(--text-time-sm);
   color: var(--color-text-muted);
 }
 
@@ -268,9 +270,10 @@
   box-shadow: none;
 }
 
+/* Ink node with a lavender halo: the next lesson echoes the primary action. */
 .next .node {
-  background: var(--color-action-primary);
-  box-shadow: 0 0 0 4px var(--color-action-soft);
+  background: var(--color-text-primary);
+  box-shadow: 0 0 0 4px var(--color-action-primary);
 }
 
 .live .node {
@@ -307,9 +310,10 @@
 }
 
 .nowTime {
-  font: var(--text-mono);
+  font: var(--text-time);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  color: var(--color-text-brand);
+  color: var(--color-text-primary);
 }
 
 .nowDot {
@@ -319,14 +323,14 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--color-text-brand);
+  background: var(--color-text-primary);
 }
 
 .nowLine {
   grid-column: 3 / 5;
   height: 1px;
-  background: var(--color-text-brand);
-  opacity: 0.45;
+  background: var(--color-text-primary);
+  opacity: 0.35;
 }
 
 .emptyCard {

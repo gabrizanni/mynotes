@@ -46,7 +46,7 @@ export interface TodayHeroProps {
   onAction: (action: HeroAction) => void;
 }
 
-/** Deep-blue panel: the next (or live) lesson plus the screen's one primary action. */
+/** Light paper panel with the coral bookmark: the next (or live) lesson and the screen's one primary action. */
 export function TodayHero({ hero, now, busy, onAction }: TodayHeroProps) {
   const { t, format } = useI18n();
   const titleId = useId();
@@ -74,7 +74,7 @@ export function TodayHero({ hero, now, busy, onAction }: TodayHeroProps) {
         {/* Live: the pulsing chip says it all; a text label would repeat it. */}
         {hero.mode !== "live" && <p className={styles.heroLabel}>{label}</p>}
         {hero.mode === "live" && <span className="visually-hidden">{label}</span>}
-        {hero.mode !== "none" && <StatusChip kind={hero.recorderChip.kind} status={hero.recorderChip.status} onInverse />}
+        {hero.mode !== "none" && <StatusChip kind={hero.recorderChip.kind} status={hero.recorderChip.status} />}
       </div>
       <div className={styles.heroMain}>
         <div>
@@ -112,7 +112,7 @@ export function TodayHero({ hero, now, busy, onAction }: TodayHeroProps) {
           <Icon icon={copy.note} size={20} className={cx(styles.heroNextIcon, copy.problem && styles.heroNextProblem)} />
           <span>{copy.body}</span>
         </p>
-        <Button variant="onInverse" icon={copy.icon} loading={busy} onClick={() => onAction(hero.action)}>
+        <Button variant="primary" icon={copy.icon} loading={busy} onClick={() => onAction(hero.action)}>
           {copy.label}
         </Button>
       </div>
