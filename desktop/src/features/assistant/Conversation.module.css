@@ -1,0 +1,168 @@
+.conversation {
+  display: grid;
+  gap: var(--space-6);
+  align-content: start;
+}
+
+.turn {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.user {
+  justify-self: end;
+  max-width: 88%;
+  padding: 10px var(--space-3);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-emphasis);
+  color: var(--color-text-primary);
+}
+
+.reply {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.text {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  font: var(--text-body);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.paragraph {
+  white-space: pre-wrap;
+}
+
+.heading {
+  font: var(--text-body-strong);
+}
+
+.list {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.inlineCode {
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-inner);
+  background: var(--color-bg-sunken);
+  font: var(--text-mono);
+}
+
+.code,
+.command {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-sunken);
+  font: var(--text-mono);
+  color: var(--color-text-primary);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.tools {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.toolButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: 6px var(--space-3);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  font: var(--text-small);
+  text-align: left;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.toolButton:enabled:hover {
+  background: var(--color-bg-hover);
+}
+
+.toolButton:disabled {
+  cursor: default;
+}
+
+.toolIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.completed .toolIcon {
+  color: var(--color-success);
+}
+
+.failed .toolIcon,
+.denied .toolIcon {
+  color: var(--color-danger);
+}
+
+.toolTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolStatus {
+  flex: none;
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.chevron {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.working {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.note {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin {
+    animation: none;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

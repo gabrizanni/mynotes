@@ -1,0 +1,243 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "recordings": [
+      {
+        "association_alternatives": [],
+        "association_conflict": null,
+        "association_filename": "DEMO-L01.wav",
+        "association_reason": null,
+        "association_source": "unassigned",
+        "association_state": "unresolved",
+        "capture_reason": "",
+        "capture_status": null,
+        "collection": "inbox",
+        "course_code": null,
+        "created_at": "2026-11-26T10:55:22.104000+00:00",
+        "duration": null,
+        "event_id": null,
+        "file_identity": [
+          57,
+          246827
+        ],
+        "id": "5dd5e40b92d45960367df1cd4342eca1",
+        "language": null,
+        "lecture_id": null,
+        "legacy_lesson_key": "audio:5dd5e40b92d45960367df1cd4342eca1",
+        "lesson_key": "lesson-79b98312acd15389914441933a53adc2",
+        "origin": "File esterno",
+        "original_name": "DEMO-L01.wav",
+        "original_path": "/tmp/mynotes-contract/recordings/DEMO-L01.wav",
+        "partial": false,
+        "path": "/tmp/mynotes-contract/recordings/DEMO-L01.wav",
+        "recorded_at": null,
+        "source_count": 1,
+        "source_excluded": false,
+        "source_id": null,
+        "source_selected": true,
+        "source_selection_required": false,
+        "storage_recording_id": "5dd5e40b92d45960367df1cd4342eca1",
+        "timezone": "UTC",
+        "title": "DEMO-L01",
+        "unknown_course": false,
+        "audio_available": true,
+        "stable": true,
+        "warnings": [
+          {
+            "code": "COURSE_UNASSIGNED",
+            "message": "Corso da associare; puoi già trascrivere."
+          }
+        ],
+        "blocking_reasons": [],
+        "transcription_status": "NOT_STARTED",
+        "status": "NOT_STARTED",
+        "job_id": null,
+        "can_transcribe": true,
+        "actions": [
+          "enqueue",
+          "associate"
+        ],
+        "review_summary": null,
+        "queue_position": null,
+        "wait_reason": null
+      },
+      {
+        "association_alternatives": [],
+        "association_conflict": null,
+        "association_filename": "DEMO-L02.wav",
+        "association_reason": null,
+        "association_source": "unassigned",
+        "association_state": "unresolved",
+        "capture_reason": "",
+        "capture_status": null,
+        "collection": "inbox",
+        "course_code": null,
+        "created_at": "2026-11-26T10:55:22.104000+00:00",
+        "duration": null,
+        "event_id": null,
+        "file_identity": [
+          57,
+          246828
+        ],
+        "id": "0d7ff64bef895ac9a8dce223b3a6d7d8",
+        "language": null,
+        "lecture_id": null,
+        "legacy_lesson_key": "audio:0d7ff64bef895ac9a8dce223b3a6d7d8",
+        "lesson_key": "lesson-4f24cd0212c95dd8b3137103414de87e",
+        "origin": "File esterno",
+        "original_name": "DEMO-L02.wav",
+        "original_path": "/tmp/mynotes-contract/recordings/DEMO-L02.wav",
+        "partial": false,
+        "path": "/tmp/mynotes-contract/recordings/DEMO-L02.wav",
+        "recorded_at": null,
+        "source_count": 1,
+        "source_excluded": false,
+        "source_id": null,
+        "source_selected": true,
+        "source_selection_required": false,
+        "storage_recording_id": "0d7ff64bef895ac9a8dce223b3a6d7d8",
+        "timezone": "UTC",
+        "title": "DEMO-L02",
+        "unknown_course": false,
+        "audio_available": true,
+        "stable": true,
+        "warnings": [
+          {
+            "code": "COURSE_UNASSIGNED",
+            "message": "Corso da associare; puoi già trascrivere."
+          }
+        ],
+        "blocking_reasons": [],
+        "transcription_status": "NOT_STARTED",
+        "status": "NOT_STARTED",
+        "job_id": null,
+        "can_transcribe": true,
+        "actions": [
+          "enqueue",
+          "associate"
+        ],
+        "review_summary": null,
+        "queue_position": null,
+        "wait_reason": null
+      }
+    ],
+    "folder": "/tmp/mynotes-contract/recordings",
+    "lessons": [
+      {
+        "id": "lesson-0947d42c92105817836f84556585f370",
+        "aliases": [
+          "event:static:SYNTHETICSYS-L01",
+          "lesson:SYNTHETICSYS-L01"
+        ],
+        "course": "SYNTHETICSYS",
+        "number": 1,
+        "title": "Lesson 1",
+        "date": "2030-03-01T09:00:00Z",
+        "recording_ids": [],
+        "transcript_ids": [],
+        "event_ids": [
+          "static:SYNTHETICSYS-L01"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "lesson-9aba6d71fb4c54a78d5cfcbda910a300",
+        "aliases": [
+          "event:static:SYNTHETICSYS-L02",
+          "lesson:SYNTHETICSYS-L02"
+        ],
+        "course": "SYNTHETICSYS",
+        "number": 2,
+        "title": "Lesson 2",
+        "date": "2030-03-02T09:00:00Z",
+        "recording_ids": [],
+        "transcript_ids": [],
+        "event_ids": [
+          "static:SYNTHETICSYS-L02"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "lesson-38b1585eb6a357df927f41df77435473",
+        "aliases": [
+          "event:static:SYNTHETICSYS-L03",
+          "lesson:SYNTHETICSYS-L03"
+        ],
+        "course": "SYNTHETICSYS",
+        "number": 3,
+        "title": "Lesson 3",
+        "date": "2030-03-03T09:00:00Z",
+        "recording_ids": [],
+        "transcript_ids": [],
+        "event_ids": [
+          "static:SYNTHETICSYS-L03"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "lesson-58829598ea955f06ac03bef0df3871df",
+        "aliases": [
+          "event:special:2ec1d4be5b5f489d9cde629c8f22da20",
+          "lesson:SYNTHETICSYS-L09"
+        ],
+        "course": "SYNTHETICSYS",
+        "number": 9,
+        "title": "Extra lesson",
+        "date": "2030-03-09T09:00:00Z",
+        "recording_ids": [],
+        "transcript_ids": [],
+        "event_ids": [
+          "special:2ec1d4be5b5f489d9cde629c8f22da20"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "lesson-79b98312acd15389914441933a53adc2",
+        "aliases": [
+          "audio:5dd5e40b92d45960367df1cd4342eca1"
+        ],
+        "course": null,
+        "number": null,
+        "title": "DEMO-L01",
+        "date": "2026-11-26T10:55:22.104000+00:00",
+        "recording_ids": [
+          "5dd5e40b92d45960367df1cd4342eca1"
+        ],
+        "transcript_ids": [],
+        "event_ids": [],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "lesson-4f24cd0212c95dd8b3137103414de87e",
+        "aliases": [
+          "audio:0d7ff64bef895ac9a8dce223b3a6d7d8"
+        ],
+        "course": null,
+        "number": null,
+        "title": "DEMO-L02",
+        "date": "2026-11-26T10:55:22.104000+00:00",
+        "recording_ids": [
+          "0d7ff64bef895ac9a8dce223b3a6d7d8"
+        ],
+        "transcript_ids": [],
+        "event_ids": [],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      }
+    ],
+    "folder_configured": true,
+    "transcripts": []
+  }
+}

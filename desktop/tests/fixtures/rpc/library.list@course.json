@@ -1,0 +1,501 @@
+{
+  "data": {
+    "lessons": [
+      {
+        "id": "STAT-L05",
+        "course": "STAT",
+        "number": 5,
+        "title": "Statistics",
+        "date": "2026-11-19",
+        "recording_ids": [
+          "rstat05aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat05"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L05"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L04",
+        "course": "STAT",
+        "number": 4,
+        "title": "Statistics",
+        "date": "2026-11-17",
+        "recording_ids": [
+          "rstat04aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat04"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L04"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L03",
+        "course": "STAT",
+        "number": 3,
+        "title": "Statistics",
+        "date": "2026-11-12",
+        "recording_ids": [
+          "rstat03aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat03"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L03"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L02",
+        "course": "STAT",
+        "number": 2,
+        "title": "Statistics",
+        "date": "2026-11-10",
+        "recording_ids": [
+          "rstat02aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat02"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L02"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L01",
+        "course": "STAT",
+        "number": 1,
+        "title": "Statistics",
+        "date": "2026-11-05",
+        "recording_ids": [
+          "rstat01aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat01"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L01"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L06",
+        "course": "STAT",
+        "number": 6,
+        "title": "Statistics",
+        "date": "2026-11-24",
+        "recording_ids": [
+          "rstat06aa71c2"
+        ],
+        "transcript_ids": [
+          "tstat06"
+        ],
+        "event_ids": [
+          "uni-timetable:STAT-L06"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "DIRCOM-L02",
+        "course": "DIRCOM",
+        "number": 2,
+        "title": "Diritto commerciale",
+        "date": "2026-11-24",
+        "recording_ids": [
+          "rdircom02aa71c2"
+        ],
+        "transcript_ids": [],
+        "event_ids": [
+          "uni-timetable:DIRCOM-L02"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "MICRO-L04",
+        "course": "MICRO",
+        "number": 4,
+        "title": "Microeconomics",
+        "date": "2026-11-25",
+        "recording_ids": [
+          "rmicro04aa71c2"
+        ],
+        "transcript_ids": [
+          "tmicro04"
+        ],
+        "event_ids": [
+          "uni-timetable:MICRO-L04"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "CORPFIN-L03",
+        "course": "CORPFIN",
+        "number": 3,
+        "title": "Corporate Finance",
+        "date": "2026-11-25",
+        "recording_ids": [
+          "rcorpfin03aa71c2"
+        ],
+        "transcript_ids": [
+          "tcorpfin03"
+        ],
+        "event_ids": [
+          "uni-timetable:CORPFIN-L03"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "STAT-L07",
+        "course": "STAT",
+        "number": 7,
+        "title": "Statistics",
+        "date": "2026-11-26",
+        "recording_ids": [
+          "rstat07aa71c2"
+        ],
+        "transcript_ids": [],
+        "event_ids": [
+          "uni-timetable:STAT-L07"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "MICRO-L03",
+        "course": "MICRO",
+        "number": 3,
+        "title": "Microeconomics",
+        "date": "2026-11-18",
+        "recording_ids": [],
+        "transcript_ids": [],
+        "event_ids": [
+          "uni-timetable:MICRO-L03"
+        ],
+        "not_recorded": true,
+        "hidden": false,
+        "revision_required": false
+      },
+      {
+        "id": "CORPFIN-L02",
+        "course": "CORPFIN",
+        "number": 2,
+        "title": "Corporate Finance",
+        "date": "2026-11-18",
+        "recording_ids": [
+          "rcorpfin02aa71c2",
+          "rcorpfin02bb93d4"
+        ],
+        "transcript_ids": [],
+        "event_ids": [
+          "uni-timetable:CORPFIN-L02"
+        ],
+        "not_recorded": false,
+        "hidden": false,
+        "revision_required": false
+      }
+    ],
+    "recordings": [
+      {
+        "id": "rstat05aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L05.m4a",
+        "title": "Statistics · 5",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L05",
+        "duration": 5587.5,
+        "created_at": "2026-11-19T07:58:20Z",
+        "recorded_at": "2026-11-19T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat04aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L04.m4a",
+        "title": "Statistics · 4",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L04",
+        "duration": 5550.0,
+        "created_at": "2026-11-17T07:58:20Z",
+        "recorded_at": "2026-11-17T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat03aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L03.m4a",
+        "title": "Statistics · 3",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L03",
+        "duration": 5512.5,
+        "created_at": "2026-11-12T07:58:20Z",
+        "recorded_at": "2026-11-12T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat02aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L02.m4a",
+        "title": "Statistics · 2",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L02",
+        "duration": 5475.0,
+        "created_at": "2026-11-10T07:58:20Z",
+        "recorded_at": "2026-11-10T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat01aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L01.m4a",
+        "title": "Statistics · 1",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L01",
+        "duration": 5437.5,
+        "created_at": "2026-11-05T07:58:20Z",
+        "recorded_at": "2026-11-05T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat06aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L06.m4a",
+        "title": "Statistics · 6",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L06",
+        "duration": 5530.0,
+        "created_at": "2026-11-24T07:58:20Z",
+        "recorded_at": "2026-11-24T07:58:20Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rdircom02aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/DIRCOM-L02.m4a",
+        "title": "Diritto commerciale · 2",
+        "status": "READY",
+        "course_code": "DIRCOM",
+        "lecture_id": "DIRCOM-L02",
+        "duration": 5498.2,
+        "created_at": "2026-11-24T12:58:05Z",
+        "recorded_at": "2026-11-24T12:58:05Z",
+        "transcription_status": "NEEDS_REVIEW",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rmicro04aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/MICRO-L04.m4a",
+        "title": "Microeconomics · 4",
+        "status": "READY",
+        "course_code": "MICRO",
+        "lecture_id": "MICRO-L04",
+        "duration": 5562.4,
+        "created_at": "2026-11-25T09:58:11Z",
+        "recorded_at": "2026-11-25T09:58:11Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rcorpfin03aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/CORPFIN-L03.m4a",
+        "title": "Corporate Finance · 3",
+        "status": "READY",
+        "course_code": "CORPFIN",
+        "lecture_id": "CORPFIN-L03",
+        "duration": 5601.9,
+        "created_at": "2026-11-25T13:28:02Z",
+        "recorded_at": "2026-11-25T13:28:02Z",
+        "transcription_status": "COMPLETED",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rstat07aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/STAT-L07.m4a",
+        "title": "Statistics · 7",
+        "status": "READY",
+        "course_code": "STAT",
+        "lecture_id": "STAT-L07",
+        "duration": 5521.6,
+        "created_at": "2026-11-26T07:58:40Z",
+        "recorded_at": "2026-11-26T07:58:40Z",
+        "transcription_status": "RUNNING",
+        "can_transcribe": false,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rcorpfin02aa71c2",
+        "path": "~/Documents/MyNotes/Recordings/CORPFIN-L02.m4a",
+        "title": "Corporate Finance · 2",
+        "status": "READY",
+        "course_code": "CORPFIN",
+        "lecture_id": "CORPFIN-L02",
+        "duration": 5598.4,
+        "created_at": "2026-11-18T13:28:02Z",
+        "recorded_at": "2026-11-18T13:28:02Z",
+        "transcription_status": "NOT_STARTED",
+        "can_transcribe": true,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "capture"
+      },
+      {
+        "id": "rcorpfin02bb93d4",
+        "path": "~/Documents/MyNotes/Recordings/Phone 18 Nov 14.31.m4a",
+        "title": "Phone recording · 18 Nov",
+        "status": "READY",
+        "course_code": "CORPFIN",
+        "lecture_id": "CORPFIN-L02",
+        "duration": 5310.0,
+        "created_at": "2026-11-18T13:31:40Z",
+        "recorded_at": "2026-11-18T13:31:40Z",
+        "transcription_status": "NOT_STARTED",
+        "can_transcribe": true,
+        "audio_available": true,
+        "association_state": "ASSIGNED",
+        "origin": "import"
+      }
+    ],
+    "transcripts": [
+      {
+        "id": "tstat05",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L05.txt",
+        "title": "STAT-L05.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat05aa71c2",
+        "lecture_id": "STAT-L05",
+        "created_at": "2026-11-19T10:40:00Z"
+      },
+      {
+        "id": "tstat04",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L04.txt",
+        "title": "STAT-L04.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat04aa71c2",
+        "lecture_id": "STAT-L04",
+        "created_at": "2026-11-17T10:40:00Z"
+      },
+      {
+        "id": "tstat03",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L03.txt",
+        "title": "STAT-L03.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat03aa71c2",
+        "lecture_id": "STAT-L03",
+        "created_at": "2026-11-12T10:40:00Z"
+      },
+      {
+        "id": "tstat02",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L02.txt",
+        "title": "STAT-L02.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat02aa71c2",
+        "lecture_id": "STAT-L02",
+        "created_at": "2026-11-10T10:40:00Z"
+      },
+      {
+        "id": "tstat01",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L01.txt",
+        "title": "STAT-L01.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat01aa71c2",
+        "lecture_id": "STAT-L01",
+        "created_at": "2026-11-05T10:40:00Z"
+      },
+      {
+        "id": "tstat06",
+        "path": "~/Documents/MyNotes/workspace/courses/STAT/transcripts/STAT-L06.txt",
+        "title": "STAT-L06.txt",
+        "status": "COMPLETED",
+        "course_code": "STAT",
+        "recording_id": "rstat06aa71c2",
+        "lecture_id": "STAT-L06",
+        "created_at": "2026-11-24T10:41:09Z"
+      },
+      {
+        "id": "tmicro04",
+        "path": "~/Documents/MyNotes/workspace/courses/MICRO/transcripts/MICRO-L04.txt",
+        "title": "MICRO-L04.txt",
+        "status": "COMPLETED",
+        "course_code": "MICRO",
+        "recording_id": "rmicro04aa71c2",
+        "lecture_id": "MICRO-L04",
+        "created_at": "2026-11-25T13:12:40Z"
+      },
+      {
+        "id": "tcorpfin03",
+        "path": "~/Documents/MyNotes/workspace/courses/CORPFIN/transcripts/CORPFIN-L03.txt",
+        "title": "CORPFIN-L03.txt",
+        "status": "COMPLETED",
+        "course_code": "CORPFIN",
+        "recording_id": "rcorpfin03aa71c2",
+        "lecture_id": "CORPFIN-L03",
+        "created_at": "2026-11-25T16:20:05Z"
+      }
+    ]
+  }
+}

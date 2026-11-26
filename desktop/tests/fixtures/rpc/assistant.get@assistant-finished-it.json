@@ -1,0 +1,37 @@
+{
+  "title": "Prepara gli appunti della lezione 3",
+  "providerSession": "fixture-provider-session",
+  "turns": [
+    {
+      "id": "turn-1",
+      "message": "Prepara gli appunti della lezione 3",
+      "context": {
+        "course": "STAT",
+        "lesson": 3
+      },
+      "state": "COMPLETED",
+      "text": "Gli appunti di **STAT, lezione 3** sono ora negli appunti del corso.\n\nCosa è cambiato:\n- Una nuova sezione, *Distribuzioni campionarie*, dopo la Lezione 2\n- Due esempi svolti dalle slide, con ogni passaggio\n\nPer aprirli scegli `Apri in Word` nella pagina del corso, oppure esegui:\n\n```\nmynotes notes STAT --lessons 3\n```",
+      "tools": [
+        {
+          "toolId": "toolu_fixture_0",
+          "name": "Bash",
+          "summary": "Load the notes instructions",
+          "status": "completed",
+          "command": "mynotes context --activity notes --course STAT --json",
+          "durationMs": 1800
+        },
+        {
+          "toolId": "toolu_fixture_1",
+          "name": "Bash",
+          "summary": "Prepare notes for STAT lesson 3",
+          "status": "completed",
+          "command": "mynotes notes STAT --lessons 3 --json",
+          "durationMs": 132000
+        }
+      ],
+      "error": null,
+      "startedAt": 1795685400,
+      "finishedAt": 1795685540
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+.dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-dialog);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e3);
+  color: var(--color-text-primary);
+  overflow: auto;
+}
+
+.lg {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.dialog[open] {
+  animation: dialog-in var(--duration-base) var(--ease-standard);
+}
+
+.dialog::backdrop {
+  background: var(--color-scrim);
+  animation: fade var(--duration-base) var(--ease-standard);
+}
+
+.inner {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-6);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.title {
+  font: var(--text-title);
+  color: var(--color-text-primary);
+}
+
+.description {
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.close {
+  margin: -6px -8px 0 0;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(var(--motion-enter-scale));
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.inlinePanel {
+  position: static;
+  display: block;
+  max-height: none;
+}

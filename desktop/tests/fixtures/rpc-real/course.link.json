@@ -1,0 +1,46 @@
+{
+  "exitCode": 0,
+  "data": {
+    "connections": {
+      "materials": "/tmp/mynotes-contract/recordings",
+      "recordings": "/tmp/mynotes-contract/recordings"
+    },
+    "course": "SYNTHETICSYS",
+    "inventory": {
+      "entries_scanned": 2,
+      "file_counts": {
+        "materials": 0,
+        "personal_notes": 0,
+        "recordings": 2,
+        "transcripts": 0
+      },
+      "file_list_truncated": [],
+      "files": {
+        "materials": [],
+        "personal_notes": [],
+        "recordings": [
+          "/tmp/mynotes-contract/recordings/DEMO-L01.wav",
+          "/tmp/mynotes-contract/recordings/DEMO-L02.wav"
+        ],
+        "transcripts": []
+      },
+      "inventory_truncated": false,
+      "resolved_folder": "/tmp/mynotes-contract/recordings",
+      "role_candidates": {
+        "personal_notes": [],
+        "recordings": [
+          "/tmp/mynotes-contract/recordings"
+        ],
+        "transcripts": []
+      },
+      "transcript_candidates_unverified": true,
+      "warnings": []
+    },
+    "note_files": {
+      "handout": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Handouts/SYNTHETICSYS_COURSE_NOTES.docx",
+      "personal_notes": "/tmp/mynotes-contract/recordings/Appunti personali.docx"
+    },
+    "saved": false,
+    "status": "READY"
+  }
+}

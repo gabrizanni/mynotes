@@ -1,0 +1,30 @@
+.empty {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-6);
+}
+
+.centered {
+  justify-items: center;
+  text-align: center;
+}
+
+.icon {
+  color: var(--color-text-muted);
+}
+
+.title {
+  font: var(--text-heading);
+  color: var(--color-text-primary);
+}
+
+.body {
+  max-width: 48ch;
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.action {
+  margin-top: var(--space-1);
+}

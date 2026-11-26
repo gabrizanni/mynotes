@@ -1,0 +1,118 @@
+.wrap {
+  display: grid;
+  gap: var(--space-3);
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.label {
+  font: var(--text-label);
+  color: var(--color-text-primary);
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-3);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 520px) {
+  .cols2,
+  .cols3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 720px) {
+  .cols3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.card {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
+  gap: var(--space-3) var(--space-4);
+  min-height: 88px;
+  padding: var(--space-5);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e1);
+  color: var(--color-text-primary);
+  text-align: start;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.card:hover:not(:disabled):not([aria-checked="true"]) {
+  border-color: var(--color-border-strong);
+  background: color-mix(in srgb, var(--color-bg-card) 92%, var(--color-bg-emphasis));
+}
+
+.card:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.card[aria-checked="true"] {
+  border-color: var(--color-action-soft-label);
+  background: var(--color-action-soft);
+  box-shadow: none;
+}
+
+.card:disabled {
+  opacity: 0.5;
+}
+
+.icon {
+  grid-column: 1 / -1;
+  color: var(--color-text-muted);
+}
+
+.card[aria-checked="true"] .icon {
+  color: var(--color-action-soft-label);
+}
+
+.text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  font: var(--text-heading);
+}
+
+.description {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+/* The radio mark: an empty ring, filled with a check once chosen (shape, not colour, says "on"). */
+.mark {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--color-border-input);
+  border-radius: var(--radius-pill);
+  color: var(--color-bg-card);
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.card[aria-checked="true"] .mark {
+  border-color: var(--color-control-strong);
+  background: var(--color-control-strong);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card:active:not(:disabled) {
+    transform: none;
+  }
+}

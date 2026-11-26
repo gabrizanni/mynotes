@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capsule",
+  "description": "Recording capsule: listen to capture events and call rpc_call, which Rust limits to capture.dashboard, capture.status and capture.stop for this window. Dragging the pill is its only window permission.",
+  "windows": ["capsule"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "allow-rpc-call",
+    "allow-backend-status"
+  ]
+}

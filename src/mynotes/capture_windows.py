@@ -14,12 +14,14 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from . import file_lock
+# Re-exported: the Windows worker and installer call these through this module.
+from .audio_probe import valid_audio  # noqa: F401
 from .capture import CaptureError, CaptureStore, capture_status, read_json, runtime_home
+from .capture_export import SESSION_ID, export  # noqa: F401
 from .utils import atomic_json_write
 from .workspace import Workspace
 
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
-SESSION_ID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 
 
 def executable() -> Path:
@@ -286,78 +288,6 @@ def maintenance(operation: str, binary: Path, home: Path) -> str:
             _control_task("resume", binary)
         raise
     return original
-
-
-def valid_audio(path: Path) -> bool:
-    import av
-
-    try:
-        with av.open(str(path)) as audio:
-            stream = audio.streams.audio[0]
-            first = next(audio.decode(stream), None)
-            return bool(first and first.samples > 0)
-    except (OSError, IndexError, av.FFmpegError):
-        return False
-
-
-def export(store: CaptureStore, session_id: str) -> float:
-    """Encode a worker-owned attempt without touching its final destination."""
-    import av
-
-    if not re.fullmatch(SESSION_ID, session_id):
-        raise CaptureError("Invalid Capture session ID")
-    session = read_json(store.directory / "sessions" / f"{session_id}.json", {})
-    if session.get("id") != session_id or session.get("status") != "EXPORTING":
-        raise CaptureError("Capture session is not ready for export")
-    stage = Path(session["directory"])
-    destination = Path(session["outputPath"])
-    temporary = Path(session["exportTemporaryPath"])
-    if (not stage.is_absolute() or stage.name.casefold() != session_id.casefold()
-            or not destination.is_absolute() or destination.suffix.lower() != ".m4a"
-            or temporary.parent != destination.parent
-            or not re.fullmatch(rf"\.capture-{re.escape(session_id)}-[0-9a-f]{{32}}\.tmp", temporary.name)):
-        raise CaptureError("Invalid Capture export receipt")
-    segments = sorted(stage.glob("*.wav"))
-    if (not segments or not stage.is_dir() or stage.is_symlink()
-            or any(not re.fullmatch(r"[0-9]{19}-[0-9a-f]{32}\.wav", item.name)
-                   or not item.is_file() or item.is_symlink() for item in segments)):
-        raise CaptureError("No valid staged audio segments")
-
-    sample_rate = 48_000
-    total_samples = 0
-    # The worker owns the final rename and records a digest before publishing.
-    # Exclusive creation prevents a stale temporary file from being overwritten.
-    with temporary.open("xb") as handle:
-        try:
-            with av.open(handle, mode="w", format="ipod") as container:
-                output = container.add_stream("aac", rate=sample_rate)
-                output.layout = "mono"
-                output.bit_rate = 96_000
-                for segment in segments:
-                    resampler = av.AudioResampler(format="fltp", layout="mono", rate=sample_rate)
-                    with av.open(str(segment)) as source:
-                        audio = source.streams.audio[0]
-                        for frame in source.decode(audio):
-                            frame.pts = None
-                            for converted in resampler.resample(frame):
-                                converted.pts = total_samples
-                                total_samples += converted.samples
-                                container.mux(output.encode(converted))
-                    for converted in resampler.resample(None):
-                        converted.pts = total_samples
-                        total_samples += converted.samples
-                        container.mux(output.encode(converted))
-                if not total_samples:
-                    raise CaptureError("Staged audio has no samples")
-                container.mux(output.encode(None))
-        except (OSError, ValueError, IndexError, av.FFmpegError):
-            handle.close()
-            temporary.unlink(missing_ok=True)
-            raise
-    if not valid_audio(temporary):
-        temporary.unlink(missing_ok=True)
-        raise CaptureError("Converted Capture recording could not be decoded")
-    return total_samples / sample_rate
 
 
 def main() -> None:

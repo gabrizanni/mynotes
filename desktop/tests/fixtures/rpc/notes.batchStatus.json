@@ -1,0 +1,17 @@
+{
+  "exitCode": 0,
+  "data": {
+    "batch_id": "b-stat-06",
+    "status": "COMPLETED",
+    "lessons": [
+      {
+        "lecture_id": "STAT-L06",
+        "content_validated": true,
+        "word_candidate": null,
+        "status": "CONTENT_READY"
+      }
+    ],
+    "problem": null,
+    "warnings": []
+  }
+}

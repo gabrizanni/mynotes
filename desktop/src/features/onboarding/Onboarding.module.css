@@ -1,0 +1,671 @@
+/* Onboarding window (UX-SPEC §2): calm editorial column, tokens only. */
+
+.window {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100vh;
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+}
+
+/* ---------- Header: brand · three named segments · setup status ---------- */
+
+.bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-6);
+  min-height: 64px;
+  padding: 0 var(--space-8);
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-heading);
+  color: var(--color-text-primary);
+}
+
+.brand img {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-inner);
+}
+
+.segments {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.segment {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 var(--space-1);
+  font: var(--text-label);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.segment[data-state="current"] {
+  color: var(--color-text-primary);
+}
+
+/* The current segment is underlined; done segments carry a check, so colour is never alone. */
+.segment[data-state="current"]::after {
+  content: "";
+  position: absolute;
+  right: var(--space-1);
+  bottom: 6px;
+  left: var(--space-1);
+  height: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--color-control-strong);
+}
+
+.segmentCheck {
+  color: var(--color-success);
+}
+
+.segmentLine {
+  width: 24px;
+  height: 1px;
+  background: var(--color-border-strong);
+}
+
+.status {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* ---------- Step frame ---------- */
+
+.main {
+  display: grid;
+  min-height: 0;
+}
+
+.form {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+}
+
+.scroll {
+  overflow-y: auto;
+  padding: var(--space-16) var(--space-8) var(--space-12);
+  scroll-padding-top: var(--space-6);
+}
+
+.column {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.wide {
+  max-width: 920px;
+}
+
+/* Each step slides in by a few pixels. Only the position moves: the text is fully visible from
+   the first frame, so a webview whose animations do not advance (WebKitGTK under Xvfb, a
+   throttled or hidden window) still shows the step instead of a blank page. No fill mode: when
+   the animation ends, or never starts, the step sits in its normal place. Reduced motion sets
+   the offset to 0 (tokens.css). */
+.enter {
+  animation: enter var(--duration-slow) var(--ease-standard);
+}
+
+@keyframes enter {
+  from {
+    transform: translateY(var(--motion-enter-offset));
+  }
+}
+
+.head {
+  display: grid;
+  gap: var(--space-3);
+  margin-bottom: var(--space-10);
+}
+
+.title {
+  font: var(--text-h1);
+  letter-spacing: var(--tracking-serif);
+  color: var(--color-text-brand);
+  text-wrap: balance;
+}
+
+.display {
+  font: var(--text-display);
+  letter-spacing: -0.015em;
+}
+
+/* Focus moves to the heading on every step for screen readers; it is not a control. */
+.title:focus,
+.title:focus-visible {
+  outline: none;
+}
+
+.lede {
+  max-width: 56ch;
+  font: var(--text-body);
+  line-height: 24px;
+  color: var(--color-text-muted);
+  text-wrap: pretty;
+}
+
+.body {
+  display: grid;
+  gap: var(--space-8);
+}
+
+.footer {
+  padding: var(--space-4) var(--space-8);
+  border-top: 1px solid var(--color-border-hairline);
+  background: var(--color-bg-canvas);
+}
+
+.footerInner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.footerSpacer {
+  flex: 1;
+}
+
+/* ---------- Shared bits inside steps ---------- */
+
+.stack {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.row2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.liveLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-height);
+  font: var(--text-body);
+}
+
+.spin {
+  color: var(--color-text-muted);
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.success {
+  color: var(--color-success);
+}
+
+.disclosure {
+  max-width: 60ch;
+  font: var(--text-body);
+  line-height: 24px;
+  color: var(--color-text-muted);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral);
+  font: var(--text-caption);
+  white-space: nowrap;
+}
+
+.tagSuccess {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+/* ---------- Setup status (header) ---------- */
+
+.statusTrigger {
+  font-variant-numeric: tabular-nums;
+}
+
+.statusProblem {
+  color: var(--color-danger);
+}
+
+.statusDone {
+  color: var(--color-success);
+}
+
+.statusPanel {
+  display: grid;
+  gap: var(--space-4);
+  width: 340px;
+  padding: var(--space-5);
+}
+
+.statusTitle {
+  font: var(--text-heading);
+}
+
+.statusMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font: var(--text-small);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Checklist ("Almost there", summary) ---------- */
+
+.checklist {
+  display: grid;
+  gap: 0;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  border-top: 1px solid var(--color-border-hairline);
+}
+
+.checkItem {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 56px;
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.checkIcon {
+  color: var(--color-text-muted);
+}
+
+.checkItem[data-state="done"] .checkIcon {
+  color: var(--color-success);
+}
+
+.checkText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.checkTitle {
+  font: var(--text-body-strong);
+}
+
+.checkItem[data-state="waiting"] .checkTitle {
+  color: var(--color-text-muted);
+}
+
+.checkDetail {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.checkState {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+/* ---------- Privacy ---------- */
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.factList {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0;
+  margin: var(--space-2) 0 0;
+  list-style: none;
+}
+
+.fact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font: var(--text-body);
+}
+
+.fact svg {
+  color: var(--color-text-muted);
+}
+
+.fineprint {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 64ch;
+}
+
+/* ---------- Style + live preview ---------- */
+
+.styleGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 360px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-12);
+}
+
+.controls {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.previewWrap {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.previewLabel {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font: var(--text-label);
+}
+
+.previewCaption {
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+/* A sheet of paper: card surface, hairline, gentle lift. Word-like spacing, sans type below 24 px. */
+.paper {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-8) var(--space-10);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e2), 0 0 0 1px var(--color-border-hairline);
+  font: var(--text-small);
+  color: var(--color-text-primary);
+}
+
+.paperKicker {
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.paperHeading {
+  font: var(--text-title);
+}
+
+.paperText {
+  line-height: 21px;
+}
+
+.paperList {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-5);
+  line-height: 21px;
+}
+
+.figure {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 6px;
+  height: 96px;
+  padding: var(--space-3) var(--space-6) 0;
+  border-radius: var(--radius-inner);
+  background: var(--color-bg-emphasis);
+}
+
+.chartBar {
+  width: 18px;
+  border-radius: 3px 3px 0 0;
+  background: var(--color-border-strong);
+}
+
+.figureCaption {
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.recapBox {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-inner);
+  background: var(--color-bg-emphasis);
+  line-height: 21px;
+}
+
+.paperSub {
+  font: var(--text-label);
+}
+
+/* ---------- Files ---------- */
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-height);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-emphasis);
+}
+
+.folderPath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--text-body-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Schedule ---------- */
+
+.guide {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-5);
+  font: var(--text-body);
+  line-height: 24px;
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.summaryItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-body-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.summaryItem svg {
+  color: var(--color-text-muted);
+}
+
+/* ---------- Microphone ---------- */
+
+.micCard {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-4);
+}
+
+.micIcon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-emphasis);
+  color: var(--color-text-primary);
+}
+
+.timer {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.timerValue {
+  font: 600 40px/48px var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-label);
+  color: var(--color-danger);
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-danger);
+  animation: pulse 1.6s var(--ease-standard) infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  width: 100%;
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-3);
+  border-radius: var(--radius-button);
+  background: var(--color-bg-emphasis);
+}
+
+.playerTime {
+  font: var(--text-time);
+  font-variant-numeric: tabular-nums;
+}
+
+.question {
+  font: var(--text-heading);
+}
+
+/* ---------- Automatic recording ---------- */
+
+.keys {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.key {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-inner);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e1), 0 0 0 1px var(--color-border-strong);
+  font: var(--text-label);
+}
+
+.offRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--row-height);
+}
+
+/* ---------- Ready ---------- */
+
+.summaryList {
+  border-top: 1px solid var(--color-border-hairline);
+}
+
+@media (max-width: 1023px) {
+  .styleGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-8);
+  }
+  .previewWrap {
+    position: static;
+  }
+}
+
+@media (max-width: 719px) {
+  .bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .segments {
+    display: none;
+  }
+  .columns,
+  .row2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .liveDot {
+    animation: none;
+  }
+}

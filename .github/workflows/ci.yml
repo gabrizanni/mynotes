@@ -72,3 +72,69 @@ jobs:
           uv run python -c "import platform, struct; assert platform.system() == 'Windows' and platform.machine().upper() == 'AMD64' and struct.calcsize('P') == 8"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           uv run pytest tests/test_platform_runtime.py tests/test_memory_context.py tests/test_whispercpp.py tests/test_windows_speech.py tests/test_provider_windows.py tests/test_provider_limits.py tests/test_capture_windows.py
+
+  linux-x64-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      MYNOTES_LINUX_BUILD: ${{ github.workspace }}/.linux-build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.15"
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --locked
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Audit public contents
+        run: uv run python scripts/check_public_tree.py
+
+      - name: Restore the pinned whisper.cpp build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.MYNOTES_LINUX_BUILD }}
+          key: linux-x64-build-${{ hashFiles('setup/components.linux.lock.json') }}
+
+      - name: Build the Linux payload with CMake and the system compiler
+        run: |
+          cmake --version
+          c++ --version
+          uv run python scripts/build_linux_payload.py --cache "$MYNOTES_LINUX_BUILD" --jobs 4
+
+      - name: Verify local transcription with the public sample
+        run: |
+          export MYNOTES_HOME="$RUNNER_TEMP/mynotes-home"
+          models="$MYNOTES_HOME/speech-models/whisper.cpp"
+          mkdir -p "$models"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors --max-time 120 'https://huggingface.co/ggerganov/whisper.cpp/resolve/80da2d8bfee42b0e836fc3a9890373e5defc00a6/ggml-tiny.bin' --output "$models/ggml-tiny.bin"
+          echo "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21  $models/ggml-tiny.bin" | sha256sum --check
+          sample="$MYNOTES_LINUX_BUILD/samples/jfk.wav"
+          echo "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e  $sample" | sha256sum --check
+          PATH="$MYNOTES_LINUX_BUILD/whisper.cpp-b5454-build/bin:$PATH" uv run python windows/setup/smoke_speech.py --audio "$sample" --language en
+
+      - name: Verify the system Word renderer
+        run: |
+          sudo apt-get update
+          # Writer renders the document; Math renders its equation.
+          sudo apt-get install --yes libreoffice-writer libreoffice-math
+          MYNOTES_HOME="$RUNNER_TEMP/mynotes-home" uv run mynotes verify-word-renderer --json
+
+      - name: Upload Linux release candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mynotes-linux-x64-candidate
+          path: |
+            dist/MyNotes-*-linux-x86_64.tar.gz
+            dist/MyNotes-*-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7

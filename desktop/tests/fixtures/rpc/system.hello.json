@@ -1,0 +1,29 @@
+{
+  "protocol": 1,
+  "platform": "linux",
+  "versions": {
+    "mynotes": "0.4.1",
+    "python": "3.12.8"
+  },
+  "methods": [
+    "system.hello",
+    "system.ping",
+    "session.open",
+    "watch.subscribe",
+    "capture.dashboard",
+    "capture.start",
+    "capture.stop",
+    "queue.status",
+    "library.list",
+    "config.get",
+    "doctor.get",
+    "provider.status",
+    "notes.plan",
+    "notes.run",
+    "notes.batchStatus",
+    "job.list",
+    "job.get",
+    "job.cancel",
+    "setup.status"
+  ]
+}

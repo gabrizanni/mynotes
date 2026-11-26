@@ -1,0 +1,31 @@
+{
+  "exitCode": 1,
+  "data": {
+    "status": "NEEDS_SELECTION",
+    "note_files": null,
+    "proposed_files": {
+      "personal_notes": "~/Documents/University/Statistics/Appunti personali.docx",
+      "handout": "~/Documents/MyNotes/Statistics/STAT_COURSE_NOTES.docx"
+    },
+    "ambiguities": {
+      "notes_file": [
+        "~/Documents/University/Statistics/Appunti personali.docx",
+        "~/Documents/University/Statistics/Esercizi svolti.docx"
+      ]
+    },
+    "inventory": {
+      "file_counts": {
+        "materials": 14,
+        "recordings": 2,
+        "personal_notes": 2,
+        "transcripts": 0
+      },
+      "files": {
+        "personal_notes": [
+          "~/Documents/University/Statistics/Appunti personali.docx",
+          "~/Documents/University/Statistics/Esercizi svolti.docx"
+        ]
+      }
+    }
+  }
+}

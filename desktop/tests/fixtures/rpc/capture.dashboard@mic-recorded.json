@@ -1,0 +1,27 @@
+{
+  "data": {
+    "enabled": true,
+    "paused": true,
+    "runtime": {
+      "microphonePermission": "AUTHORIZED",
+      "recording": false,
+      "exporting": false,
+      "currentSession": null,
+      "sessions": [
+        {
+          "id": "session-mic-test",
+          "event": {
+            "id": "test:mic",
+            "courseCode": null,
+            "lessonNumber": null,
+            "title": "Microphone test"
+          },
+          "status": "COMPLETED",
+          "isTest": true,
+          "actualStart": "2026-11-26T09:40:30Z",
+          "outputPath": "~/Documents/MyNotes/Recordings/Microphone test.m4a"
+        }
+      ]
+    }
+  }
+}

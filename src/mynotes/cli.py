@@ -6,6 +6,7 @@ import argparse
 import os
 import json
 import re
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -27,20 +28,46 @@ from .workspace import Workspace
 from .workflow import WorkflowError, generate_candidate, process, status
 from .providers import ProviderError
 from .asr import ASRError, ASRBusyError
-from .extraction import ExtractionError
 from .ingestion import IngestionError, discover_recordings, recording_for_lecture
-from .sourcepack import SourcePackError, build_source_pack
 from .migration import MigrationError, apply_manifest, build_manifest, load_manifest, save_manifest
 from .integrations import IntegrationError, install_integration
 from .chat import ChatError, launch_chat, login_provider
-from .publication import (
-    PublicationError,
-    build_word_candidate,
-    publication_history,
-    publish_word_candidate,
-    recover_publications,
-    restore_backup,
-)
+
+# Word, PDF and slide libraries load only for the commands that use them, so
+# that quick commands start faster. These names stay importable from here.
+_DEFERRED_NAMES = {
+    "ExtractionError": "extraction",
+    "SourcePackError": "sourcepack",
+    "PublicationError": "publication",
+    "build_word_candidate": "publication",
+    "publication_history": "publication",
+    "publish_word_candidate": "publication",
+    "recover_publications": "publication",
+    "restore_backup": "publication",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _DEFERRED_NAMES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+    return getattr(import_module(f"{__package__}.{module}"), name)
+
+
+def _deferred_errors(*names: str) -> tuple[type[BaseException], ...]:
+    """Return the named error classes whose modules are loaded.
+
+    A module that was never imported cannot have raised its error, so matching
+    only loaded classes handles exactly the same exceptions as before.
+    """
+    loaded = (sys.modules.get(f"{__package__}.{_DEFERRED_NAMES[name]}") for name in names)
+    return tuple(getattr(module, name) for module, name in zip(loaded, names) if module is not None)
+
+
+def build_source_pack(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .sourcepack import build_source_pack as build
+    return build(*args, **kwargs)
 
 
 def _workspace(arguments: argparse.Namespace) -> Workspace:
@@ -504,7 +531,43 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("message", nargs="?", help="optional natural-language request")
     login = subparsers.add_parser("provider-login", help="open the selected agent's sign-in flow")
     login.add_argument("--provider", choices=("codex", "agy", "claude"), required=True)
+    lesson = subparsers.add_parser("lesson", help="run one lesson from audio to updated notes")
+    lesson_commands = lesson.add_subparsers(dest="lesson_command", required=True)
+    lesson_process = lesson_commands.add_parser("process", help="check, transcribe only if needed, prepare and write notes")
+    lesson_process.add_argument("lecture_id", help="COURSE-LNN")
+    lesson_process.add_argument("--workspace", help="private workspace path")
+    lesson_source = lesson_process.add_mutually_exclusive_group()
+    lesson_source.add_argument("--audio", help="specific recording; otherwise reuse a transcript or resolve this lesson's audio")
+    lesson_source.add_argument("--transcript", help="existing transcript (TXT or normalized JSON) to import without ASR, as prepare --transcript")
+    lesson_retry = lesson_process.add_mutually_exclusive_group()
+    lesson_retry.add_argument("--resume", metavar="BATCH_ID", help="continue this lesson's saved notes job, as notes --resume")
+    lesson_retry.add_argument("--regenerate", action="store_true",
+                              help="start a new generation that keeps earlier attempts, as notes --regenerate")
+    lesson_process.add_argument("--provider", choices=("codex", "agy", "claude"))
+    lesson_process.add_argument("--quality", help="saved quality or standard")
+    lesson_process.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
+    lesson_process.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
+    serve = subparsers.add_parser("serve", help="answer a desktop app's JSON-RPC requests in one long-lived process")
+    serve.add_argument("--stdio", action="store_true", help="newline-delimited JSON-RPC 2.0 on stdin and stdout")
+    serve.add_argument("--workspace", help="private workspace path")
+    serve.add_argument("--list-methods", action="store_true", help="print the method table without serving")
+    serve.add_argument("--json", action="store_true", help="machine-readable method table")
     return parser
+
+
+_PARSER: argparse.ArgumentParser | None = None
+
+
+def _shared_parser() -> argparse.ArgumentParser:
+    """Build the parser once per process; parsing never changes it.
+
+    Building it takes tens of milliseconds, which `mynotes serve` would
+    otherwise pay on every in-process command.
+    """
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = build_parser()
+    return _PARSER
 
 
 def _configure(arguments: argparse.Namespace) -> int:
@@ -779,7 +842,7 @@ def _transcription(arguments: argparse.Namespace) -> int:
         result = {"status": "NEEDS_REVIEW", **identity, "message": str(error), "issues": getattr(error, "issues", []), "raw_path": str(getattr(error, "path", ""))}
         print(json.dumps(result, ensure_ascii=False))
         return 4
-    except (ASRError, ConfigurationError, SourcePackError, IngestionError, WorkflowError, OSError, ValueError) as error:
+    except (ASRError, ConfigurationError, *_deferred_errors("SourcePackError"), IngestionError, WorkflowError, OSError, ValueError) as error:
         result = {"status": "FAILED", **identity, "message": str(error)}
         print(json.dumps(result, ensure_ascii=False))
         return 2
@@ -1011,6 +1074,20 @@ def _notes(arguments: argparse.Namespace) -> int:
     return 0 if arguments.plan_only or result['status'] in {'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'AWAITING_APPROVAL'} else 2
 
 
+def _lesson(arguments: argparse.Namespace) -> int:
+    from .lesson_pipeline import process_lesson
+    def progress(stage, detail):
+        print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
+    code, result = process_lesson(Workspace.from_value(arguments.workspace), arguments.lecture_id,
+                                  audio=Path(arguments.audio).expanduser() if arguments.audio else None,
+                                  transcript=Path(arguments.transcript).expanduser() if arguments.transcript else None,
+                                  provider=arguments.provider, quality=arguments.quality,
+                                  instructions=arguments.instructions, resume=arguments.resume,
+                                  regenerate=arguments.regenerate, progress=progress)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return code
+
+
 def _natural_request(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     from .onboarding import prepare_conversation
@@ -1043,7 +1120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("MYNOTES_GENERATION_WORKER") == "1":
         print("Note-writing workers cannot invoke MyNotes. Return the structured notes from the supplied evidence; do not coordinate another workflow.")
         return 3
-    parser = build_parser()
+    parser = _shared_parser()
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "inventory":
@@ -1166,6 +1243,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate_batch(arguments)
         if arguments.command == "notes":
             return _notes(arguments)
+        if arguments.command == "lesson":
+            return _lesson(arguments)
         if arguments.command == "visual-review":
             from .visual_review import record_review
             result=record_review(Workspace.from_value(arguments.workspace),arguments.batch_id,_load_json(arguments.file))
@@ -1196,9 +1275,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(build_batch_documents(_workspace(arguments),arguments.batch_id,mode=arguments.mode),ensure_ascii=False,indent=2))
             return 0
         if arguments.command == "build":
+            from .publication import build_word_candidate
             print(json.dumps(build_word_candidate(_workspace(arguments), arguments.lecture_id, mode=arguments.mode), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "publish":
+            from .publication import publish_word_candidate
             candidate = Path(arguments.candidate).expanduser() if arguments.candidate else None
             print(json.dumps(publish_word_candidate(_workspace(arguments), arguments.lecture_id, candidate, accept_current_word=arguments.accept_current_word), ensure_ascii=False, sort_keys=True))
             return 0
@@ -1211,12 +1292,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(undo_last_update(_workspace(arguments), arguments.course), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "history":
+            from .publication import publication_history
             print(json.dumps(publication_history(_workspace(arguments), arguments.course), ensure_ascii=False, indent=2))
             return 0
         if arguments.command == "restore":
+            from .publication import restore_backup
             print(json.dumps(restore_backup(_workspace(arguments), arguments.backup_id), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "recover":
+            from .publication import recover_publications
             print(json.dumps(recover_publications(_workspace(arguments)), ensure_ascii=False, indent=2))
             return 0
         if arguments.command in {"codex", "agy", "claude"}:
@@ -1245,6 +1329,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return launch_chat(workspace, configuration, arguments.provider, arguments.message)
         if arguments.command == "provider-login":
             return login_provider(arguments.provider)
+        if arguments.command == "serve":
+            from .serve import run_cli as run_serve
+            return run_serve(arguments)
         if arguments.command == "doctor":
             from .onboarding import doctor
             workspace = Workspace.from_value(arguments.workspace)
@@ -1268,7 +1355,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Word rendering verified ({proof['word_pages']} page(s)).")
             return 0
         if arguments.command in {"install-speech-model", "verify-transcription"}:
-            if os.name != "nt":
+            from .platform_paths import is_linux
+            if os.name != "nt" and not is_linux():
                 raise ValueError("This local speech setup command is available on Windows.")
             from .asr import default_engines
             from .windows_speech import install_default_model, verify_transcription
@@ -1280,7 +1368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace = Workspace.from_value(arguments.workspace)
                 engine = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
                 if not engine:
-                    raise ValueError("The native Whisper.cpp runtime is missing. Repair the Windows installation.")
+                    repair = "Install whisper-cli as described in docs/LINUX.md." if is_linux() else "Repair the Windows installation."
+                    raise ValueError("The native Whisper.cpp runtime is missing. " + repair)
                 proof = verify_transcription(engine.executable, engine.model_dir,
                                              audio=arguments.audio, language=arguments.language)
                 report = {"status": "VERIFIED", **proof}
@@ -1302,7 +1391,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ASRBusyError as error:
         print(json.dumps({"status": "BUSY", "message": str(error), "current": error.state}, ensure_ascii=False))
         return 3
-    except (ConfigurationError, WorkflowError, ProviderError, PublicationError, ChatError, MigrationError, IntegrationError, IngestionError, ASRError, ExtractionError, SourcePackError, OSError, ValueError) as error:
+    except (ConfigurationError, WorkflowError, ProviderError, *_deferred_errors("PublicationError"), ChatError, MigrationError, IntegrationError, IngestionError, ASRError, *_deferred_errors("ExtractionError", "SourcePackError"), OSError, ValueError) as error:
         print(f"mynotes: {error}")
         return 2
     parser.error(f"unsupported command: {arguments.command}")

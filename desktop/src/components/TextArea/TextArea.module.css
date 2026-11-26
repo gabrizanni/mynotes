@@ -1,0 +1,6 @@
+.area {
+  min-height: 104px;
+  padding: 10px var(--space-3);
+  resize: vertical;
+  line-height: 22px;
+}

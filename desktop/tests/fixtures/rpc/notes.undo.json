@@ -1,0 +1,11 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "UNDONE",
+    "course": "STAT",
+    "lecture_id": "STAT-L06",
+    "output": "~/Documents/MyNotes/Statistics/STAT_COURSE_NOTES.docx",
+    "output_exists": true,
+    "pre_restore_backup": null
+  }
+}

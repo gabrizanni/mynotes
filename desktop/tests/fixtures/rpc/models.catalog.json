@@ -1,0 +1,65 @@
+{
+  "exitCode": 0,
+  "data": {
+    "schema_version": 2,
+    "provider": "claude",
+    "status": "ready",
+    "message": null,
+    "fetched_at": "2026-11-25T18:04:00Z",
+    "source": "claude_initialize",
+    "choices": [
+      {
+        "id": "claude-sonnet",
+        "model": "claude-sonnet",
+        "provider": "claude",
+        "label": "Sonnet",
+        "default_effort": "medium",
+        "supported_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "availability": "listed",
+        "selectable": true
+      },
+      {
+        "id": "claude-opus",
+        "model": "claude-opus",
+        "provider": "claude",
+        "label": "Opus",
+        "default_effort": "high",
+        "supported_efforts": [
+          "low",
+          "medium",
+          "high"
+        ],
+        "availability": "listed",
+        "selectable": true
+      },
+      {
+        "id": "claude-haiku",
+        "model": "claude-haiku",
+        "provider": "claude",
+        "label": "Haiku",
+        "default_effort": "low",
+        "supported_efforts": [
+          "low",
+          "medium"
+        ],
+        "availability": "listed",
+        "selectable": true
+      },
+      {
+        "id": "",
+        "model": "",
+        "provider": "claude",
+        "label": "Modello predefinito della CLI",
+        "default_effort": "",
+        "supported_efforts": [],
+        "availability": "provider_default",
+        "selectable": true
+      }
+    ],
+    "presets": []
+  }
+}

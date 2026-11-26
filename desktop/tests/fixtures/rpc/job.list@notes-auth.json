@@ -1,0 +1,67 @@
+{
+  "jobs": [
+    {
+      "id": "j-corpfin-03",
+      "method": "notes.run",
+      "params": {
+        "course": "CORPFIN",
+        "lessons": "3"
+      },
+      "state": "FAILED",
+      "pid": null,
+      "startedAt": 1795624270.0,
+      "finishedAt": 1795625092.0,
+      "exitCode": 2,
+      "result": {
+        "exitCode": 2,
+        "data": {
+          "status": "PAUSED_QUOTA",
+          "batch_id": "b-corpfin-03"
+        }
+      },
+      "cancelRequested": false
+    },
+    {
+      "id": "j-micro-04",
+      "method": "notes.run",
+      "params": {
+        "course": "MICRO",
+        "lessons": "4"
+      },
+      "state": "COMPLETED",
+      "pid": null,
+      "startedAt": 1795612800.0,
+      "finishedAt": 1795613381.0,
+      "exitCode": 0,
+      "result": {
+        "exitCode": 0,
+        "data": {
+          "status": "COMPLETED",
+          "batch_id": "b-micro-04"
+        }
+      },
+      "cancelRequested": false
+    },
+    {
+      "id": "j-stat-06",
+      "method": "notes.run",
+      "params": {
+        "course": "STAT",
+        "lessons": "6"
+      },
+      "state": "FAILED",
+      "pid": null,
+      "startedAt": 1795517400.0,
+      "finishedAt": 1795517892.0,
+      "exitCode": 2,
+      "result": {
+        "exitCode": 2,
+        "data": {
+          "status": "PAUSED_AUTH",
+          "batch_id": "b-stat-06"
+        }
+      },
+      "cancelRequested": false
+    }
+  ]
+}

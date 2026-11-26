@@ -1,0 +1,36 @@
+.panel {
+  position: fixed;
+  z-index: 50;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow: auto;
+  padding: var(--space-5);
+  border-radius: var(--radius-card);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e2), 0 0 0 1px var(--color-border-hairline);
+  color: var(--color-text-primary);
+  animation: enter var(--duration-base) var(--ease-standard);
+}
+
+.panel:focus-visible {
+  outline-offset: 2px;
+}
+
+/* First layout pass: measured off-screen, then placed next to the anchor. */
+.measuring {
+  top: 0;
+  left: 0;
+  visibility: hidden;
+}
+
+.inline {
+  position: relative;
+  max-height: none;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: scale(var(--motion-enter-scale));
+  }
+}

@@ -11,8 +11,25 @@ import sys
 from pathlib import Path
 
 
+LINUX = sys.platform.startswith("linux")
+SYSTEMD_UNIT = "mynotes-capture.service"
+
+
+def default_capture_home() -> Path:
+    if LINUX:
+        # Same default as mynotes.platform_paths; this script runs on a bare stdlib Python.
+        return Path(os.environ.get("MYNOTES_HOME", str(Path.home() / ".local/share/mynotes"))) / "Capture"
+    return Path.home() / "Library/Application Support/MyNotes/Capture"
+
+
+def systemd_unit() -> Path:
+    configured = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(configured) if configured and Path(configured).is_absolute() else Path.home() / ".config"
+    return root / "systemd/user" / SYSTEMD_UNIT
+
+
 def main() -> int:
-    home = Path(os.environ.get("MYNOTES_CAPTURE_HOME", str(Path.home() / "Library/Application Support/MyNotes/Capture")))
+    home = Path(os.environ.get("MYNOTES_CAPTURE_HOME", str(default_capture_home())))
     home.mkdir(parents=True, exist_ok=True)
     with (home / "update.lock").open("a+") as lease:
         try:
@@ -22,7 +39,8 @@ def main() -> int:
             return 2
         active = home / "active.json"
         plist = Path.home() / "Library/LaunchAgents/com.gabrizanni.mynotes-capture.plist"
-        restart = active.is_file() and plist.is_file()
+        systemd = LINUX and not plist.is_file() and systemd_unit().is_file()
+        restart = active.is_file() and (plist.is_file() or systemd)
         domain = f"gui/{os.getuid()}"
         if restart:
             workspace = Path(json.loads(active.read_text())["workspace"])
@@ -65,7 +83,10 @@ def main() -> int:
                 # Mark before launchctl so an interruption during bootout also
                 # attempts recovery. An already-running service needs no restart.
                 stop_attempted = True
-                subprocess.run(["launchctl", "bootout", f"{domain}/com.gabrizanni.mynotes-capture"], capture_output=True)
+                if systemd:
+                    subprocess.run(["systemctl", "--user", "stop", SYSTEMD_UNIT], capture_output=True)
+                else:
+                    subprocess.run(["launchctl", "bootout", f"{domain}/com.gabrizanni.mynotes-capture"], capture_output=True)
             with subprocess.Popen(sys.argv[1:], env=environment, start_new_session=True) as process:
                 child = process
                 try:
@@ -102,7 +123,9 @@ def main() -> int:
                 fcntl.flock(lease.fileno(), fcntl.LOCK_UN)
                 if stop_attempted:
                     try:
-                        restarted = subprocess.run(["launchctl", "bootstrap", domain, str(plist)], capture_output=True, timeout=15)
+                        command = (["systemctl", "--user", "start", SYSTEMD_UNIT] if systemd
+                                   else ["launchctl", "bootstrap", domain, str(plist)])
+                        restarted = subprocess.run(command, capture_output=True, timeout=15)
                         if restarted.returncode:
                             print("Capture restart was not confirmed. Open MyNotes Capture and check its status.", file=sys.stderr)
                     except (OSError, subprocess.TimeoutExpired):

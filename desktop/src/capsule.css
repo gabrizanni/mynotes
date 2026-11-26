@@ -1,0 +1,14 @@
+/* The capsule window is transparent and undecorated: only the pill paints. */
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+#root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}

@@ -1,0 +1,307 @@
+name: Desktop
+
+# MyNotes Desktop (desktop/): checks, Rust, unsigned bundles for the three systems and a real-app
+# smoke test on Linux. Every action is pinned by commit SHA (tag in the trailing comment).
+
+on:
+  # The contract tests and the smoke run the real `mynotes serve` from src/mynotes, and the
+  # public-tree audit is scripts/check_public_tree.py: a change there must run this workflow too.
+  pull_request:
+    paths:
+      - "desktop/**"
+      - "src/mynotes/**"
+      - "scripts/**"
+      - ".github/workflows/desktop.yml"
+  push:
+    branches: [main, develop]
+    paths:
+      - "desktop/**"
+      - "src/mynotes/**"
+      - "scripts/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: "24"
+  UV_VERSION: "0.12.15"
+  TAURI_DRIVER_VERSION: "2.1.0"
+  # Tauri's Linux build and runtime libraries (ubuntu-22.04 has the oldest glibc we ship for).
+  LINUX_PACKAGES: >-
+    libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
+    build-essential file patchelf
+
+jobs:
+  checks:
+    name: Checks (typecheck, lint, unit, contract, e2e, public tree)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install the backend (serve) for the contract tests
+        working-directory: .
+        run: uv sync --locked
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Contract tests against the real mynotes serve
+        env:
+          MYNOTES_SERVE_REPO: ${{ github.workspace }}
+        run: npm run test:contract
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: End-to-end tests (mocked RPC)
+        run: npm run test:e2e
+
+      - name: Audit the desktop public tree
+        working-directory: .
+        run: uv run python scripts/check_public_tree.py --desktop-source
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop/src-tauri
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install Linux build libraries
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+
+      - name: Install Rust stable with rustfmt and clippy
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install the backend (method table test)
+        working-directory: .
+        run: uv sync --locked
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        env:
+          MYNOTES_SERVE_REPO: ${{ github.workspace }}
+        run: cargo test --locked
+
+  bundles:
+    name: Bundle (${{ matrix.name }})
+    needs: [checks, rust]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64 .dmg
+            os: macos-15
+            bundles: dmg
+            pattern: desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          - name: Windows x64 .msi and NSIS
+            os: windows-2025
+            bundles: msi,nsis
+            pattern: desktop/src-tauri/target/release/bundle/msi/*.msi desktop/src-tauri/target/release/bundle/nsis/*.exe
+          - name: Linux x64 .deb and .AppImage
+            os: ubuntu-22.04
+            bundles: deb,appimage
+            pattern: desktop/src-tauri/target/release/bundle/deb/*.deb desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Linux build libraries
+        if: runner.os == 'Linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build unsigned bundles
+        env:
+          # macOS: ad-hoc signature ("-"), no Apple certificate. Nothing is notarized.
+          APPLE_SIGNING_IDENTITY: "-"
+        run: npm run tauri build -- --bundles ${{ matrix.bundles }}
+
+      - name: Write SHA-256 files
+        working-directory: .
+        run: |
+          shopt -s nullglob
+          files=(${{ matrix.pattern }})
+          if [ ${#files[@]} -eq 0 ]; then echo "no bundle produced"; exit 1; fi
+          for file in "${files[@]}"; do
+            if command -v sha256sum >/dev/null; then sha256sum "$file" > "$file.sha256"; else shasum -a 256 "$file" > "$file.sha256"; fi
+            cat "$file.sha256"
+          done
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mynotes-desktop-${{ matrix.os }}
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg*
+            desktop/src-tauri/target/release/bundle/msi/*.msi*
+            desktop/src-tauri/target/release/bundle/nsis/*.exe*
+            desktop/src-tauri/target/release/bundle/deb/*.deb*
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage*
+          if-no-files-found: error
+
+  smoke:
+    name: Real-app smoke (Linux, Xvfb, tauri-driver)
+    needs: rust
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install Linux libraries, Xvfb and WebKitWebDriver
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_PACKAGES xvfb webkit2gtk-driver
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --locked --version "$TAURI_DRIVER_VERSION"
+
+      - name: Install the backend and a fixture workspace
+        working-directory: .
+        run: |
+          uv sync --locked
+          echo "MYNOTES_DESKTOP_PYTHON=$GITHUB_WORKSPACE/.venv/bin/python" >> "$GITHUB_ENV"
+          echo "MYNOTES_HOME=$RUNNER_TEMP/mynotes-home" >> "$GITHUB_ENV"
+          echo "MYNOTES_WORKSPACE=$RUNNER_TEMP/mynotes-workspace" >> "$GITHUB_ENV"
+          MYNOTES_HOME="$RUNNER_TEMP/mynotes-home" uv run mynotes init --workspace "$RUNNER_TEMP/mynotes-workspace"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build the app (embedded frontend, debug symbols)
+        run: npm run tauri build -- --debug --no-bundle
+
+      - name: Headless self-check (supervisor, hello, capture.dashboard, shutdown)
+        run: |
+          ./src-tauri/target/debug/mynotes-desktop --self-check | tee "$RUNNER_TEMP/self-check.json"
+          python3 -c "import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r['ok'] else 1)" "$RUNNER_TEMP/self-check.json"
+
+      - name: Window smoke under Xvfb with one screenshot
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke"
+          xvfb-run --auto-servernum --server-args="-screen 0 1280x860x24" \
+            node tests/wdio/smoke.ts "$PWD/src-tauri/target/debug/mynotes-desktop" "$RUNNER_TEMP/smoke/main-window.png"
+
+      - name: No backend process left behind
+        run: |
+          sleep 2
+          if pgrep -af "mynotes serve"; then echo "a backend process survived the app"; exit 1; fi
+          echo "no mynotes serve process left"
+
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mynotes-desktop-smoke
+          path: |
+            ${{ runner.temp }}/self-check.json
+            ${{ runner.temp }}/smoke/*.png
+          if-no-files-found: warn

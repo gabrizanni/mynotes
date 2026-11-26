@@ -1,0 +1,31 @@
+.anchor {
+  position: relative;
+  display: inline-block;
+}
+
+.panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  min-width: 240px;
+  max-width: 360px;
+  padding: var(--space-4);
+  border-radius: 14px;
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e2), 0 0 0 1px var(--color-border-hairline);
+  color: var(--color-text-primary);
+  animation: enter var(--duration-base) var(--ease-standard);
+}
+
+.end {
+  left: auto;
+  right: 0;
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-enter-offset) * -1));
+  }
+}

@@ -1,0 +1,92 @@
+.wrap {
+  --thumb: 16px;
+  /* 0–1, set inline from the value. */
+  --fill: 0;
+  position: relative;
+  display: grid;
+  align-items: center;
+  height: 28px;
+}
+
+.disabled {
+  opacity: 0.45;
+}
+
+.track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset: 0;
+  background: var(--color-control-strong);
+  transform: scaleX(var(--fill));
+  transform-origin: left center;
+}
+
+/* The native input keeps the thumb, the focus ring and every key; its own track is hidden. */
+.input {
+  position: relative;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.input:disabled {
+  cursor: not-allowed;
+}
+
+.input::-webkit-slider-runnable-track {
+  height: 28px;
+  background: transparent;
+}
+
+.input::-moz-range-track {
+  background: transparent;
+}
+
+.input::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: calc((28px - var(--thumb)) / 2);
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-control-strong);
+  box-shadow: 0 0 0 3px var(--color-bg-card), var(--shadow-e1);
+  -webkit-appearance: none;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.input::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 0;
+  border-radius: 50%;
+  background: var(--color-control-strong);
+  box-shadow: 0 0 0 3px var(--color-bg-card), var(--shadow-e1);
+}
+
+.input:hover:not(:disabled)::-webkit-slider-thumb {
+  transform: scale(1.12);
+}
+
+.input:focus-visible {
+  outline-offset: 2px;
+  border-radius: var(--radius-input);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .input::-webkit-slider-thumb {
+    transition: none;
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "missing",
+    "provider": "claude",
+    "action": "Install claude, sign in, then recheck.",
+    "install_url": "https://code.claude.com/docs/en/setup"
+  }
+}

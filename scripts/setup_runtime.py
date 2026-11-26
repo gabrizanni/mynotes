@@ -271,6 +271,128 @@ def install_components(root: Path, manifest: dict, home: Path, emit) -> dict:
     return tools
 
 
+LINUX_PLATFORM = "linux-x86_64"
+LAUNCHER_MARKER = "# MyNotes managed launcher"
+
+
+def default_home() -> Path:
+    if sys.platform.startswith("linux"):
+        # Same default as mynotes.platform_paths; this script runs before MyNotes is installed.
+        return Path.home() / ".local/share/mynotes"
+    return Path.home() / "Library/Application Support/MyNotes"
+
+
+def install_linux_components(root: Path, manifest: dict, home: Path, emit) -> dict:
+    """Linux payloads use the system LibreOffice and a pinned, prebuilt whisper-cli."""
+    tools = {"schema_version": 1}
+    for number, component in enumerate(manifest["components"], start=1):
+        component_id = component["id"]
+        if not re.fullmatch(r"[a-z0-9-]+", component_id):
+            raise SetupError("Unsafe component identifier or version")
+        emit("components", f"Preparing {component_id}", number, len(manifest["components"]), component=component_id, phase="prepare")
+        if component.get("format") == "system":
+            continue  # Resolved with mynotes.office.find_soffice once the runtime exists.
+        if component.get("format") != "speech-models" or "files" not in component:
+            raise SetupError("Unknown component format")
+        # The same folder that `mynotes install-speech-model` and doctor use.
+        destination = home / "speech-models"
+        destination.mkdir(parents=True, exist_ok=True)
+        with (destination / ".asr-model-preparation.lock").open("a+") as model_lease:
+            fcntl.flock(model_lease, fcntl.LOCK_EX)
+            for file_number, spec in enumerate(component["files"], start=1):
+                component_download(spec, safe_relative(destination, spec["path"]), emit, component_id,
+                                   f"speech model file {file_number}/{len(component['files'])}")
+    source = root / "bin" / "whisper-cli"
+    if not source.is_file():
+        raise SetupError("Release is missing its precompiled speech engine")
+    engine_version = manifest.get("whispercpp_version", "bundled")
+    if not re.fullmatch(r"[a-zA-Z0-9._-]+", engine_version):
+        raise SetupError("Unsafe speech engine version")
+    # Different release builds of an upstream tag remain immutable for rollback.
+    binary_root = home / "tools" / "whispercpp" / f"{engine_version}-{digest(source)[:16]}"
+    binary_root.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, binary_root / "whisper-cli")
+    (binary_root / "whisper-cli").chmod(0o755)
+    tools["whispercpp"] = str(binary_root / "whisper-cli")
+    return tools
+
+
+def write_posix_launcher(launcher: Path, app_home: Path, home: Path, *, check: bool = False) -> None:
+    """A POSIX sh launcher with the same contract as the macOS zsh one."""
+    import shlex
+    if launcher.exists() or launcher.is_symlink():
+        try:
+            managed = LAUNCHER_MARKER in launcher.read_text()
+        except (OSError, UnicodeError):
+            managed = False
+        if not managed:
+            raise SetupError(f"Refusing to overwrite a launcher not created by MyNotes: {launcher}")
+    if check:
+        return
+    python = shlex.quote(str(app_home / "current/venv/bin/python"))
+    command = shlex.quote(str(app_home / "current/venv/bin/mynotes"))
+    read_workspace = shlex.quote('import json,os;print(json.load(open(os.path.join(os.environ["MYNOTES_HOME"],"setup.json")))["workspace"])')
+    content = ("#!/bin/sh\n" + LAUNCHER_MARKER + "\n"
+               + 'if [ -z "${MYNOTES_HOME:-}" ]; then MYNOTES_HOME=' + shlex.quote(str(home)) + "; export MYNOTES_HOME; fi\n"
+               + 'if [ -z "${MYNOTES_WORKSPACE:-}" ] && [ -f "$MYNOTES_HOME/setup.json" ]; then\n'
+               + "  MYNOTES_WORKSPACE=\"$(" + python + " -c " + read_workspace + ")\"; export MYNOTES_WORKSPACE\nfi\n"
+               + "exec " + command + ' "$@"\n')
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=launcher.parent, prefix=".mynotes-launcher-")
+    try:
+        with os.fdopen(fd, "w") as output:
+            output.write(content)
+        os.chmod(temporary, 0o755)
+        os.replace(temporary, launcher)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def select_version(app_home: Path, version_dir: Path) -> None:
+    """Point app/current at a version with one atomic rename."""
+    pointer = app_home / f".current-{os.getpid()}"
+    pointer.unlink(missing_ok=True)
+    pointer.symlink_to(version_dir)
+    os.replace(pointer, app_home / "current")
+
+
+def install_linux_application(root: Path, version_dir: Path, wheel: Path, environment: dict) -> None:
+    """uv venv plus hash-checked locked wheels; no zsh or shell profile edits."""
+    uv = root / "bin/uv" if (root / "bin/uv").is_file() else shutil.which("uv")
+    if not uv:
+        raise SetupError("uv is required. Use the Linux release payload, which bundles a pinned uv.")
+    cache = Path(os.environ.get("UV_CACHE_DIR", str(Path.home() / ".cache/mynotes/uv")))
+    uv_env = dict(environment, UV_CACHE_DIR=str(cache))
+    if version_dir.exists():
+        raise SetupError(f"Version directory already exists; preserving it: {version_dir}")
+    requirements = version_dir / "requirements-runtime.txt"
+    python = version_dir / "venv/bin/python"
+    version_dir.mkdir(parents=True)
+    try:
+        for command in (
+            [str(uv), "export", "--project", str(root), "--quiet", "--locked", "--no-dev", "--no-emit-project", "--output-file", str(requirements)],
+            [str(uv), "venv", "--quiet", "--python", environment.get("MYNOTES_PYTHON", sys.executable), str(version_dir / "venv")],
+            [str(uv), "pip", "install", "--quiet", "--python", str(python), "--require-hashes", "--no-deps", "-r", str(requirements)],
+            [str(uv), "pip", "install", "--quiet", "--python", str(python), "--no-deps", str(wheel)],
+        ):
+            subprocess.run(command, env=uv_env, check=True)
+        # The receipt comes last: only a complete version is reused on retry.
+        atomic_json(version_dir / "installation.json", {"schema_version": 1, "wheel_sha256": digest(wheel)})
+    except BaseException:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        raise
+
+
+def linux_word_renderer(executable: Path, manifest: dict, environment: dict) -> str:
+    probe = subprocess.run([str(executable), "-c", "from mynotes.office import find_soffice; print(find_soffice() or '')"],
+                           env=environment, check=True, capture_output=True, text=True)
+    soffice = (probe.stdout or "").strip()
+    if not soffice:
+        hint = next((c.get("install_hint") for c in manifest["components"] if c["id"] == "libreoffice"), None)
+        raise SetupError(hint or "Install LibreOffice Writer, then retry setup.")
+    return soffice
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-root", type=Path, required=True)
@@ -279,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--progress-file", type=Path)
     options = parser.parse_args(argv)
     root = options.release_root.resolve()
-    home = Path(os.environ.get("MYNOTES_HOME", str(Path.home() / "Library/Application Support/MyNotes"))).expanduser()
+    home = Path(os.environ.get("MYNOTES_HOME", str(default_home()))).expanduser()
     workspace = (options.workspace or home / "workspace").expanduser().resolve()
     progress = options.progress_file or home / "setup-progress.json"
     app_home = Path(os.environ.get("MYNOTES_APP_HOME", str(home / "app")))
@@ -306,6 +428,9 @@ def main(argv: list[str] | None = None) -> int:
         manifest = json.loads((root / "setup-components.json").read_text())
         if manifest.get("schema_version") != 1:
             raise SetupError("Unsupported setup component manifest")
+        linux = manifest.get("platform") == LINUX_PLATFORM
+        if linux and not sys.platform.startswith("linux"):
+            raise SetupError("This release payload is for Linux x86-64")
         # Check all packaged payloads before executing bundled code or copying engines.
         release = json.loads((root / "release-manifest.json").read_text())
         for relative, expected in release["files"].items():
@@ -330,9 +455,17 @@ def main(argv: list[str] | None = None) -> int:
                 receipt = {}
             if receipt.get("wheel_sha256") != digest(wheels[0]):
                 raise SetupError("An existing installation uses a different artifact with this version. Use a newer release; keep the installed version.")
-        tools = install_components(root, manifest, home, emit)
+        tools = (install_linux_components if linux else install_components)(root, manifest, home, emit)
         emit("installation", "Installing MyNotes and Capture")
-        if not (version_dir / "venv/bin/mynotes").is_file():
+        if linux:
+            write_posix_launcher(launcher, app_home, home, check=True)
+            if not (version_dir / "venv/bin/mynotes").is_file():
+                install_linux_application(root, version_dir, wheels[0], environment)
+            if not executable.is_file() or (app_home / "current").resolve() != version_dir.resolve():
+                select_version(app_home, version_dir)
+            write_posix_launcher(launcher, app_home, home)
+            tools["soffice"] = linux_word_renderer(executable, manifest, environment)
+        elif not (version_dir / "venv/bin/mynotes").is_file():
             subprocess.run(["/bin/zsh", str(root / "scripts/install-mynotes.sh")], env=environment, check=True)
         elif not executable.is_file() or (app_home / "current").resolve() != version_dir.resolve():
             subprocess.run(["/bin/zsh", str(root / "scripts/install-mynotes.sh"), "--rollback", version], env=environment, check=True)
@@ -354,12 +487,17 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(prepared.stdout, str) and prepared.stdout.strip():
             preferences_receipt = json.loads(prepared.stdout)
         emit("verification", "Testing local transcription and Word rendering. No AI provider call.")
-        subprocess.run([str(executable), "-c", "from mynotes.onboarding import verify_local_components; from mynotes.workspace import Workspace; import sys; verify_local_components(Workspace.from_value(sys.argv[1]))", str(workspace)], env=environment, check=True)
+        if linux:
+            sample = safe_relative(root, manifest.get("speech_sample", "samples/jfk.wav"))
+            subprocess.run([str(executable), "-c", "from mynotes.onboarding import verify_local_components; from mynotes.workspace import Workspace; from pathlib import Path; import sys; verify_local_components(Workspace.from_value(sys.argv[1]), Path(sys.argv[2]))", str(workspace), str(sample)], env=environment, check=True)
+        else:
+            subprocess.run([str(executable), "-c", "from mynotes.onboarding import verify_local_components; from mynotes.workspace import Workspace; import sys; verify_local_components(Workspace.from_value(sys.argv[1]))", str(workspace)], env=environment, check=True)
         verified_tools = json.loads((home / "tools.json").read_text())
         atomic_json(version_dir / "managed-tools.json", verified_tools)
         user_home = Path(os.environ.get("MYNOTES_USER_HOME", str(Path.home()))).expanduser()
         user_home.mkdir(parents=True, exist_ok=True)
-        ensure_shell_path(user_home, Path(os.environ.get("MYNOTES_PREFIX", str(Path.home() / ".local"))))
+        if not linux:
+            ensure_shell_path(user_home, Path(os.environ.get("MYNOTES_PREFIX", str(Path.home() / ".local"))))
         atomic_json(home / "setup.json", {"schema_version": 1, "workspace": str(workspace), "provider": options.provider, "version": version})
         emit("ready", "Components installed. Recheck your agent and open the chat.", 1, 1)
         return 0

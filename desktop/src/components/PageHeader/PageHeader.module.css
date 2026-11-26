@@ -1,0 +1,31 @@
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-10) 0 var(--space-6);
+}
+
+.text {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.title {
+  font: var(--text-h1);
+  letter-spacing: var(--tracking-serif);
+  color: var(--color-text-brand);
+}
+
+.subtitle {
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}

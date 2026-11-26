@@ -54,3 +54,12 @@ workspace/
 /backups/
 /evidence/
 /local-recovery/
+
+# MyNotes Desktop (Tauri) build, dependency and screenshot outputs
+/desktop/node_modules/
+/desktop/dist/
+/desktop/src-tauri/target/
+/desktop/src-tauri/gen/schemas/
+/desktop/tests/shots/
+/desktop/test-results/
+/desktop/playwright-report/

@@ -253,7 +253,10 @@ def test_corrupt_phase_and_edited_candidate_do_not_trigger_provider(tmp_path):
     workspace, _, selection = workspace_and_deck(tmp_path)
     adapter = Adapter()
     result = generate_batch(workspace, "OPS", [1, 2], selection=selection, budgets=VERIFIED, provider_adapter=adapter)
-    checkpoint = next(workspace.runs_dir.rglob("writing-*.json"))
+    # rglob order follows the filesystem (ext4 can list writing-started.json first);
+    # corrupt the phase checkpoint itself, never the start marker.
+    checkpoint = next(path for path in sorted(workspace.runs_dir.rglob("writing-*.json"))
+                      if path.name != "writing-started.json")
     original = checkpoint.read_bytes()
     checkpoint.write_text("{}")
     with pytest.raises(WorkflowError, match="damaged"):

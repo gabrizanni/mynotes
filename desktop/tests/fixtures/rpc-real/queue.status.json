@@ -1,0 +1,19 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "parallel": 1,
+    "paused": false,
+    "ui_open": true,
+    "jobs": [],
+    "wait_reason": null,
+    "activity_counts": {
+      "processing": 0,
+      "preparing": 0,
+      "saving": 0,
+      "stale": 0,
+      "queued": 0
+    },
+    "history_events": []
+  }
+}

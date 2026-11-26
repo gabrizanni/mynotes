@@ -1,0 +1,20 @@
+{
+  "id": "job-3d86df3f0a742707",
+  "method": "capture.sync",
+  "params": {
+    "ifDue": true
+  },
+  "state": "COMPLETED",
+  "pid": 117280,
+  "startedAt": 1795694122.2657313,
+  "finishedAt": 1795694122.5174928,
+  "exitCode": 0,
+  "result": {
+    "exitCode": 0,
+    "data": {
+      "sources": [],
+      "status": "SYNCED"
+    }
+  },
+  "cancelRequested": false
+}

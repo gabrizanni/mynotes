@@ -1,0 +1,30 @@
+{
+  "exitCode": 0,
+  "data": {
+    "default": {
+      "provider": null,
+      "model": "",
+      "effort": ""
+    },
+    "overrides": {
+      "chat": null,
+      "notes": null
+    },
+    "effective": {
+      "chat": {
+        "provider": null,
+        "model": "",
+        "effort": "",
+        "origin": "default"
+      },
+      "notes": {
+        "provider": null,
+        "model": "",
+        "effort": "",
+        "origin": "default"
+      }
+    },
+    "language": "en",
+    "revision": "79c9e538b90d6691208cd45172105564ca4fb53dc597e90e7f089d2dc1e6aecf"
+  }
+}

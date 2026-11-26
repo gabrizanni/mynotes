@@ -18,6 +18,7 @@ PUBLIC_FILES = (
     "CONTRIBUTING.md",
     ".github/pull_request_template.md",
     "docs/GIT_WORKFLOW.md",
+    "docs/LINUX.md",
     "docs/LIBRARY_COURSE_MANAGEMENT.md",
     "docs/SOFT_PROGRESS_POLICY.md",
     ".github/workflows/ci.yml",
@@ -49,6 +50,8 @@ PUBLIC_FILES = (
     "docs/NOTES_FLOW.md",
     "docs/CODEX_NOTES.md",
     "docs/MODEL-CATALOG.md",
+    "docs/SERVE.md",
+    "docs/PERFORMANCE.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",
     "examples/README.md",
@@ -67,9 +70,11 @@ PUBLIC_FILES = (
     "scripts/build_release.py",
     "scripts/build_setup.py",
     "scripts/build_dmg.py",
+    "scripts/build_linux_payload.py",
     "scripts/setup_runtime.py",
     "setup/Package.swift",
     "setup/components.lock.json",
+    "setup/components.linux.lock.json",
     "setup/argmax.Package.resolved",
     "setup/Resources/Info.plist",
     "setup/Resources/MyNotesLogo.png",
@@ -105,6 +110,8 @@ PUBLIC_FILES = (
     "scripts/check_public_tree.py",
     "scripts/install-mynotes.sh",
     "scripts/validate_word_pipeline.py",
+    "scripts/bench_backend.py",
+    "scripts/cli_snapshot.py",
     "THIRD_PARTY_NOTICES.md",
 )
 PUBLIC_DIRECTORIES = ("src", "tests")
@@ -229,13 +236,75 @@ def validate_windows_source(root: Path = ROOT) -> list[str]:
     return errors
 
 
+DESKTOP_SUFFIXES = {".ts", ".tsx", ".css", ".js", ".json", ".html", ".md", ".rs", ".toml", ".lock", ".txt"}
+# Bundled OFL fonts, generated app icons and the sidebar logo: binary, so their reviewed bytes
+# are pinned instead of scanned (random byte runs can match short private terms).
+DESKTOP_BINARY_SHA256 = {
+    "desktop/src-tauri/icons/32x32.png": "424e6971fcb7ee760604f20ebb904e70830706d6e917cfbae3d87a571a53cfbb",
+    "desktop/src-tauri/icons/128x128.png": "56e8e09ae6265c3bba76d88974675569cd819f6c983ed3c25997871ad8a980f9",
+    "desktop/src-tauri/icons/128x128@2x.png": "993b50997e1ca05c334175ab7a4cc9491c6b82638093c663ccdc80849587ffe4",
+    "desktop/src-tauri/icons/icon.png": "476d58d00cdb7c33e8d1e90fba36644d2571d978b2c97eeff93c8b63a380d81f",
+    "desktop/src-tauri/icons/icon.icns": "cee1447ed5cf4982ec9faa73544fdc2014d8611b583ce50076a4bdc6f17a9785",
+    "desktop/src-tauri/icons/icon.ico": "c1bb916d4ca3bf8d72a3dce8759150665307de5bcbd93e04289a5f0c5547c188",
+    "desktop/src/assets/brand/mynotes-logo-256.png": "993b50997e1ca05c334175ab7a4cc9491c6b82638093c663ccdc80849587ffe4",
+    "desktop/src/assets/fonts/eb-garamond/EBGaramond-Medium.woff2": "0adb3925217e1eb28effd7b651186e51a723d3447c9236a9babfd231a38febb7",
+    "desktop/src/assets/fonts/figtree/Figtree-Variable.woff2": "0d516b55d6e79be18423a00cf9d94ed77c1cad4ee4aeb40628b6bef4ef567830",
+    "desktop/src/assets/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2": "4ebab93f27e6db455f0508dde4a4d9051eb9e1749b6fcbe9a14be1ae28c05d3d",
+}
+DESKTOP_IGNORED_PARTS = {"node_modules", "target", "dist", "test-results", "playwright-report"}
+LOCKFILE_INTEGRITY = re.compile(r'"integrity":\s*"[^"]*"')
+
+
+def desktop_files(root: Path = ROOT) -> list[str]:
+    """Tracked plus not-yet-committed (but not ignored) files under desktop/."""
+    listed = subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "desktop/"], cwd=root
+    )
+    names = sorted(set(filter(None, listed.decode("utf-8").split("\0"))))
+    return [
+        name for name in names
+        if not DESKTOP_IGNORED_PARTS.intersection(Path(name).parts) and not name.startswith("desktop/tests/shots/")
+    ]
+
+
+def validate_desktop_source(root: Path = ROOT) -> list[str]:
+    """Audit the Tauri desktop sources (desktop/) without adding them to the macOS installer."""
+    private_profile = re.compile(r"[a-z]:[\\/]users[\\/]|/home/[a-z_][a-z0-9_.-]*/", re.IGNORECASE)
+    errors = []
+    for name in desktop_files(root):
+        path = root / name
+        if not path.is_file():
+            continue  # deleted in the working tree, nothing to publish
+        if name in DESKTOP_BINARY_SHA256 and not path.is_symlink():
+            if hashlib.sha256(path.read_bytes()).hexdigest() != DESKTOP_BINARY_SHA256[name]:
+                errors.append(f"changed desktop public asset: {name}")
+            continue
+        if path.is_symlink() or (path.suffix.lower() not in DESKTOP_SUFFIXES and path.name != ".gitignore"):
+            errors.append(f"unexpected desktop public artifact: {name}")
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            errors.append(f"unreadable desktop public source: {name}")
+            continue
+        if path.name == "package-lock.json":
+            # Base64 integrity hashes match short private terms at random; they carry no text.
+            content = LOCKFILE_INTEGRITY.sub('"integrity": ""', content)
+        if PRIVATE_REFERENCE.search(content) or private_profile.search(content):
+            errors.append(f"private reference in desktop public source: {name}")
+    return errors
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--windows-source", action="store_true")
+    parser.add_argument("--desktop-source", action="store_true")
     arguments = parser.parse_args()
     issues = validate()
     if arguments.windows_source:
         issues += validate_windows_source()
+    if arguments.desktop_source:
+        issues += validate_desktop_source()
     if issues:
         print("\n".join(issues), file=sys.stderr)
         raise SystemExit(1)

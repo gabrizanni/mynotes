@@ -1,0 +1,160 @@
+{
+  "exitCode": 0,
+  "data": {
+    "onboarding": {
+      "status": "complete",
+      "completed_groups": [
+        "paths",
+        "courses",
+        "style",
+        "providers"
+      ],
+      "next_group": null
+    },
+    "personal": {
+      "interface_language": "en",
+      "background": ""
+    },
+    "courses": [
+      {
+        "code": "STAT",
+        "name": "Statistics",
+        "notes_language": "en",
+        "kind": "quantitative",
+        "languages": {
+          "lesson": "en",
+          "notes": "en"
+        },
+        "assessment": "Written exam, 2 hours, exercises and short questions",
+        "difficult_topics": [
+          "Hypothesis testing",
+          "Confidence intervals"
+        ],
+        "context": "Exercises matter more than proofs.",
+        "publication": {
+          "mode": "automatic"
+        },
+        "folders": {
+          "materials": "~/Documents/MyNotes/Statistics/Slides",
+          "personal_notes": "~/Documents/MyNotes/Statistics",
+          "recordings": "~/Documents/MyNotes/Recordings"
+        },
+        "files": {
+          "personal_notes": "~/Documents/MyNotes/Statistics/Appunti personali.docx",
+          "handout": "~/Documents/MyNotes/Statistics/STAT_COURSE_NOTES.docx"
+        },
+        "lesson_sources": {
+          "STAT-L07": [
+            {
+              "path": "~/Documents/MyNotes/Statistics/Slides/Lecture 7 - Hypothesis testing.pdf",
+              "role": "lecture_material"
+            }
+          ],
+          "STAT-L06": [
+            {
+              "path": "~/Documents/MyNotes/Statistics/Slides/Lecture 6 - Sampling distributions.pdf",
+              "role": "lecture_material"
+            },
+            {
+              "path": "~/Documents/MyNotes/Statistics/Exercises/Problem set 3.pdf",
+              "role": "lecture_material"
+            }
+          ]
+        }
+      },
+      {
+        "code": "MICRO",
+        "name": "Microeconomics",
+        "notes_language": "en",
+        "kind": "theoretical",
+        "languages": {
+          "lesson": "en",
+          "notes": "en"
+        },
+        "assessment": "",
+        "difficult_topics": [
+          "Elasticity"
+        ],
+        "context": "",
+        "publication": {
+          "mode": "review"
+        },
+        "folders": {
+          "materials": "~/Documents/MyNotes/Microeconomics",
+          "personal_notes": "~/Documents/MyNotes/Microeconomics",
+          "recordings": ""
+        },
+        "files": {
+          "personal_notes": "~/Documents/MyNotes/Microeconomics/Appunti personali.docx",
+          "handout": "~/Documents/MyNotes/Microeconomics/MICRO_COURSE_NOTES.docx"
+        },
+        "lesson_sources": {}
+      },
+      {
+        "code": "CORPFIN",
+        "name": "Corporate Finance",
+        "notes_language": "en",
+        "kind": "cases",
+        "languages": {
+          "lesson": "en",
+          "notes": "en"
+        },
+        "assessment": "Case write-up and oral exam",
+        "difficult_topics": [],
+        "context": "",
+        "publication": {
+          "mode": "automatic"
+        },
+        "folders": {
+          "materials": "~/Documents/MyNotes/Corporate Finance",
+          "personal_notes": "~/Documents/MyNotes/Corporate Finance",
+          "recordings": ""
+        },
+        "files": {
+          "personal_notes": "~/Documents/MyNotes/Corporate Finance/Appunti personali.docx",
+          "handout": "~/Documents/MyNotes/Corporate Finance/CORPFIN_COURSE_NOTES.docx"
+        },
+        "lesson_sources": {}
+      },
+      {
+        "code": "DIRCOM",
+        "name": "Diritto commerciale",
+        "notes_language": "it",
+        "kind": "theoretical",
+        "languages": {
+          "lesson": "it",
+          "notes": "it"
+        },
+        "assessment": "Esame orale",
+        "difficult_topics": [
+          "Società di capitali"
+        ],
+        "context": "",
+        "publication": {
+          "mode": "automatic"
+        },
+        "folders": {
+          "materials": "~/Documents/MyNotes/Diritto commerciale",
+          "personal_notes": "~/Documents/MyNotes/Diritto commerciale",
+          "recordings": ""
+        },
+        "files": {
+          "personal_notes": "~/Documents/MyNotes/Diritto commerciale/Appunti personali.docx",
+          "handout": "~/Documents/MyNotes/Diritto commerciale/DIRCOM_COURSE_NOTES.docx"
+        },
+        "lesson_sources": {}
+      }
+    ],
+    "providers": {
+      "default": "claude",
+      "configured": {
+        "claude": {}
+      }
+    },
+    "paths": {
+      "recording_dirs": [
+        "~/Documents/MyNotes/Recordings"
+      ]
+    }
+  }
+}

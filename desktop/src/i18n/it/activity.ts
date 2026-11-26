@@ -1,0 +1,75 @@
+import type { Messages } from "../en";
+import { plural } from "../plural";
+
+export const activity: Messages["activity"] = {
+  title: "Attività",
+  inProgress: "In corso",
+  readyToTranscribe: "Pronte da trascrivere",
+  toCheck: "Da controllare",
+  history: "Cronologia",
+  notesJobs: "Lavori sugli appunti",
+  pauseAll: "Metti tutto in pausa",
+  resumeAll: "Riprendi tutto",
+  atTheSameTime: "In contemporanea",
+  atTheSameTimeHint: "Più lavori insieme sono più rapidi ma impegnano di più il computer.",
+  transcribeAll: "Trascrivi tutto",
+  clearWaiting: "Svuota l'attesa",
+  controls: "Coda di trascrizione",
+  summary: (transcribing: number, toCheck: number) => {
+    const parts: string[] = [];
+    if (transcribing > 0) parts.push(plural("it", transcribing, { one: "1 in trascrizione", other: `${transcribing} in trascrizione` }));
+    if (toCheck > 0) parts.push(`${toCheck} da controllare`);
+    return parts.length > 0 ? parts.join(" · ") : "Niente in attesa.";
+  },
+  paused: (waiting: number, finishing: number) => `In pausa · ${waiting} in attesa, ${finishing} in chiusura`,
+  pausedBody: "I lavori già avviati finiscono. Gli altri ti aspettano.",
+  count: (n: number) => String(n),
+  elapsed: (time: string) => `In trascrizione da ${time}`,
+  position: (n: number) => (n === 1 ? "Prossima in coda" : `Numero ${n} in coda`),
+  queued: "In attesa di un posto libero",
+  stopping: "In arresto. L'audio resta salvato.",
+  readyBody: "Non ancora trascritta.",
+  noCourse: "Senza corso",
+  reasons: {
+    failed: "Trascrizione interrotta. L'audio è salvato.",
+    interrupted: "Interrotta. Riprova riparte da dove si era fermata.",
+    review: "Lunghe parti in silenzio. Controlla l'audio e riprova.",
+    outdated: "L'audio è cambiato dopo la trascrizione.",
+    waiting: "L'audio non è ancora pronto. Forse è in salvataggio.",
+    archive: "Il salvataggio non è finito.",
+  },
+  historyDone: (time: string) => `Trascritta in ${time}`,
+  historyDoneShort: "Trascritta",
+  historyRemoved: "Tolta dalla coda. L'audio resta salvato.",
+  actions: {
+    remove: "Rimuovi",
+    cancel: "Interrompi",
+    retry: "Riprova",
+    restart: "Riprova da capo",
+    recover: "Recupera",
+    finish: "Completa il salvataggio",
+    more: (lesson: string) => `Altre azioni per ${lesson}`,
+    transcribe: "Trascrivi",
+  },
+  notes: {
+    started: (time: string) => `Avviato ${time}`,
+    finished: (time: string) => `Finito ${time}`,
+    open: "Apri la lezione",
+    stop: "Ferma",
+    stopped: "Il lavoro si sta fermando. I progressi sono salvati.",
+    empty: "Ancora nessun lavoro sugli appunti.",
+  },
+  done: {
+    paused: "Trascrizione in pausa. I lavori avviati finiscono.",
+    resumed: "Trascrizione ripresa.",
+    parallel: (n: number) => plural("it", n, { one: "Una registrazione alla volta.", other: `${n} registrazioni in contemporanea.` }),
+    enqueued: (n: number) => plural("it", n, { one: "1 registrazione aggiunta alla coda.", other: `${n} registrazioni aggiunte alla coda.` }),
+    cleared: "Registrazioni in attesa rimosse. L'audio resta salvato.",
+    action: "Fatto.",
+  },
+  failed: "Non è andata. Controlla che MyNotes sia attivo e riprova.",
+  empty: "Niente da trascrivere.",
+  emptyBody: "Le nuove registrazioni compaiono qui a fine lezione.",
+  importAudio: "Importa una registrazione",
+  loadError: "Impossibile leggere la coda di trascrizione. Riprova.",
+};

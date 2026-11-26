@@ -1,0 +1,119 @@
+{
+  "exitCode": 0,
+  "data": {
+    "courses": [
+      {
+        "aliases": [],
+        "assessment": "",
+        "code": "SYNTHETICSYS",
+        "context": "",
+        "context_setup": "pending",
+        "difficult_topics": [],
+        "files": {
+          "handout": "",
+          "personal_notes": ""
+        },
+        "files_explained": false,
+        "folders": {
+          "handout": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Handouts",
+          "materials": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Materials",
+          "personal_notes": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Personal Notes",
+          "recordings": "",
+          "syllabus": "",
+          "transcripts": ""
+        },
+        "instructors": [],
+        "kind": "mixed",
+        "languages": {
+          "lesson": "en",
+          "notes": "en"
+        },
+        "lesson_sources": {},
+        "modules": [],
+        "name": "Synthetic Systems",
+        "preferences": {
+          "persistent_instructions": []
+        },
+        "preparation": "",
+        "publication": {
+          "mode": "automatic"
+        },
+        "style": {},
+        "transcription": {
+          "accent": "",
+          "agreement_threshold": 0.72,
+          "diarization_engine": null,
+          "extra_pass_engine": null,
+          "extra_pass_model": "mlx-community/whisper-large-v3-mlx",
+          "language": "auto",
+          "primary_engine": "argmax",
+          "primary_model": "large-v3-v20240930_626MB",
+          "professor_reference": "",
+          "recovery_engine": "fluidaudio",
+          "recovery_model": "v2",
+          "secondary_engine": null,
+          "secondary_model": "v2",
+          "tools": {},
+          "verification_mode": "selective",
+          "vocabulary": []
+        },
+        "web_access": "disabled"
+      }
+    ],
+    "ingestion": {
+      "audio_extensions": [
+        ".m4a",
+        ".wav",
+        ".mp3",
+        ".caf"
+      ],
+      "stable_seconds": 90
+    },
+    "onboarding": {
+      "completed_groups": [],
+      "next_group": "personal",
+      "status": "not_started"
+    },
+    "paths": {
+      "recording_dirs": [
+        "/tmp/mynotes-contract/workspace/recordings/capture",
+        "/tmp/mynotes-contract/recordings"
+      ]
+    },
+    "personal": {
+      "institution": null,
+      "interface_language": "en",
+      "primary_goal": "understanding",
+      "study_period": null,
+      "study_program": null
+    },
+    "providers": {
+      "configured": {},
+      "default": null,
+      "quota_behavior": "pause_and_resume"
+    },
+    "style": {
+      "detail": {
+        "cases": "standard",
+        "code": "standard",
+        "derivations": "standard",
+        "exercises": "standard",
+        "formulas": "standard"
+      },
+      "freeform_preferences": "Word design: margins 1.5 cm on every side; built-in Heading 1 for lesson titles, Heading 2 for sections and Heading 3 for subsections; orange key terms use the character style Termine tecnico.",
+      "profile": {
+        "image_limit": null,
+        "image_policy": "essential",
+        "list_density": "balanced",
+        "question_count": 5,
+        "recap": true,
+        "recap_language": "it",
+        "slide_scope": "lecture",
+        "writing_style": "clear_study"
+      },
+      "quality": "standard",
+      "recap": true
+    },
+    "workspace_schema_version": 2
+  }
+}

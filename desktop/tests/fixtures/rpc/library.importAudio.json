@@ -1,0 +1,19 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "imported": [
+      {
+        "recording_id": "rimpstat1117",
+        "duplicate": false,
+        "name": "Statistics 17 Nov.m4a"
+      },
+      {
+        "recording_id": "rimpstatrev",
+        "duplicate": false,
+        "name": "Statistics review session.mp3"
+      }
+    ],
+    "message": null
+  }
+}

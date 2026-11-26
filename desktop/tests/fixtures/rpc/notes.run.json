@@ -1,0 +1,15 @@
+{
+  "jobId": "mock-notes",
+  "simulation": {
+    "note": "Mock only: how a simulated notes.run ends. outcome = final result.status; stopAt = stage where a paused or failed run stops; weights = relative stage lengths (times the stage duration).",
+    "outcome": "COMPLETED",
+    "stopAt": null,
+    "warnings": [],
+    "weights": [
+      0.3,
+      2.4,
+      0.6,
+      0.25
+    ]
+  }
+}

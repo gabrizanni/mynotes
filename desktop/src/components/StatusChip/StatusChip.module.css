@@ -1,0 +1,69 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px 0 8px;
+  border-radius: var(--radius-pill);
+  font: var(--text-caption);
+  white-space: nowrap;
+}
+
+.info {
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+.success {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+.warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+.danger,
+.live {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+.neutral {
+  background: var(--color-neutral-bg);
+  color: var(--color-neutral);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s var(--ease-standard) infinite;
+}
+
+.busy {
+  animation: spin 1.4s linear infinite;
+}
+
+/* Only spinner-type glyphs rotate; others stay still and the label carries the state. */
+.still {
+  animation: none;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot,
+  .busy {
+    animation: none;
+  }
+}

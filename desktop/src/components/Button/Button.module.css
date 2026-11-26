@@ -1,0 +1,130 @@
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: var(--control-height);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-button);
+  font: var(--text-button);
+  white-space: nowrap;
+  text-decoration: none;
+  user-select: none;
+  transition:
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.button:disabled {
+  opacity: 0.45;
+}
+
+.sm {
+  height: var(--control-height-sm);
+  padding: 0 var(--space-3);
+  gap: 6px;
+  border-radius: 10px;
+  font: var(--text-button-sm);
+}
+
+.full {
+  width: 100%;
+}
+
+/* Icon-only: square 40 px target (32 px small). */
+.icon {
+  width: var(--control-height);
+  padding: 0;
+}
+.icon.sm {
+  width: var(--control-height-sm);
+}
+
+/* Lavender fill, ink label, a lavender hairline so it holds on cream. `onInverse` is the same
+   button on the feature surface (kept as a name for compatibility). */
+.primary,
+.onInverse {
+  background: var(--color-action-primary);
+  border-color: var(--color-action-primary-line);
+  color: var(--color-action-primary-label);
+}
+.primary:hover:not(:disabled),
+.onInverse:hover:not(:disabled) {
+  background: var(--color-action-primary-hover);
+}
+.primary:active:not(:disabled),
+.onInverse:active:not(:disabled) {
+  background: var(--color-action-primary-pressed);
+}
+
+/* Cream secondary action. */
+.soft {
+  background: var(--color-action-soft);
+  color: var(--color-action-soft-label);
+}
+.soft:hover:not(:disabled) {
+  background: var(--color-action-soft-hover);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--color-text-primary);
+}
+.ghost:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+.ghost:active:not(:disabled) {
+  background: var(--color-bg-pressed);
+}
+
+.outline {
+  background: var(--color-bg-card);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-primary);
+}
+.outline:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.destructive {
+  background: var(--color-danger);
+  color: var(--color-on-danger);
+}
+.destructive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 88%, var(--color-text-primary));
+}
+
+.ghostOnInverse {
+  background: transparent;
+  color: var(--color-text-on-inverse);
+}
+.ghostOnInverse:hover:not(:disabled) {
+  background: var(--color-on-inverse-hover);
+}
+
+.spinner {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button:active:not(:disabled) {
+    transform: none;
+  }
+  .spinner {
+    animation: none;
+  }
+}

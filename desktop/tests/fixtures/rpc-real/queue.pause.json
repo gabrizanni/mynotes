@@ -1,0 +1,9 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "PAUSED",
+    "parallel": 1,
+    "paused": true,
+    "message": "Coda in pausa: i lavori in attesa sono conservati; quelli già avviati termineranno."
+  }
+}

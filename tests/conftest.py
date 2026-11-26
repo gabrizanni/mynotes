@@ -12,3 +12,15 @@ def ready_argmax():
         (path/'merges.txt').write_text('# fixture\na b\n')
         return path
     return create
+
+
+@pytest.fixture(autouse=True)
+def reference_transcription_defaults(request, monkeypatch):
+    """Pipeline fixtures use the macOS reference engines on every host.
+
+    Linux course defaults (whisper.cpp) are covered by tests marked
+    ``linux_defaults``, which opt out of this pin.
+    """
+    if request.node.get_closest_marker("linux_defaults") is None:
+        from mynotes import configuration
+        monkeypatch.setattr(configuration, "is_linux", lambda: False)

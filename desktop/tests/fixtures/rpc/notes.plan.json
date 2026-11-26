@@ -1,0 +1,16 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "READY",
+    "lessons": [
+      {
+        "lecture_id": "STAT-L07",
+        "transcript": true,
+        "slides": [
+          "Lecture 7 - Hypothesis testing.pdf"
+        ],
+        "notebook_section": "Lezione 7"
+      }
+    ]
+  }
+}
