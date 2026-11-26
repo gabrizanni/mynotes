@@ -15,11 +15,26 @@ const HOME_PATHS: ReadonlyArray<[RegExp, string]> = [
   [/\b[A-Za-z]:\\[A-Z][A-Za-z]+\\[^\\\s"'`]+/g, "~"],
 ];
 
-/** Keep the scheme and host, drop the path and query (private calendar tokens live there). */
-const URLS = /\b(https?|webcal):\/\/([^/\s"'`?#]+)[^\s"'`]*/gi;
+/** Any http(s) or webcal link, up to whitespace, a quote or an angle bracket. */
+const URLS = /\b(?:https?|webcal):\/\/[^\s"'`<>]+/gi;
+
+/**
+ * Keep only the scheme and host of a link. Userinfo (`user:secret@`), port, path, query and
+ * fragment are dropped: private calendar tokens live in the path or the userinfo. A link the
+ * URL parser rejects is removed entirely.
+ */
+export function redactUrl(link: string): string {
+  try {
+    const url = new URL(link);
+    if (!url.hostname) return "[url removed]";
+    return `${url.protocol}//${url.hostname}/…`;
+  } catch {
+    return "[url removed]";
+  }
+}
 
 export function redactText(text: string): string {
-  let out = text.replace(URLS, (_match, scheme: string, host: string) => `${scheme}://${host}/…`);
+  let out = text.replace(URLS, (match) => redactUrl(match));
   for (const [pattern, replacement] of HOME_PATHS) out = out.replace(pattern, replacement);
   return out;
 }

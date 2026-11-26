@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildReport, redactText, sortedChecks } from "./diagnostics";
+import { buildReport, redactText, redactUrl, sortedChecks } from "./diagnostics";
 
 const SAMPLE_HOME = ["", "home", "student", "Documents", "MyNotes"].join("/");
 
@@ -17,6 +17,21 @@ describe("Copy report redaction", () => {
   it("keeps only the host of calendar links", () => {
     expect(redactText("https://calendar.google.com/calendar/ical/private-abc123/basic.ics")).toBe("https://calendar.google.com/…");
     expect(redactText("webcal://timetable.example.edu/feed?token=secret")).toBe("webcal://timetable.example.edu/…");
+  });
+
+  it("drops userinfo, with or without a password", () => {
+    expect(redactText("https://user:secret@calendar.example/feed.ics")).toBe("https://calendar.example/…");
+    expect(redactText("https://token123@calendar.example/feed.ics")).toBe("https://calendar.example/…");
+    expect(redactText("webcal://user:secret@timetable.example.edu:8443/f.ics")).toBe("webcal://timetable.example.edu/…");
+    expect(redactText("see https://user:secret@calendar.example/x")).not.toMatch(/user|secret/);
+  });
+
+  it("handles uppercase schemes, quoted links and broken links", () => {
+    expect(redactText("HTTPS://Calendar.Example/ical/private-abc/basic.ics")).toBe("https://calendar.example/…");
+    expect(redactText('{"url": "webcal://cal.example.org/feed?token=abc"}')).toBe('{"url": "webcal://cal.example.org/…"}');
+    expect(redactText("'https://cal.example.org/a#frag'")).toBe("'https://cal.example.org/…'");
+    expect(redactText("https://[broken/feed")).toBe("[url removed]");
+    expect(redactUrl("https://exa mple.org")).toBe("[url removed]");
   });
 
   it("builds a JSON report with versions, checks and redacted calendars", () => {
