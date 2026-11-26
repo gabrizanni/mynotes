@@ -11,9 +11,10 @@
   box-shadow: none;
 }
 
+/* Feature surface: a light panel with a hairline (no dark blocks). */
 .inverse {
   background: var(--color-bg-inverse);
-  box-shadow: none;
+  box-shadow: 0 0 0 1px var(--color-on-inverse-line);
   color: var(--color-text-on-inverse);
 }
 

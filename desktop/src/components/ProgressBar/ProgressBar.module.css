@@ -31,7 +31,7 @@
 .fill {
   height: 100%;
   border-radius: inherit;
-  background: var(--color-action-primary);
+  background: var(--color-control-strong);
   transform-origin: left center;
   transition: transform var(--duration-base) var(--ease-standard);
 }
@@ -46,5 +46,5 @@
   background: var(--color-on-inverse-line);
 }
 .inverse .fill {
-  background: var(--color-text-on-inverse);
+  background: var(--color-control-strong);
 }

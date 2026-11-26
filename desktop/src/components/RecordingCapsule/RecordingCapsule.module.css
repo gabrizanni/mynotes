@@ -39,7 +39,7 @@
 }
 
 .time {
-  font: var(--text-mono);
+  font: var(--text-time);
   font-variant-numeric: tabular-nums;
 }
 
@@ -98,7 +98,7 @@
 }
 
 .action:hover {
-  background: var(--color-on-inverse-fill);
+  background: var(--color-capsule-hover-strong);
 }
 
 .stop {

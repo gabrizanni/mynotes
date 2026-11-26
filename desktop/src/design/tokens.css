@@ -1,78 +1,96 @@
 /*
- * MyNotes Desktop design tokens. Values come from docs/UX-SPEC.md §4; contrast ratios are
- * noted where the spec measured them. Components read only these custom properties: no raw
- * hex values outside this file.
+ * MyNotes Desktop design tokens. Values and measured contrast live in docs/DESIGN-TOKENS.md;
+ * src/design/contrast.test.ts recomputes every text/background pair and fails below WCAG AA.
+ * Components read only these custom properties: no raw hex values outside this file.
+ *
+ * Direction (UX-SPEC §4): light, paper-like and calm. Pale cream canvas, deeper cream for the
+ * sidebar and sunken areas, near-white cards, warm ink, one lavender primary action per
+ * screen. Depth comes from cream-on-cream layering and hairlines; shadows are kept for
+ * overlays. The deep MyNotes blue survives only as link color and in the logo tile; the coral
+ * bookmark is the single brand ornament.
+ *
+ * "Inverse" tokens keep their names for compatibility but no longer invert anything: they
+ * describe the feature surface (Today hero, `Card variant="inverse"`), a light panel with a
+ * hairline in both themes.
  *
  * Theme: light by default, dark when the OS asks for it, unless <html data-theme> overrides.
  * The dark block is written twice on purpose (OS-follow and manual override) because
- * light-dark() is missing from older WebKitGTK builds that Tauri uses on Linux.
+ * light-dark() is missing from older WebKitGTK builds that Tauri uses on Linux; a unit test
+ * keeps the two copies identical.
  */
 
 :root {
   color-scheme: light;
 
   /* Surfaces */
-  --color-bg-canvas: #fff8ed; /* Paper */
-  --color-bg-sunken: #f6ecdc; /* sidebar */
-  --color-bg-card: #fffdf8; /* cards, inputs */
-  --color-bg-emphasis: #efe3cf; /* deep cream */
-  --color-bg-inverse: #163b66; /* hero, dark panel */
-  --color-bg-hover: rgba(19, 35, 58, 0.05);
-  --color-bg-pressed: rgba(19, 35, 58, 0.09);
-  --color-scrim: rgba(19, 35, 58, 0.36);
+  --color-bg-canvas: #fcfbf5; /* Paper: pale cream, light and airy */
+  --color-bg-sunken: #f4f2e7; /* sidebar, wells, gallery stages */
+  --color-bg-card: #fffffc; /* cards, inputs: near-white */
+  --color-bg-emphasis: #edeadc; /* deep cream: skeletons, secondary panels */
+  --color-bg-inverse: #f3f0e2; /* feature surface (hero): deeper cream with a hairline */
+  --color-bg-hover: rgba(27, 26, 23, 0.05);
+  --color-bg-pressed: rgba(27, 26, 23, 0.09);
+  --color-scrim: rgba(27, 26, 15, 0.36);
 
   /* Text */
-  --color-text-primary: #13233a; /* 14.97 on canvas */
-  --color-text-brand: #163b66; /* serif headings, 10.75 */
-  --color-text-muted: #5b6472; /* 5.67 canvas, 4.72 emphasis */
-  --color-text-on-inverse: #fff8ed; /* 10.75 */
-  --color-text-on-inverse-muted: #c9d6e6;
-  --color-link-on-inverse: #8cc8ff; /* 6.38 */
-  --color-on-inverse-hover: rgba(255, 248, 237, 0.1);
-  --color-on-inverse-fill: rgba(255, 248, 237, 0.12);
-  --color-on-inverse-line: rgba(255, 248, 237, 0.16);
+  --color-text-primary: #1b1a17; /* warm ink */
+  --color-text-brand: #1b1a17; /* serif headings: ink, never blue */
+  --color-text-muted: #67645c; /* warm grey */
+  --color-link: #163b66; /* MyNotes blue: links only */
+  --color-text-on-inverse: #1b1a17;
+  --color-text-on-inverse-muted: #67645c;
+  --color-link-on-inverse: #163b66;
+  --color-on-inverse-hover: rgba(27, 26, 23, 0.05);
+  --color-on-inverse-fill: rgba(27, 26, 23, 0.06);
+  --color-on-inverse-line: rgba(27, 26, 23, 0.1);
 
   /* Actions */
-  --color-action-primary: #163b66;
-  --color-action-primary-label: #fff8ed; /* 10.75 */
-  --color-action-primary-hover: #1e4a7e;
-  --color-action-primary-pressed: #102d4f;
-  --color-action-soft: #dde8f6; /* selected nav, user bubble */
-  --color-action-soft-hover: #d0def1;
-  --color-action-soft-label: #163b66; /* 9.15 */
+  --color-action-primary: #f0d7ff; /* lavender */
+  --color-action-primary-label: #1b1a17;
+  --color-action-primary-hover: #e8c6ff;
+  --color-action-primary-pressed: #dfb6fb;
+  --color-action-primary-line: #d6b2ef; /* hairline that holds the fill on cream */
+  --color-action-soft: #edeadc; /* cream: soft buttons, selected nav, tags */
+  --color-action-soft-hover: #e5e1d1;
+  --color-action-soft-label: #1b1a17;
+
+  /* Strong controls: toggle on, progress fill, current step, checkbox accent. */
+  --color-control-strong: #1b1a17;
+  --color-on-control-strong: #fcfbf5;
 
   /* Lines and focus */
-  --color-focus: #2b67c6; /* 5.16, 2 px ring with 2 px offset */
-  --color-focus-on-inverse: #8cc8ff;
-  --color-border-hairline: rgba(19, 35, 58, 0.12);
-  --color-border-strong: rgba(19, 35, 58, 0.24);
-  --color-border-input: #9c8e78; /* 3.04, meets WCAG 1.4.11 */
+  --color-focus: #2d62ff; /* 2 px ring with 2 px offset */
+  --color-focus-on-inverse: #2d62ff;
+  --color-border-hairline: rgba(27, 26, 23, 0.1);
+  --color-border-strong: rgba(27, 26, 23, 0.2);
+  --color-border-input: #8b877b; /* meets WCAG 1.4.11 */
 
   /* Meaning (text on tint) */
-  --color-success: #1d6b40;
-  --color-success-bg: #e2f2e7; /* 5.6 */
-  --color-warning: #8a4b00;
-  --color-warning-bg: #fbebcf; /* 5.79 */
-  --color-danger: #b42318; /* also recording */
-  --color-danger-bg: #fbe4e0; /* 5.41 */
-  --color-on-danger: #fff8ed; /* label on a filled danger button, 5.9 */
-  --color-info: #163b66;
-  --color-info-bg: #dde8f6;
-  --color-neutral: #5b6472;
-  --color-neutral-bg: rgba(19, 35, 58, 0.06);
+  --color-success: #1c6a3b;
+  --color-success-bg: #e2f1e2;
+  --color-warning: #7c4805;
+  --color-warning-bg: #f8ebcc;
+  --color-danger: #ad2a1e; /* also the live recording dot and label */
+  --color-danger-bg: #f9e6e0;
+  --color-on-danger: #fffffc; /* label on a filled danger button */
+  --color-info: #234f87;
+  --color-info-bg: #e5ecf5;
+  --color-neutral: #67645c;
+  --color-neutral-bg: rgba(27, 26, 23, 0.06);
 
-  /* Ornament only: never text, never the only state cue (2.53 on canvas). */
+  /* Ornament only: never text, never the only state cue. */
   --color-accent-coral: #f47b62;
 
-  /* The recording capsule stays dark in both themes. */
-  --color-capsule-bg: #13233a;
-  --color-capsule-text: #fff8ed; /* 14.97 */
-  --color-capsule-muted: #b9c4d3;
-  --color-capsule-rec: #ff8f80;
-  --color-capsule-success: #6cd39a;
-  --color-capsule-warning: #f2b84b;
-  --color-capsule-link: #8cc8ff;
-  --color-capsule-hover: rgba(255, 248, 237, 0.1);
+  /* The recording capsule stays dark in both themes, like a floating dictation bar. */
+  --color-capsule-bg: #1b1a17;
+  --color-capsule-text: #fcfbf5;
+  --color-capsule-muted: #bdb8ab;
+  --color-capsule-rec: #ff8a78;
+  --color-capsule-success: #7fd6a0;
+  --color-capsule-warning: #f2bc5a;
+  --color-capsule-link: #8fb0ff;
+  --color-capsule-hover: rgba(252, 251, 245, 0.1);
+  --color-capsule-hover-strong: rgba(252, 251, 245, 0.16);
 
   /* Type */
   --font-serif: "EB Garamond", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
@@ -89,11 +107,16 @@
   --text-small: 400 13px/20px var(--font-sans);
   --text-label: 600 13px/16px var(--font-sans);
   --text-caption: 500 12px/16px var(--font-sans); /* 12 px is the floor */
+  /* Times and durations: Figtree with tabular figures (pair with font-variant-numeric). */
+  --text-time: 500 13px/20px var(--font-sans);
+  --text-time-sm: 400 12px/16px var(--font-sans);
+  /* Diagnostics only (raw commands, logs, Copy details): never decorative. */
   --text-mono: 400 13px/20px var(--font-mono);
   /* Derived: button labels sit between Body and Heading. */
   --text-button: 600 15px/20px var(--font-sans);
   --text-button-sm: 600 13px/16px var(--font-sans);
-  --tracking-serif: -0.01em;
+  --tracking-serif: -0.015em;
+  --tracking-display: -0.02em;
 
   /* Spacing (4 px base) */
   --space-1: 4px;
@@ -115,11 +138,11 @@
   --radius-dialog: 20px;
   --radius-pill: 999px;
 
-  /* Elevation */
+  /* Elevation: surfaces are flat (hairline only); warm shadows are for overlays. */
   --shadow-e0: 0 0 0 1px var(--color-border-hairline);
-  --shadow-e1: 0 1px 2px rgba(60, 40, 10, 0.06);
-  --shadow-e2: 0 8px 24px rgba(60, 40, 10, 0.12);
-  --shadow-e3: 0 16px 48px rgba(22, 59, 102, 0.18);
+  --shadow-e1: 0 0 0 0 transparent; /* cards: flat, the hairline does the work */
+  --shadow-e2: 0 12px 24px -8px rgba(26, 26, 15, 0.1), 0 4px 8px -2px rgba(26, 26, 15, 0.05); /* menus, popovers */
+  --shadow-e3: 0 24px 48px -12px rgba(26, 26, 15, 0.16), 0 8px 16px -4px rgba(26, 26, 15, 0.06); /* dialogs, capsule */
 
   /* Motion */
   --duration-fast: 150ms; /* hover, press */
@@ -141,96 +164,116 @@
   --row-height: 48px;
 }
 
+/*
+ * Dark: a warm, calm counterpart, not an inversion. Warm near-black canvas, cards lifted one
+ * step, cream ink, the same lavender primary (slightly softer) with a dark ink label.
+ */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --color-bg-canvas: #0e1726;
-    --color-bg-sunken: #0a121d;
-    --color-bg-card: #16233a;
-    --color-bg-emphasis: #1d2d47;
-    --color-bg-inverse: #24406a;
-    --color-bg-hover: rgba(243, 235, 221, 0.06);
-    --color-bg-pressed: rgba(243, 235, 221, 0.1);
-    --color-scrim: rgba(3, 8, 15, 0.6);
-    --color-text-primary: #f3ebdd; /* 15.17 */
-    --color-text-brand: #f3ebdd;
-    --color-text-muted: #a7b1c0; /* 8.29 */
-    --color-text-on-inverse: #f3ebdd;
-    --color-text-on-inverse-muted: #c2cddc;
-    --color-link-on-inverse: #a9d6ff;
-    --color-action-primary: #8cc8ff;
-    --color-action-primary-label: #0b1a2c; /* 9.86 */
-    --color-action-primary-hover: #a9d6ff;
-    --color-action-primary-pressed: #78b6f0;
-    --color-action-soft: rgba(140, 200, 255, 0.14);
-    --color-action-soft-hover: rgba(140, 200, 255, 0.2);
-    --color-action-soft-label: #b9dcff;
-    --color-focus: #8cc8ff;
-    --color-focus-on-inverse: #a9d6ff;
-    --color-border-hairline: rgba(243, 235, 221, 0.1);
-    --color-border-strong: rgba(243, 235, 221, 0.2);
-    --color-border-input: #5b6e8c; /* 3.47 */
-    --color-success: #6cd39a;
-    --color-success-bg: rgba(108, 211, 154, 0.14);
-    --color-warning: #f2b84b;
-    --color-warning-bg: rgba(242, 184, 75, 0.14);
+    --color-bg-canvas: #171614;
+    --color-bg-sunken: #12110f;
+    --color-bg-card: #201f1c;
+    --color-bg-emphasis: #2a2825;
+    --color-bg-inverse: #201f1c;
+    --color-bg-hover: rgba(242, 239, 230, 0.06);
+    --color-bg-pressed: rgba(242, 239, 230, 0.1);
+    --color-scrim: rgba(8, 7, 5, 0.62);
+    --color-text-primary: #f2efe6;
+    --color-text-brand: #f2efe6;
+    --color-text-muted: #aca79b;
+    --color-link: #a9c4f5;
+    --color-text-on-inverse: #f2efe6;
+    --color-text-on-inverse-muted: #aca79b;
+    --color-link-on-inverse: #a9c4f5;
+    --color-on-inverse-hover: rgba(242, 239, 230, 0.06);
+    --color-on-inverse-fill: rgba(242, 239, 230, 0.08);
+    --color-on-inverse-line: rgba(242, 239, 230, 0.1);
+    --color-action-primary: #e2c8fa;
+    --color-action-primary-label: #1b1a17;
+    --color-action-primary-hover: #ead6fc;
+    --color-action-primary-pressed: #d5b4f4;
+    --color-action-primary-line: #e2c8fa;
+    --color-action-soft: #2c2a26;
+    --color-action-soft-hover: #35332e;
+    --color-action-soft-label: #f2efe6;
+    --color-control-strong: #e2c8fa;
+    --color-on-control-strong: #1b1a17;
+    --color-focus: #7c9dff;
+    --color-focus-on-inverse: #7c9dff;
+    --color-border-hairline: rgba(242, 239, 230, 0.1);
+    --color-border-strong: rgba(242, 239, 230, 0.2);
+    --color-border-input: #7b776d;
+    --color-success: #7fd6a0;
+    --color-success-bg: rgba(127, 214, 160, 0.14);
+    --color-warning: #f2bc5a;
+    --color-warning-bg: rgba(242, 188, 90, 0.14);
     --color-danger: #ff8f80;
     --color-danger-bg: rgba(255, 143, 128, 0.14);
-    --color-on-danger: #2a0d0a;
-    --color-info: #8cc8ff;
-    --color-info-bg: rgba(140, 200, 255, 0.14);
-    --color-neutral: #a7b1c0;
-    --color-neutral-bg: rgba(243, 235, 221, 0.08);
+    --color-on-danger: #1b1a17;
+    --color-info: #a9c4f5;
+    --color-info-bg: rgba(169, 196, 245, 0.14);
+    --color-neutral: #aca79b;
+    --color-neutral-bg: rgba(242, 239, 230, 0.08);
+    --color-capsule-bg: #2a2825;
     --shadow-e0: 0 0 0 1px var(--color-border-hairline);
-    --shadow-e1: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.4);
-    --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 48px rgba(0, 0, 0, 0.4);
+    --shadow-e1: 0 0 0 0 transparent;
+    --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px -8px rgba(0, 0, 0, 0.5);
+    --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 48px -12px rgba(0, 0, 0, 0.6);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg-canvas: #0e1726;
-  --color-bg-sunken: #0a121d;
-  --color-bg-card: #16233a;
-  --color-bg-emphasis: #1d2d47;
-  --color-bg-inverse: #24406a;
-  --color-bg-hover: rgba(243, 235, 221, 0.06);
-  --color-bg-pressed: rgba(243, 235, 221, 0.1);
-  --color-scrim: rgba(3, 8, 15, 0.6);
-  --color-text-primary: #f3ebdd;
-  --color-text-brand: #f3ebdd;
-  --color-text-muted: #a7b1c0;
-  --color-text-on-inverse: #f3ebdd;
-  --color-text-on-inverse-muted: #c2cddc;
-  --color-link-on-inverse: #a9d6ff;
-  --color-action-primary: #8cc8ff;
-  --color-action-primary-label: #0b1a2c;
-  --color-action-primary-hover: #a9d6ff;
-  --color-action-primary-pressed: #78b6f0;
-  --color-action-soft: rgba(140, 200, 255, 0.14);
-  --color-action-soft-hover: rgba(140, 200, 255, 0.2);
-  --color-action-soft-label: #b9dcff;
-  --color-focus: #8cc8ff;
-  --color-focus-on-inverse: #a9d6ff;
-  --color-border-hairline: rgba(243, 235, 221, 0.1);
-  --color-border-strong: rgba(243, 235, 221, 0.2);
-  --color-border-input: #5b6e8c;
-  --color-success: #6cd39a;
-  --color-success-bg: rgba(108, 211, 154, 0.14);
-  --color-warning: #f2b84b;
-  --color-warning-bg: rgba(242, 184, 75, 0.14);
+  --color-bg-canvas: #171614;
+  --color-bg-sunken: #12110f;
+  --color-bg-card: #201f1c;
+  --color-bg-emphasis: #2a2825;
+  --color-bg-inverse: #201f1c;
+  --color-bg-hover: rgba(242, 239, 230, 0.06);
+  --color-bg-pressed: rgba(242, 239, 230, 0.1);
+  --color-scrim: rgba(8, 7, 5, 0.62);
+  --color-text-primary: #f2efe6;
+  --color-text-brand: #f2efe6;
+  --color-text-muted: #aca79b;
+  --color-link: #a9c4f5;
+  --color-text-on-inverse: #f2efe6;
+  --color-text-on-inverse-muted: #aca79b;
+  --color-link-on-inverse: #a9c4f5;
+  --color-on-inverse-hover: rgba(242, 239, 230, 0.06);
+  --color-on-inverse-fill: rgba(242, 239, 230, 0.08);
+  --color-on-inverse-line: rgba(242, 239, 230, 0.1);
+  --color-action-primary: #e2c8fa;
+  --color-action-primary-label: #1b1a17;
+  --color-action-primary-hover: #ead6fc;
+  --color-action-primary-pressed: #d5b4f4;
+  --color-action-primary-line: #e2c8fa;
+  --color-action-soft: #2c2a26;
+  --color-action-soft-hover: #35332e;
+  --color-action-soft-label: #f2efe6;
+  --color-control-strong: #e2c8fa;
+  --color-on-control-strong: #1b1a17;
+  --color-focus: #7c9dff;
+  --color-focus-on-inverse: #7c9dff;
+  --color-border-hairline: rgba(242, 239, 230, 0.1);
+  --color-border-strong: rgba(242, 239, 230, 0.2);
+  --color-border-input: #7b776d;
+  --color-success: #7fd6a0;
+  --color-success-bg: rgba(127, 214, 160, 0.14);
+  --color-warning: #f2bc5a;
+  --color-warning-bg: rgba(242, 188, 90, 0.14);
   --color-danger: #ff8f80;
   --color-danger-bg: rgba(255, 143, 128, 0.14);
-  --color-on-danger: #2a0d0a;
-  --color-info: #8cc8ff;
-  --color-info-bg: rgba(140, 200, 255, 0.14);
-  --color-neutral: #a7b1c0;
-  --color-neutral-bg: rgba(243, 235, 221, 0.08);
+  --color-on-danger: #1b1a17;
+  --color-info: #a9c4f5;
+  --color-info-bg: rgba(169, 196, 245, 0.14);
+  --color-neutral: #aca79b;
+  --color-neutral-bg: rgba(242, 239, 230, 0.08);
+  --color-capsule-bg: #2a2825;
   --shadow-e0: 0 0 0 1px var(--color-border-hairline);
-  --shadow-e1: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.4);
-  --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 48px rgba(0, 0, 0, 0.4);
+  --shadow-e1: 0 0 0 0 transparent;
+  --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 12px 24px -8px rgba(0, 0, 0, 0.5);
+  --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 24px 48px -12px rgba(0, 0, 0, 0.6);
 }
 
 /* Reduced motion: opacity-only at 150 ms, no movement, no pulsing (see base.css). */

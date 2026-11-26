@@ -48,17 +48,24 @@
   width: var(--control-height-sm);
 }
 
-.primary {
+/* Lavender fill, ink label, a lavender hairline so it holds on cream. `onInverse` is the same
+   button on the feature surface (kept as a name for compatibility). */
+.primary,
+.onInverse {
   background: var(--color-action-primary);
+  border-color: var(--color-action-primary-line);
   color: var(--color-action-primary-label);
 }
-.primary:hover:not(:disabled) {
+.primary:hover:not(:disabled),
+.onInverse:hover:not(:disabled) {
   background: var(--color-action-primary-hover);
 }
-.primary:active:not(:disabled) {
+.primary:active:not(:disabled),
+.onInverse:active:not(:disabled) {
   background: var(--color-action-primary-pressed);
 }
 
+/* Cream secondary action. */
 .soft {
   background: var(--color-action-soft);
   color: var(--color-action-soft-label);
@@ -93,15 +100,6 @@
 }
 .destructive:hover:not(:disabled) {
   background: color-mix(in srgb, var(--color-danger) 88%, var(--color-text-primary));
-}
-
-/* On the deep-blue hero: Paper fill, deep-blue label. */
-.onInverse {
-  background: var(--color-text-on-inverse);
-  color: var(--color-bg-inverse);
-}
-.onInverse:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-text-on-inverse) 86%, var(--color-link-on-inverse));
 }
 
 .ghostOnInverse {

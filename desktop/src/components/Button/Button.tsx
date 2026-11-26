@@ -9,7 +9,7 @@ export type ButtonVariant = "primary" | "soft" | "ghost" | "outline" | "destruct
 export type ButtonSize = "md" | "sm";
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> {
-  /** One `primary` per screen (UX-SPEC). Use `onInverse` for the primary on the hero. */
+  /** One `primary` per screen (UX-SPEC). `onInverse` renders the same lavender primary on the feature surface. */
   variant?: ButtonVariant;
   size?: ButtonSize;
   icon?: LucideIcon;

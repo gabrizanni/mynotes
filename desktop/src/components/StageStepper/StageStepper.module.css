@@ -51,7 +51,7 @@
 }
 
 .current .marker {
-  box-shadow: inset 0 0 0 2px var(--color-action-primary);
+  box-shadow: inset 0 0 0 2px var(--color-control-strong);
 }
 
 .current .marker::after {
@@ -59,7 +59,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--color-action-primary);
+  background: var(--color-control-strong);
   animation: breathe 1.8s var(--ease-standard) infinite;
 }
 
@@ -78,7 +78,7 @@
 }
 
 .time {
-  font: var(--text-mono);
+  font: var(--text-time);
   font-variant-numeric: tabular-nums;
   color: var(--color-text-muted);
 }

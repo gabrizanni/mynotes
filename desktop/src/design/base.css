@@ -70,8 +70,8 @@ a {
 }
 
 ::selection {
-  background: var(--color-action-soft);
-  color: var(--color-text-primary);
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-label);
 }
 
 /* One focus style everywhere: 2 px ring, 2 px offset, keyboard only. */
@@ -84,7 +84,7 @@ a {
   outline-offset: 2px;
 }
 
-/* Inverse surfaces (hero, dark panel) swap the ring to a light blue that stays visible. */
+/* Feature surfaces (hero, inverse card) can tune the ring through their own token. */
 .surface-inverse {
   --color-focus: var(--color-focus-on-inverse);
 }
@@ -99,6 +99,7 @@ a {
 }
 .type-display {
   font: var(--text-display);
+  letter-spacing: var(--tracking-display);
 }
 .type-h1 {
   font: var(--text-h1);
@@ -124,6 +125,12 @@ a {
 .type-caption {
   font: var(--text-caption);
 }
+/* Times and durations: Figtree, tabular figures. */
+.type-time {
+  font: var(--text-time);
+  font-variant-numeric: tabular-nums;
+}
+/* Diagnostics only (raw commands, logs). */
 .type-mono {
   font: var(--text-mono);
   font-variant-numeric: tabular-nums;

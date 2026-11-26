@@ -31,12 +31,6 @@
   color: var(--color-neutral);
 }
 
-/* On the deep-blue hero every tone reads as Paper text on a translucent fill. */
-.onInverse {
-  background: var(--color-on-inverse-fill);
-  color: var(--color-text-on-inverse);
-}
-
 .dot {
   width: 8px;
   height: 8px;
@@ -44,10 +38,6 @@
   border-radius: 50%;
   background: currentColor;
   animation: pulse 1.6s var(--ease-standard) infinite;
-}
-
-.onInverse .dot {
-  background: var(--color-capsule-rec);
 }
 
 .busy {
