@@ -29,7 +29,7 @@ import {
 import type { Messages } from "../../i18n";
 
 export type ChipTone = "info" | "success" | "warning" | "danger" | "neutral" | "live";
-export type ChipKind = "notes" | "transcription" | "recording" | "assistant";
+export type ChipKind = "notes" | "transcription" | "recording" | "assistant" | "check";
 
 export interface ChipSpec {
   tone: ChipTone;
@@ -97,7 +97,16 @@ const assistant: Record<string, ChipSpec> = {
   ready: { tone: "success", icon: CircleCheck, label: (t) => t.assistant.ready },
 };
 
-const tables: Record<ChipKind, Record<string, ChipSpec>> = { notes, transcription, recording, assistant };
+/** `doctor --json` check statuses (Settings › Check setup). Workspace screens. */
+const check: Record<string, ChipSpec> = {
+  ready: { tone: "success", icon: CircleCheck, label: (t) => t.check.ready },
+  missing: { tone: "warning", icon: AlertTriangle, label: (t) => t.check.missing },
+  optional: { tone: "neutral", icon: CircleDashed, label: (t) => t.check.optional },
+  incompatible: { tone: "warning", icon: AlertTriangle, label: (t) => t.check.incompatible },
+  login_required: { tone: "warning", icon: KeyRound, label: (t) => t.check.signIn },
+};
+
+const tables: Record<ChipKind, Record<string, ChipSpec>> = { notes, transcription, recording, assistant, check };
 
 const unknown: ChipSpec = { tone: "neutral", icon: CircleHelp, label: (t) => t.unknown };
 

@@ -18,9 +18,11 @@ export interface DialogProps {
   role?: "dialog" | "alertdialog";
   /** Render the panel in place, without a modal layer (component gallery, docs). */
   inline?: boolean;
+  /** `lg` (640 px) for forms with a row per item, such as the audio import. */
+  size?: "md" | "lg";
 }
 
-export function Dialog({ open, onClose, title, description, children, footer, role = "dialog", inline = false }: DialogProps) {
+export function Dialog({ open, onClose, title, description, children, footer, role = "dialog", inline = false, size = "md" }: DialogProps) {
   const t = useT();
   const ref = useNativeDialog(open && !inline, onClose);
   const titleId = useId();
@@ -44,7 +46,7 @@ export function Dialog({ open, onClose, title, description, children, footer, ro
   );
   if (inline) {
     return (
-      <div role={role} aria-labelledby={titleId} className={`${styles.dialog} ${styles.inlinePanel}`}>
+      <div role={role} aria-labelledby={titleId} className={`${styles.dialog} ${size === "lg" ? styles.lg : ""} ${styles.inlinePanel}`}>
         {inner}
       </div>
     );
@@ -55,7 +57,7 @@ export function Dialog({ open, onClose, title, description, children, footer, ro
       role={role}
       aria-labelledby={titleId}
       aria-describedby={description ? descriptionId : undefined}
-      className={styles.dialog}
+      className={size === "lg" ? `${styles.dialog} ${styles.lg}` : styles.dialog}
       onClick={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}

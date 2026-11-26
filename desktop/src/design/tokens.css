@@ -242,3 +242,38 @@
     --motion-enter-scale: 1;
   }
 }
+
+/*
+ * BEGIN workspace screens: neutral course tints for calendar blocks and library rows.
+ * Decorative only: the course name is always written on the tint (never the only cue).
+ * Text on every light tint stays above 12:1; dark tints are 12% washes under #F3EBDD text.
+ */
+:root {
+  --color-course-1: #e7eaeb; /* mist */
+  --color-course-2: #e3ece3; /* sage */
+  --color-course-3: #f1e7d3; /* sand */
+  --color-course-4: #ebe4ee; /* heather */
+  --color-course-5: #e8e5df; /* stone */
+  --color-course-6: #f0e2db; /* clay */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-course-1: rgba(200, 215, 220, 0.11);
+    --color-course-2: rgba(130, 205, 160, 0.12);
+    --color-course-3: rgba(242, 200, 120, 0.12);
+    --color-course-4: rgba(205, 165, 225, 0.12);
+    --color-course-5: rgba(243, 235, 221, 0.09);
+    --color-course-6: rgba(255, 165, 135, 0.12);
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-course-1: rgba(200, 215, 220, 0.11);
+  --color-course-2: rgba(130, 205, 160, 0.12);
+  --color-course-3: rgba(242, 200, 120, 0.12);
+  --color-course-4: rgba(205, 165, 225, 0.12);
+  --color-course-5: rgba(243, 235, 221, 0.09);
+  --color-course-6: rgba(255, 165, 135, 0.12);
+}
+/* END workspace screens */

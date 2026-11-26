@@ -36,6 +36,15 @@
   background: var(--color-bg-pressed);
 }
 
+.selected,
+.selected.interactive:hover {
+  background: var(--color-action-soft);
+}
+
+.selected .title {
+  color: var(--color-action-soft-label);
+}
+
 .interactive:focus-visible {
   outline-offset: -2px;
   border-radius: var(--radius-input);

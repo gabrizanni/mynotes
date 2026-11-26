@@ -58,11 +58,14 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   icon: LucideIcon;
   variant?: Extract<ButtonVariant, "ghost" | "soft" | "outline" | "ghostOnInverse">;
   size?: ButtonSize;
+  /** Lets menus and popovers return focus to the trigger. */
+  ref?: Ref<HTMLButtonElement>;
 }
 
-export function IconButton({ label, icon, variant = "ghost", size = "md", className, type = "button", ...rest }: IconButtonProps) {
+export function IconButton({ label, icon, variant = "ghost", size = "md", className, type = "button", ref, ...rest }: IconButtonProps) {
   return (
     <button
+      ref={ref}
       type={type}
       aria-label={label}
       title={label}

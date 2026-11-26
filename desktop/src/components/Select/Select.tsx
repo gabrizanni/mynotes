@@ -19,12 +19,14 @@ export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement
   error?: ReactNode;
   optional?: boolean;
   id?: string;
+  /** Screen-reader-only label when a row already names the control (import destinations). */
+  hideLabel?: boolean;
 }
 
 /** Native <select> for full keyboard and screen-reader support, with the app's skin. */
-export function Select({ label, options, hint, error, optional, id, className, ...rest }: SelectProps) {
+export function Select({ label, options, hint, error, optional, id, className, hideLabel, ...rest }: SelectProps) {
   return (
-    <Field label={label} hint={hint} error={error} optional={optional} id={id}>
+    <Field label={label} hint={hint} error={error} optional={optional} id={id} hideLabel={hideLabel}>
       {(a11y) => (
         <div className={styles.wrap}>
           <select className={cx(fieldStyles.control, styles.select, className)} {...a11y} {...rest}>
