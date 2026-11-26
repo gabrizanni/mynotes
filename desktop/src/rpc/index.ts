@@ -5,6 +5,7 @@
  * (Vite dev server, Playwright, Vitest). Mock options come from the URL:
  *   ?scenario=recording   fixture scenario (tests/fixtures/rpc/<method>@recording.json)
  *   ?simulate=0           freeze timers (screenshots)
+ *   ?stage=40             seconds per simulated notes stage (feat/desktop-lessons, flow shots)
  */
 import { createRpcClient, type RpcClient } from "./client";
 import { createTauriTransport, isTauriRuntime } from "./transports/tauri";
@@ -17,6 +18,8 @@ export interface ConnectOptions {
   transport?: "tauri" | "mock";
   scenario?: string;
   simulate?: boolean;
+  /** feat/desktop-lessons: milliseconds per simulated notes stage. */
+  stageMs?: number;
 }
 
 export function mockOptionsFromUrl(search: string): Required<Pick<ConnectOptions, "scenario" | "simulate">> {
@@ -33,7 +36,10 @@ export async function connect(options: ConnectOptions = {}): Promise<RpcClient> 
   // Loaded on demand so fixtures never ship inside the Tauri bundle's main chunk.
   const { createMockTransport } = await import("./transports/mock");
   const fromUrl = typeof window === "undefined" ? { scenario: "default", simulate: true } : mockOptionsFromUrl(window.location.search);
+  // feat/desktop-lessons: `?stage=` slows the simulated notes job for the flow screenshots.
+  const stageSeconds = typeof window === "undefined" ? Number.NaN : Number(new URLSearchParams(window.location.search).get("stage"));
+  const stageMs = options.stageMs ?? (Number.isFinite(stageSeconds) && stageSeconds > 0 ? stageSeconds * 1000 : undefined);
   return createRpcClient(
-    createMockTransport({ scenario: options.scenario ?? fromUrl.scenario, simulate: options.simulate ?? fromUrl.simulate }),
+    createMockTransport({ scenario: options.scenario ?? fromUrl.scenario, simulate: options.simulate ?? fromUrl.simulate, ...(stageMs ? { stageMs } : {}) }),
   );
 }

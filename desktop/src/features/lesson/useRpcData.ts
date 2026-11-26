@@ -25,7 +25,7 @@ export function useRpcData<M extends MethodName>(method: M, params: MethodParams
     const sameKey = lastKey.current === key;
     lastKey.current = key;
     setState((previous) => (sameKey && previous.status === "ready" ? previous : { status: "loading", data: null }));
-    const call = rpc.call as (name: M, args: MethodParams<M>) => Promise<MethodResult<M>>;
+    const call = (name: M, args: MethodParams<M>) => (rpc.call as (this: void, name: M, args: MethodParams<M>) => Promise<MethodResult<M>>)(name, args);
     call(method, current).then(
       (data) => {
         if (alive) setState({ status: "ready", data });

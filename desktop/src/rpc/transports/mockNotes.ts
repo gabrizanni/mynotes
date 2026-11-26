@@ -78,12 +78,13 @@ export function createNotesMock(ctx: NotesMockContext) {
   };
   const finish = (job: JsonObject, state: string, exitCode: number, result: JsonObject | null) => {
     const at = iso(ctx.now());
+    const jobId = typeof job.jobId === "string" ? job.jobId : "";
     job.state = state;
     job.finishedAt = at;
     job.exitCode = exitCode;
     job.result = result;
     if (state === "succeeded") job.stage = "DONE";
-    ctx.emit("job.finished", { jobId: String(job.jobId), state, exitCode, result, at });
+    ctx.emit("job.finished", { jobId, state, exitCode, result, at });
   };
 
   const runNotes = (params: unknown): Json => {

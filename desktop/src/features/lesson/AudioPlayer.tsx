@@ -110,7 +110,7 @@ export function AudioPlayer({ recording, alternatives, state, dispatch, onUseFor
           hideLabel
           value={`${state.rate}`}
           onChange={(value) => dispatch({ type: "rate", rate: Number(value) as Rate })}
-          options={RATES.map((rate) => ({ value: `${rate}` as `${Rate}`, label: `${rate}×` }))}
+          options={RATES.map((rate) => ({ value: `${rate}` as const, label: `${rate}×` }))}
         />
         <p id={hintId} className={styles.playerHint}>
           {preview ? p.preview : p.keys}

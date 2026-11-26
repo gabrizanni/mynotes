@@ -43,13 +43,7 @@ export async function copyText(text: string): Promise<boolean> {
 
 /** The provider is always named when data leaves the computer (UX-SPEC §5). */
 export function assistantName(provider: string | null | undefined): string {
-  switch (provider) {
-    case "codex":
-      return "Codex";
-    case "agy":
-    case "antigravity":
-      return "Antigravity";
-    default:
-      return "Claude Code";
-  }
+  if (provider === "codex") return "Codex";
+  if (provider === "agy" || provider === "antigravity") return "Antigravity";
+  return "Claude Code";
 }

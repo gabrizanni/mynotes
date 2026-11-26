@@ -15,10 +15,12 @@ export interface DropZoneProps {
   multiple?: boolean;
   onFiles: (files: File[]) => void;
   buttonLabel?: string;
+  /** Replaces the file picker, e.g. with a native folder dialog (feat/desktop-lessons). */
+  onChoose?: () => void;
 }
 
 /** Drag-and-drop target whose keyboard path is the "Choose files" button. */
-export function DropZone({ title, body, accept, multiple = true, onFiles, buttonLabel }: DropZoneProps) {
+export function DropZone({ title, body, accept, multiple = true, onFiles, buttonLabel, onChoose }: DropZoneProps) {
   const t = useT();
   const [active, setActive] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -52,7 +54,7 @@ export function DropZone({ title, body, accept, multiple = true, onFiles, button
       </p>
       {body && <p className={styles.body}>{body}</p>}
       <div className={styles.actions}>
-        <Button variant="outline" size="sm" onClick={() => input.current?.click()}>
+        <Button variant="outline" size="sm" onClick={() => (onChoose ? onChoose() : input.current?.click())}>
           {buttonLabel ?? t.common.chooseFiles}
         </Button>
       </div>
