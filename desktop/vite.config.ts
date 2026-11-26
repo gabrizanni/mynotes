@@ -16,6 +16,8 @@ export default defineConfig({
     target: "es2022",
     sourcemap: false,
     assetsInlineLimit: 0,
+    // Two pages: the main window and the recording capsule (src-tauri/src/capsule.rs).
+    rollupOptions: { input: { main: "index.html", capsule: "capsule.html" } },
   },
   test: {
     environment: "jsdom",
