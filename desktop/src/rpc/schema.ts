@@ -856,8 +856,19 @@ export const methods = {
   /** One lesson from an audio file, or from a transcript (`transcript` skips speech recognition). */
   "lesson.process": {
     params: z
-      .object({ lectureId: str, audio: str.optional(), transcript: str.optional(), provider: providerIdSchema.optional(), quality: str.optional(), instructions: str.optional() })
-      .refine((value) => !(value.audio && value.transcript), { message: "Give an audio file or a transcript, not both" }),
+      .object({
+        lectureId: str,
+        audio: str.optional(),
+        transcript: str.optional(),
+        /** `notes --resume BATCH` for this lesson; `regenerate`: a new generation after a failed attempt. */
+        resume: str.optional(),
+        regenerate: z.boolean().optional(),
+        provider: providerIdSchema.optional(),
+        quality: str.optional(),
+        instructions: str.optional(),
+      })
+      .refine((value) => !(value.audio && value.transcript), { message: "Give an audio file or a transcript, not both" })
+      .refine((value) => !(value.resume && (value.regenerate || value.audio || value.transcript)), { message: "Resume continues a saved notes job alone" }),
     result: jobRefSchema,
   },
   "notes.plan": { params: notesParams, result: cli(notesPlanSchema) },

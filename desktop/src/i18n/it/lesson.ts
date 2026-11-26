@@ -213,6 +213,7 @@ export const lesson: Messages["lesson"] = {
     needsReview: "Serve un controllo. Il lavoro è salvato.",
     askAssistant: "Chiedi all'assistente",
     copyDetails: "Copia i dettagli",
+    tryAgain: "Riprova",
     copied: "Dettagli copiati.",
     copyError: "I dettagli non sono stati copiati.",
     openInWord: "Apri in Word",

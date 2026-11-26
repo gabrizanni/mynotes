@@ -212,6 +212,7 @@ export const lesson = {
     needsReview: "This needs a closer look. Your work is saved.",
     askAssistant: "Ask the assistant",
     copyDetails: "Copy details",
+    tryAgain: "Try again",
     copied: "Details copied.",
     copyError: "Details couldn't be copied.",
     openInWord: "Open in Word",

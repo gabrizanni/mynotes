@@ -166,7 +166,7 @@ export function GenerateSheet({ open, onClose, courseCode, lectureIds, initialJo
     }
   }
 
-  const needsTranscript: Outcome = { kind: "needsTranscript", status: "NEEDS_TRANSCRIPT", tone: "warning", fix: "transcribe", secondary: null, resumable: false };
+  const needsTranscript: Outcome = { kind: "needsTranscript", status: "NEEDS_TRANSCRIPT", tone: "warning", fix: "transcribe", secondary: null, resumable: false, retry: false };
   const outcomeArgs: OutcomeArgs | null =
     view.view === "outcome" || (view.view === "setup" && missing.length > 0)
       ? {
@@ -404,7 +404,7 @@ interface OutcomeArgs {
   numbers: readonly number[];
   options: GenerateOptions;
   onClose: () => void;
-  onRun: (params: ReturnType<typeof runParams> & { resume?: string }) => Promise<void>;
+  onRun: (params: ReturnType<typeof runParams> & { resume?: string; regenerate?: boolean }) => Promise<void>;
   openFile: (path: string) => void;
 }
 
@@ -461,7 +461,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
     onClose();
   };
 
-  const run = async (fix: Outcome["fix"] | "approve" | "copyDetails" | "resume" | "undo") => {
+  const run = async (fix: Outcome["fix"] | "approve" | "copyDetails" | "resume" | "undo" | "tryAgain") => {
     switch (fix) {
       case "undo":
         undoLastUpdate({ rpc, actions, t, course: courseCode });
@@ -474,6 +474,10 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
         return;
       case "resume":
         if (job?.batchId) await onRun({ ...runParams(courseCode, numbers, options), resume: job.batchId });
+        return;
+      case "tryAgain":
+        // A new generation; the server keeps the earlier attempts (`notes --regenerate`).
+        await onRun({ ...runParams(courseCode, numbers, options), regenerate: true });
         return;
       case "signIn":
         actions.ui.navigate({ name: "settings", section: "assistant" });
@@ -607,6 +611,11 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
       {secondary && secondaryLabel && (secondary !== "resume" || outcome.resumable) && (
         <Button variant="soft" icon={secondary === "undo" ? Undo2 : undefined} onClick={() => void run(secondary)}>
           {secondaryLabel}
+        </Button>
+      )}
+      {outcome.retry && (
+        <Button variant="soft" disabled={busy} onClick={() => void run("tryAgain")}>
+          {o.tryAgain}
         </Button>
       )}
       {canResume && !(outcome.kind === "needsTranscript" && transcribing) && (

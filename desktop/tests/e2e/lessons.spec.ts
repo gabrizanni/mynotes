@@ -42,6 +42,16 @@ test("Approve & update Word publishes through a job, then confirms", async ({ pa
   await expect(page.getByText("Word couldn't be updated. Close it in Word and try again.")).toHaveCount(0);
 });
 
+test("Try again starts a new generation after a run that needs a closer look", async ({ page }) => {
+  await page.goto("/?lang=en&scenario=notes-review&stage=1#/lessons/STAT-L06");
+  await page.getByRole("button", { name: "See details" }).click();
+  const dialog = sheet(page);
+  await expect(dialog.getByRole("button", { name: "Copy details" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Try again" }).click();
+  await expect(dialog.getByRole("list", { name: "Notes progress" })).toBeVisible();
+  await expect(dialog.getByText("Lesson 6 is in your course notes.")).toBeVisible({ timeout: 10_000 });
+});
+
 test("a paused job says why, keeps progress and resumes to the end", async ({ page }) => {
   await page.goto("/?lang=en&scenario=notes-quota&stage=1#/lessons/STAT-L06");
   await page.getByRole("button", { name: "See details" }).click();

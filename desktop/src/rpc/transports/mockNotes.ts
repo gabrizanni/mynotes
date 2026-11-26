@@ -5,7 +5,7 @@
  * - `notes.run` starts a job and walks it through CHECKING → GENERATING → BUILDING_WORD →
  *   UPDATING_WORD with `job.progress`, then `job.finished`. How it ends comes from the fixture
  *   `notes.run.json` › `simulation` (`outcome`, `stopAt`, `warnings`), patched per scenario.
- *   `resume` continues a paused batch and always completes.
+ *   `resume` continues a paused batch and `regenerate` starts a new one; both always complete.
  * - `job.cancel` stops a running job (`cancelled`, progress kept, batch resumable).
  * - `transcription.run` transcribes for a while, then adds the transcript to the library.
  * - `notes.plan` and `library.transcript` answer for the lessons actually asked.
@@ -80,7 +80,8 @@ export function createNotesMock(ctx: NotesMockContext) {
     job.lastProgress = { jobId, stage: STAGES[0], at: iso(ctx.now()), batch_id: batch };
     later(jobId, ctx.latencyMs + 1, () => ctx.jobs.progress(job, STAGES[0], { batch_id: batch }));
     const fixture = simulation();
-    const plan = str(request.resume) ? { ...fixture, outcome: "COMPLETED", stopAt: null, warnings: [] } : fixture;
+    // A resume, or an explicit new generation (`regenerate`, "Try again"), runs to the end.
+    const plan = str(request.resume) || request.regenerate === true ? { ...fixture, outcome: "COMPLETED", stopAt: null, warnings: [] } : fixture;
     const stopIndex = plan.stopAt ? STAGES.findIndex((stage) => stage === plan.stopAt) : -1;
     const lastStage = stopIndex >= 0 ? stopIndex : STAGES.length - 1;
     // `weights` stretch stages relative to each other (writing takes longest), times stageMs.

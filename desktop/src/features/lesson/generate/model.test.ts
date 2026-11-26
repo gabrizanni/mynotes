@@ -55,6 +55,16 @@ describe("outcome mapping", () => {
     expect(outcome).toMatchObject({ kind, fix, tone, status });
   });
 
+  it("offers Try again (a new generation) where a rerun or resume can be refused", () => {
+    for (const status of ["NEEDS_REVIEW", "STOPPED", "PAUSED_NETWORK", "PAUSED_SLEEP", "SOMETHING_NEW"]) {
+      expect(outcomeOf(finished("failed", status))?.retry, status).toBe(true);
+    }
+    expect(outcomeOf(finished("failed", null))?.retry).toBe(true);
+    for (const status of ["COMPLETED", "AWAITING_APPROVAL", "PAUSED_QUOTA", "PAUSED_AUTH", "NEEDS_TRANSCRIPT", "PERSONAL_CONTENT_CONFLICT"]) {
+      expect(outcomeOf(finished("failed", status))?.retry, status).toBe(false);
+    }
+  });
+
   it("covers every status of the outcome table", () => {
     expect(OUTCOME_STATUSES.sort()).toEqual(
       [

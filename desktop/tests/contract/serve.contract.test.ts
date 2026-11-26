@@ -440,6 +440,16 @@ describe("mynotes serve contract (protocol 1)", () => {
       const { data } = await rpc.call("library.transcript", { lectureId });
       expect(data).toMatchObject({ path, text: "Lesson two, from a text file.\n" });
     }, 120_000);
+
+    it("lesson.process: regenerate reaches the notes step; resume with regenerate is refused", async () => {
+      const lectureId = `${courseCode}-L02`;
+      const finished = await untilJobFinished(rpc, () => rpc.call("lesson.process", { lectureId, regenerate: true }), 120_000);
+      // The real CLI accepted --regenerate (no usage error) and stopped where notes need an agent.
+      expect(finished).toMatchObject({ state: "FAILED", error: { code: RpcCode.CliError } });
+      expect((finished?.error as { message?: string } | undefined)?.message).toMatch(/^No provider is selected/);
+      const raw = await transport.request("lesson.process", { lectureId, resume: "batch-x", regenerate: true }).catch((error: unknown) => error);
+      expect(raw).toMatchObject({ code: RpcCode.InvalidParams, message: "Give at most one of: resume, regenerate" });
+    }, 120_000);
   });
 
   it("seeded a workspace with a course and a finished job", () => {

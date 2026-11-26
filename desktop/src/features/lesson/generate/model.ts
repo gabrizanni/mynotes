@@ -44,9 +44,14 @@ export interface Outcome {
   secondary: OutcomeSecondary;
   /** Progress is kept and `--resume BATCH` finishes the same notes job. */
   resumable: boolean;
+  /**
+   * "Try again": a new generation (`regenerate`) that keeps earlier attempts. After a failed paid
+   * writing attempt, a plain rerun or a resume is refused by the server; this is the way out.
+   */
+  retry: boolean;
 }
 
-type OutcomeSpec = Omit<Outcome, "status" | "resumable"> & { resumable?: boolean };
+type OutcomeSpec = Omit<Outcome, "status" | "resumable" | "retry"> & { resumable?: boolean; retry?: boolean };
 
 const OUTCOMES: Record<string, OutcomeSpec> = {
   COMPLETED: { kind: "completed", tone: "success", fix: "openWord", secondary: "undo" },
@@ -54,12 +59,12 @@ const OUTCOMES: Record<string, OutcomeSpec> = {
   NEEDS_TRANSCRIPT: { kind: "needsTranscript", tone: "warning", fix: "transcribe", secondary: null },
   PAUSED_QUOTA: { kind: "pausedQuota", tone: "warning", fix: "resume", secondary: null, resumable: true },
   PAUSED_AUTH: { kind: "pausedAuth", tone: "warning", fix: "signIn", secondary: "resume", resumable: true },
-  PAUSED_NETWORK: { kind: "pausedNetwork", tone: "warning", fix: "resume", secondary: null, resumable: true },
-  PAUSED_SLEEP: { kind: "pausedSleep", tone: "warning", fix: "resume", secondary: null, resumable: true },
+  PAUSED_NETWORK: { kind: "pausedNetwork", tone: "warning", fix: "resume", secondary: null, resumable: true, retry: true },
+  PAUSED_SLEEP: { kind: "pausedSleep", tone: "warning", fix: "resume", secondary: null, resumable: true, retry: true },
   AWAITING_APPROVAL: { kind: "awaitingApproval", tone: "warning", fix: "openPreview", secondary: "approve" },
   PERSONAL_CONTENT_CONFLICT: { kind: "conflict", tone: "danger", fix: "askAssistant", secondary: null },
-  NEEDS_REVIEW: { kind: "needsReview", tone: "danger", fix: "askAssistant", secondary: "copyDetails" },
-  STOPPED: { kind: "needsReview", tone: "danger", fix: "askAssistant", secondary: "copyDetails" },
+  NEEDS_REVIEW: { kind: "needsReview", tone: "danger", fix: "askAssistant", secondary: "copyDetails", retry: true },
+  STOPPED: { kind: "needsReview", tone: "danger", fix: "askAssistant", secondary: "copyDetails", retry: true },
 };
 
 /** Statuses the outcome table covers, for tests and the gallery. */
@@ -69,7 +74,7 @@ function spec(status: string, resumable: boolean): Outcome {
   const found = OUTCOMES[status] ?? OUTCOMES.NEEDS_REVIEW;
   if (!found) throw new Error("outcome table is empty");
   const known = OUTCOMES[status] !== undefined;
-  return { ...found, status: known ? status : "NEEDS_REVIEW", resumable: (found.resumable ?? false) && resumable };
+  return { ...found, status: known ? status : "NEEDS_REVIEW", resumable: (found.resumable ?? false) && resumable, retry: found.retry ?? false };
 }
 
 /**
@@ -81,7 +86,7 @@ export function outcomeOf(job: Job): Outcome | null {
   const hasBatch = Boolean(job.batchId);
   const status = job.result?.status;
   if (job.state === "cancelled" && (!status || status === "STOPPED")) {
-    return { kind: "cancelled", status: "CANCELLED", tone: "warning", fix: "resume", secondary: null, resumable: hasBatch };
+    return { kind: "cancelled", status: "CANCELLED", tone: "warning", fix: "resume", secondary: null, resumable: hasBatch, retry: false };
   }
   if (status) return spec(status, hasBatch);
   if (job.state === "succeeded") return spec("COMPLETED", hasBatch);
