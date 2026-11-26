@@ -29,9 +29,11 @@ mynotes serve --stdio --workspace "$WORKSPACE"
   `--version` probe, a queue runner) can neither corrupt nor read the channel.
   Child processes never inherit the channel descriptors.
 - Stderr carries human-readable logs only. Do not parse it.
-- End of stdin, or `system.shutdown`, stops the server: requests already
-  running finish and are answered, queued ones get `-32800`, the queue lease
-  lapses within 15 s as after a crash, and running jobs keep running.
+- End of stdin, or `system.shutdown`, stops the server. Assistant replies
+  are stopped first, before anything is waited for (see Assistant). Then
+  queued requests get `-32800`, requests already running finish and are
+  answered (a `job.wait` answers at once with the job as it is), the queue
+  lease lapses within 15 s as after a crash, and running jobs keep running.
 
 ## Framing
 
@@ -69,7 +71,11 @@ the CLI's stdout on the same workspace.
 Parameters are the command's flags in camelCase. Parameters of type `json`
 whose flag takes a file are written to a private file in
 `state/desktop-requests/` (mode 0600, the same place the Windows app uses),
-passed by path and deleted when the command ends.
+passed by path and deleted when the command ends. A value given to a flag is
+passed as `--flag=value`, so a value that starts with `-` (a file named
+`-x.m4a`) stays a value. A positional parameter (a lesson, a course code, a
+backup) and each key and value of an `object<string>` parameter
+(`--flag KEY VALUE`) cannot start with `-`: the call gets `-32602`.
 
 ## Errors
 
@@ -78,7 +84,7 @@ passed by path and deleted when the command ends.
 | -32700 | Invalid JSON or UTF-8 | — |
 | -32600 | Invalid request, batch, duplicate id, line over 16 MiB | — |
 | -32601 | Unknown method | — |
-| -32602 | Invalid parameters: unknown, missing, wrong type or choice | sometimes `topics` |
+| -32602 | Invalid parameters: unknown, missing, wrong type or choice, or a positional or `object<string>` value that starts with `-` | sometimes `topics` |
 | -32603 | Internal server error | — |
 | -32001 | The command failed with text such as `mynotes: Course not found: X`; `message` is that text without the prefix | `{exitCode, stdout, stderr}` |
 | -32002 | BUSY: exit 3 with `status: BUSY` | `{exitCode, data}` |
@@ -99,6 +105,10 @@ passed by path and deleted when the command ends.
 | slow | in the server, 2 threads | commands that write local files, probe agent CLIs (`doctor`), copy or hash audio |
 | job | `python -I -X utf8 -m mynotes.rpc_job`, own session (Unix) or Windows job object | anything that can call an agent, transcription, LibreOffice or the network, or that installs signal handlers |
 | server | in the server, 4 threads (`job.wait`: its own 8) | `system.*`, `session.*`, `watch.*`, `job.*` |
+
+`system.ping` and `system.shutdown` use no lane: the thread that reads
+requests answers them, so four slow reads in the fast lane never delay the
+supervisor's liveness check.
 
 `assistant.start` and `assistant.send` are listed in the job lane: they answer
 at once and the reply runs in a separate provider process (see Assistant).
@@ -150,8 +160,26 @@ interrupt is SIGINT and the termination SIGTERM; both become
 interrupt paths (a notes run saves its work and reports `INTERRUPTED`), and
 code that installs its own SIGTERM handler while an agent or a transcription
 engine runs keeps it. On Windows the job has no console for CTRL_BREAK: the
-server creates a cancel file that the job watches, and the last step closes
-the job object. `force: true` kills at once. A cancelled job ends `CANCELLED`.
+server creates a cancel file that the job watches, and the last step
+terminates the job object (`TerminateJobObject`), which ends the job's whole
+tree. A server started after the job has no handle to that object: its last
+step terminates the job's process, and the agent CLIs the job started end
+with it, because each runs in a kill-on-close job object that the job's
+process holds. `force: true` kills at once. A cancelled job ends `CANCELLED`.
+
+**Windows: what keeps a job alive.** The job is created with
+`CREATE_BREAKAWAY_FROM_JOB`, so it leaves the job object that holds
+`mynotes serve`, and is then put in its own job object without
+kill-on-close: quitting the app, a server restart or a server crash does not
+end it. The MyNotes desktop supervisor allows this by setting
+`JOB_OBJECT_LIMIT_BREAKAWAY_OK` on its own job object, which keeps
+kill-on-close for the server itself and for assistant replies. The queue
+runner is started the same way. When the parent's job object refuses
+breakaway (a terminal, a CI runner, another app), the job starts inside it,
+ends with it, and the server logs one line to stderr. On Linux,
+`tests/test_windows_breakaway.py` checks the flags, the job limits, the
+fallback and each cancel step; that a job outlives the app is observable only
+on Windows and has not been run there yet.
 
 **Restart.** Each job holds `<id>.json.lock` for its whole life and writes
 `<id>.json.exit` last. A restarted server watches again every job whose lock

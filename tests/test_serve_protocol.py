@@ -159,17 +159,77 @@ def test_registry_builds_cli_arguments(tmp_path):
     params = validate(method, {"scope": "course", "area": "notes", "course": COURSE, "expectedRevision": "r1",
                                "set": {"tone": "short"}, "remove": ["old"], "style": {"recap": False}})
     argv, files = build_argv(method, params, workspace)
-    assert argv == ["memory", "update", "--scope", "course", "--area", "notes", "--course", COURSE,
-                    "--expected-revision", "r1", "--set", "tone", "short", "--remove", "old",
-                    "--style-json", '{"recap": false}', "--workspace", workspace, "--json"] and files == []
+    assert argv == ["memory", "update", "--scope=course", "--area=notes", f"--course={COURSE}",
+                    "--expected-revision=r1", "--set", "tone", "short", "--remove=old",
+                    '--style-json={"recap": false}', "--workspace", workspace, "--json"] and files == []
     argv, files = build_argv(BY_NAME["library.importAudio"], {"paths": ["a.wav"], "eventId": "e1"}, workspace)
     assert argv[-4:-2] == ["--file", str(files[0])] and json.loads(files[0].read_text()) == {"paths": ["a.wav"], "event_id": "e1"}
     assert oct(files[0].stat().st_mode & 0o777) == "0o600"
-    assert build_argv(BY_NAME["queue.job"], {"action": "retry", "jobId": "j"}, workspace)[0][:3] == ["transcription-queue", "retry", "--job"]
+    assert build_argv(BY_NAME["queue.job"], {"action": "retry", "jobId": "j"}, workspace)[0][:3] == ["transcription-queue", "retry", "--job=j"]
     assert build_argv(BY_NAME["capture.start"], {"durationMinutes": 5}, workspace)[0][-2:] == ["--wait-seconds", "0"]
     for name in ("transcription.run", "notes.run", "lesson.process", "capture.sync", "capture.connect", "models.refresh", "word.verifyRenderer"):
         assert BY_NAME[name].lane == "job", name
     assert {method.lane for method in METHODS} == {"fast", "slow", "job"}
+
+
+def _arguments_for(method, name: str, value) -> dict:
+    """The method's required parameters, with `name` set to `value`."""
+    filler = {"str": "X1", "int": 1, "float": 1.0, "bool": True, "list": ["a"], "pairs": {"k": "v"},
+              "json": {}, "file": {}, "field": ["a.wav"], "subcommand": None}
+    params = {}
+    for param in method.params:
+        if param.required and not param.server:
+            params[param.name] = param.choices[0] if param.choices else filler[param.kind]
+    if method.one_of and name not in method.one_of:
+        first = next(p for p in method.params if p.name == method.one_of[0])
+        params[first.name] = filler[first.kind]
+    params[name] = value
+    return params
+
+
+def _parsed_values(namespace) -> list:
+    values = []
+    for value in vars(namespace).values():
+        values += value if isinstance(value, list) else [value]
+    return values
+
+
+def test_flag_values_that_start_with_a_dash_stay_values(tmp_path):
+    """Every flag value reaches the real parser as a value, never as an option (a file named `-x.m4a`)."""
+    from mynotes.cli import build_parser
+    workspace, checked = str(tmp_path / "ws"), []
+    for method in METHODS:
+        for param in method.params:
+            if param.server or param.flag is None or param.choices or param.kind not in {"str", "int", "float", "list"}:
+                continue
+            value = {"str": "-x.m4a", "int": -3, "float": -2.5, "list": ["-x"]}[param.kind]
+            argv, files = build_argv(method, _arguments_for(method, param.name, value), workspace)
+            try:
+                parsed = build_parser().parse_args(argv)
+            except SystemExit:
+                pytest.fail(f"{method.name}.{param.name}: {argv}")
+            finally:
+                for path in files:
+                    path.unlink()
+            expected = value[0] if isinstance(value, list) else value
+            assert expected in _parsed_values(parsed) or str(expected) in map(str, _parsed_values(parsed)), (method.name, param.name)
+            checked.append(f"{method.name}.{param.name}")
+    assert {"transcription.run.audio", "lesson.process.transcript", "memory.update.remove", "queue.enqueue.readyRecordings",
+            "capture.start.lesson"} <= set(checked)
+
+
+@pytest.mark.parametrize(("name", "params", "field"), [
+    ("transcription.status", {"lectureId": "-x"}, "lectureId"),
+    ("course.link", {"code": "C", "path": "-folder"}, "path"),
+    ("notes.restore", {"backupId": "--help"}, "backupId"),
+    ("memory.update", {"scope": "global", "area": "notes", "expectedRevision": "r", "set": {"tone": "-short"}}, "set"),
+    ("memory.update", {"scope": "global", "area": "notes", "expectedRevision": "r", "set": {"-k": "v"}}, "set"),
+])
+def test_values_the_parser_would_read_as_options_are_refused(name, params, field):
+    """Positionals and `--set KEY VALUE` cannot use `=`: a leading '-' is refused before any command runs."""
+    with pytest.raises(RpcError) as refused:
+        validate(BY_NAME[name], params)
+    assert refused.value.code == -32602 and refused.value.message == f"{field} cannot start with '-'"
 
 
 def test_result_mapping():

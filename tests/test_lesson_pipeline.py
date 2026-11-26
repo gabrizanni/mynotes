@@ -239,7 +239,7 @@ def test_lesson_process_rpc_passes_the_transcript(tmp_path):
     method = BY_NAME["lesson.process"]
     params = validate(method, {"lectureId": "OPS-L01", "transcript": str(tmp_path / "t.txt")})
     assert build_argv(method, params, str(tmp_path))[0] == [
-        "lesson", "process", "OPS-L01", "--transcript", str(tmp_path / "t.txt"), "--workspace", str(tmp_path), "--json"]
+        "lesson", "process", "OPS-L01", f"--transcript={tmp_path / 't.txt'}", "--workspace", str(tmp_path), "--json"]
     with pytest.raises(RpcError) as refused:
         validate(method, {"lectureId": "OPS-L01", "audio": "a.wav", "transcript": "a.txt"})
     assert refused.value.code == -32602 and refused.value.message == "Give at most one of: audio, transcript, resume"

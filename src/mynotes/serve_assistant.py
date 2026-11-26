@@ -738,6 +738,10 @@ class Assistant:
         self.timeout = timeout
         self.sessions: dict[str, Session] = {}
         self.lock = threading.Lock()
+        # Held from the capacity check until the new turn is recorded RUNNING,
+        # so concurrent starts and sends never exceed MAX_RUNNING_TURNS.
+        # Order: admission, then a session's lock, then self.lock.
+        self.admission = threading.Lock()
         self.loaded = False
         self.closing = threading.Event()
 
@@ -795,15 +799,19 @@ class Assistant:
 
     def m_cancel(self, params: dict) -> dict:
         session = self._session(params["sessionId"])
+        # One critical section: the launcher checks cancelRequested under this
+        # lock right after spawning, so a request is seen by it or finds the turn.
         with session.lock:
             turn, running = session.turn, session.running()
             turn_id = session.record["turns"][-1]["id"] if session.record["turns"] else None
-        if not running:
-            return {"sessionId": session.id, "turnId": turn_id, "cancelRequested": False}
-        if turn is None:  # Not spawned yet: the launcher sees the request.
-            session.record["turns"][-1]["cancelRequested"] = True
-        elif not turn.cancel_requested.is_set() or params.get("force"):
+            if not running:
+                return {"sessionId": session.id, "turnId": turn_id, "cancelRequested": False}
+            if turn is None:  # Not spawned yet: the launcher sees the request.
+                session.record["turns"][-1]["cancelRequested"] = True
+                return {"sessionId": session.id, "turnId": turn_id, "cancelRequested": True}
+            stop = not turn.cancel_requested.is_set() or params.get("force")
             turn.cancel_requested.set()
+        if stop:
             threading.Thread(target=turn.cancel, kwargs={"force": params.get("force") is True}, daemon=True).start()
         return {"sessionId": session.id, "turnId": turn_id, "cancelRequested": True}
 
@@ -818,7 +826,6 @@ class Assistant:
         provider = selection.get("provider")
         if provider not in PROVIDERS:
             raise RpcError(COMMAND_FAILED, "Choose an assistant in MyNotes Setup: codex, agy or claude")
-        self._check_capacity()
         identifier = f"as-{secrets.token_hex(8)}"
         now = time.time()
         record = {"schemaVersion": 1, "id": identifier, "provider": provider,
@@ -826,24 +833,30 @@ class Assistant:
                   "effort": params.get("effort") or selection.get("effort") or "", "providerSession": None,
                   "resume": "native", "title": _clean(params["message"], 80, line=True),
                   "createdAt": now, "updatedAt": now, "turns": []}
-        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         session = Session(record, self.directory / f"{identifier}.json")
-        turn = self._new_turn(session, params)
-        with self.lock:
-            self.sessions[identifier] = session
+        with self.admission:
+            self._check_capacity()
+            self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            turn = self._new_turn(session, params)
+            with self.lock:
+                self.sessions[identifier] = session
         return AfterResponse({"sessionId": identifier, "turnId": turn["id"], "session": session.summary()},
                              lambda: self._launch(session))
 
     def m_send(self, params: dict) -> AfterResponse:
         session = self._session(params["sessionId"])
-        with session.lock:
-            if session.running():
-                raise RpcError(TURN_RUNNING, "A reply is still running in this conversation; stop it or wait")
+        with self.admission:
+            with session.lock:
+                if session.running():
+                    raise RpcError(TURN_RUNNING, "A reply is still running in this conversation; stop it or wait")
+            # Outside session.lock: running() takes self.lock, which m_list holds
+            # while it takes each session's lock. Admission keeps this session idle.
             self._check_capacity()
             turn = self._new_turn(session, params)
         return AfterResponse({"sessionId": session.id, "turnId": turn["id"]}, lambda: self._launch(session))
 
     def _check_capacity(self) -> None:
+        """Call with self.admission held."""
         if self.running() >= MAX_RUNNING_TURNS:
             raise RpcError(TURN_RUNNING, f"{MAX_RUNNING_TURNS} replies are already running; wait for one to finish")
 
