@@ -227,3 +227,21 @@ def test_capture_request_completion_is_notified(setup):
         assert completed["requestId"] == pending["requestID"] and completed["response"]["status"] == "COMPLETED"
     finally:
         client.close()
+
+
+def test_queue_topic_follows_commits_and_settings_not_lease_renewals(setup):
+    import sqlite3
+    workspace, env = setup
+    client = Client(workspace.root, env)
+    try:
+        client.call("session.open")
+        client.call("watch.subscribe", {"topics": ["queue"]})
+        time.sleep(1.5)
+        start = client.call("system.stats")["topicComputations"]["queue"]
+        with sqlite3.connect(queue.root(workspace) / "queue.sqlite3") as conn:  # Another writer commits.
+            conn.execute("INSERT INTO recordings(id, metadata) VALUES ('synthetic', '{}')")
+        wait_until(lambda: client.call("system.stats")["topicComputations"]["queue"] > start, timeout=5)
+        assert cli(env, "transcription-queue", "pause", "--workspace", str(workspace.root)).returncode == 0
+        assert client.notification("queue.changed", timeout=5, where=lambda p: p["data"]["paused"])["data"]["paused"]
+    finally:
+        client.close()

@@ -3,7 +3,10 @@
 Watcher: every second while the window is visible (five when hidden) it
 compares the modification time, size and inode of each topic's files and
 directories. MyNotes writes JSON atomically (temporary file, then rename), so
-a directory's own signature also changes on every write inside it. A topic is
+a directory's own signature also changes on every write inside it. The queue
+database is compared by SQLite's `data_version`, which changes only when
+another connection commits data, and the window lease by its session: the
+lease renewal every 5 s rewrites both without changing any answer. A topic is
 recomputed only when its signature changes, when its time-dependent fields may
 have aged (`refresh` seconds), or every 2 s while queue jobs run. A
 notification is sent only when the snapshot's hash changes.
@@ -21,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -60,9 +64,10 @@ def compute_config(path: str) -> Any:
 
 
 def _queue_files(root: Path) -> list[Path]:
+    # Not the folder itself, nor ui.json or the database files: the lease
+    # rewrites those every 5 s. Watcher._signature adds what they mean.
     queue = root / "state" / "transcription-queue"
-    return [queue, queue / "queue.sqlite3", queue / "queue.sqlite3-wal", queue / "settings.json", queue / "ui.json",
-            queue / "wait.json", queue / "labels.json", queue / "closed"]
+    return [queue / "settings.json", queue / "wait.json", queue / "labels.json", queue / "closed"]
 
 
 def capture_paths(root: Path, _extra: list[Path]) -> list[Path]:
@@ -139,6 +144,9 @@ class Watcher:
         self.stopping = threading.Event()
         self.thread: threading.Thread | None = None
         self._library_dirs: tuple[tuple, list[Path]] = ((), [])
+        self._database: sqlite3.Connection | None = None
+        self._database_inode: int | None = None
+        self._database_lock = threading.Lock()
 
     # Snapshots -------------------------------------------------------------
     def _extra_paths(self, topic: Topic) -> list[Path]:
@@ -165,6 +173,42 @@ class Watcher:
         except Exception:
             return []
 
+    def _queue_version(self) -> tuple | None:
+        """Changes only when another connection commits data to the queue database."""
+        path = self.root / "state" / "transcription-queue" / "queue.sqlite3"
+        with self._database_lock:
+            try:
+                inode = os.stat(path).st_ino
+                if self._database is None or self._database_inode != inode:
+                    self._close_database()
+                    self._database = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True,
+                                                     timeout=1, check_same_thread=False)
+                    self._database_inode = inode
+                return inode, self._database.execute("PRAGMA data_version").fetchone()[0]
+            except (OSError, sqlite3.Error):
+                self._close_database()
+                return ("unavailable", time.monotonic())  # Unknown: recompute.
+
+    def _close_database(self) -> None:
+        if self._database is not None:
+            self._database.close()
+        self._database = self._database_inode = None
+
+    def _lease_identity(self) -> tuple | None:
+        try:
+            lease = json.loads((self.root / "state" / "transcription-queue" / "ui.json").read_text(encoding="utf-8"))
+            return lease.get("session"), lease.get("closed")
+        except (OSError, ValueError, AttributeError):
+            return None
+
+    def _signature(self, topic: Topic) -> tuple:
+        parts: tuple = (signature(topic.paths(self.root, self._extra_paths(topic))),)
+        if topic.name in {"queue", "library"}:
+            parts += (self._queue_version(),)
+        if topic.name == "queue":
+            parts += (self._lease_identity(),)  # Expiry is time-dependent: covered by `refresh`.
+        return parts
+
     def _busy(self, topic: Topic) -> bool:
         if topic.name != "queue" or not isinstance(topic.data, dict):
             return False
@@ -173,7 +217,7 @@ class Watcher:
     def snapshot(self, name: str, *, force: bool = False) -> dict:
         topic = self.topics[name]
         with topic.lock:
-            current = signature(topic.paths(self.root, self._extra_paths(topic)))
+            current = self._signature(topic)
             age = time.monotonic() - topic.computed_at
             limit = 2.0 if self._busy(topic) else topic.refresh
             fresh = topic.signature == current and (limit is None or age < limit)
@@ -236,6 +280,8 @@ class Watcher:
         self.wake.set()
         if self.thread is not None:
             self.thread.join(timeout=5)
+        with self._database_lock:
+            self._close_database()
 
     def _run(self) -> None:
         while not self.stopping.is_set():
