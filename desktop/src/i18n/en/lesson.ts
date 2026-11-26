@@ -200,6 +200,7 @@ export const lesson = {
     resumeHint: "Resume picks up where it stopped.",
     signIn: "Sign in",
     awaitingApproval: "Review the new pages before they join your course notes.",
+    awaitingApprovalBody: "The preview opens in Word. Your course notes change only after you approve.",
     openPreview: "Open preview",
     openPreviewAgain: "Open preview again",
     approve: "Approve & update Word",

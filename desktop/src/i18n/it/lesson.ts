@@ -201,6 +201,7 @@ export const lesson: Messages["lesson"] = {
     resumeHint: "Riprendi continua da dove si era fermato.",
     signIn: "Accedi",
     awaitingApproval: "Rivedi le nuove pagine prima che entrino nella dispensa.",
+    awaitingApprovalBody: "L'anteprima si apre in Word. La dispensa cambia solo dopo la tua approvazione.",
     openPreview: "Apri l'anteprima",
     openPreviewAgain: "Riapri l'anteprima",
     approve: "Approva e aggiorna il Word",

@@ -89,9 +89,11 @@ export function LessonRail({ lesson, history, materials, now, onGenerate, onShow
         <Button variant="soft" fullWidth onClick={onOpenWord}>
           {r.openInWord}
         </Button>
-        <Button variant="ghost" fullWidth disabled={!transcriptReady} onClick={onGenerate}>
-          {r.generateAgain}
-        </Button>
+        {transcriptReady && (
+          <Button variant="ghost" fullWidth onClick={onGenerate}>
+            {r.generateAgain}
+          </Button>
+        )}
       </>
     );
   } else if (transcriptReady) {

@@ -24,7 +24,7 @@ test("Generate notes walks the stages, then offers Word and Undo", async ({ page
   await expect(dialog.getByText("Lesson 7 is in your course notes.")).toBeVisible({ timeout: 10_000 });
   await expect(dialog.getByRole("button", { name: "Open in Word" })).toBeVisible();
   await expect(dialog.getByRole("button", { name: "Undo" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Close" }).last().click();
+  await dialog.getByRole("button", { name: "Close" }).click();
   await expect(page.getByRole("status").getByText("Lesson 7 is in your course notes.")).toBeVisible();
   await expect(page.getByRole("status").getByRole("button", { name: "Undo" })).toBeVisible();
 });

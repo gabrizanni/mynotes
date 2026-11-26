@@ -558,6 +558,7 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
       break;
     case "awaitingApproval":
       headline = o.awaitingApproval;
+      detail = o.awaitingApprovalBody;
       break;
     case "conflict":
       headline = o.conflict(lessons, count);
@@ -590,9 +591,12 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
 
   const footer = (
     <>
-      <Button variant="ghost" onClick={onClose}>
-        {t.common.close}
-      </Button>
+      {/* The header's close button is always there; a footer Close only when space allows. */}
+      {!(secondary && secondaryLabel) && (
+        <Button variant="ghost" onClick={onClose}>
+          {t.common.close}
+        </Button>
+      )}
       {secondary && secondaryLabel && (secondary !== "resume" || outcome.resumable) && (
         <Button variant="soft" icon={secondary === "undo" ? Undo2 : undefined} onClick={() => void run(secondary)}>
           {secondaryLabel}
