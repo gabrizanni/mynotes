@@ -49,6 +49,8 @@ PUBLIC_FILES = (
     "docs/NOTES_FLOW.md",
     "docs/CODEX_NOTES.md",
     "docs/MODEL-CATALOG.md",
+    "docs/SERVE.md",
+    "docs/PERFORMANCE.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",
     "examples/README.md",
