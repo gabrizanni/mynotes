@@ -47,8 +47,9 @@ CLIs and `uv` are found when the app is launched from a dock or launcher). It lo
 | (none) | the installed runtime: `~/.local/share/mynotes/app/current/venv/bin/python` on Linux, `~/Library/Application Support/MyNotes/…` on macOS, `<install dir>\runtime\python.exe` on Windows; `MYNOTES_HOME` overrides the runtime home |
 
 A variable that points nowhere is an error, never a silent fallback. The backend resolves its
-workspace as the CLI does (`MYNOTES_WORKSPACE`, then the default). Without a runtime the app
-reports `NOT_INSTALLED` and the onboarding offers setup (`src/rpc/setup.ts`).
+workspace as the CLI does (`MYNOTES_WORKSPACE`, then the default). Without a runtime the supervisor
+reports `failed` with code `NOT_INSTALLED` (`backend://status`, `src/rpc/native.ts`): the cue for
+the onboarding to run setup (`src/rpc/setup.ts`).
 
 `npm run tauri dev` opens the real window against `MYNOTES_DESKTOP_REPO=/path/to/checkout`.
 
