@@ -147,6 +147,8 @@ class Server:
             return
         with self.counter_lock:
             self.counters["requests"] += 1
+        if not method.startswith("system."):
+            self.watcher.activity()  # A user action usually changes files soon.
         if method == "system.shutdown":
             self.send({"jsonrpc": "2.0", "id": identifier, "result": {"ok": True, "jobsRunning": self.jobs.running()}})
             self.shutting_down.set()

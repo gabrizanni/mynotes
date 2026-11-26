@@ -245,3 +245,19 @@ def test_queue_topic_follows_commits_and_settings_not_lease_renewals(setup):
         assert client.notification("queue.changed", timeout=5, where=lambda p: p["data"]["paused"])["data"]["paused"]
     finally:
         client.close()
+
+
+def test_watch_interval_backs_off_only_when_quiet(tmp_path):
+    from mynotes.serve_watch import Watcher
+    watcher = Watcher(str(tmp_path), lambda *_: None)
+    assert watcher._interval() == 1.0
+    watcher.quiet_since -= 31
+    assert watcher._interval() == 2.0  # Visible, nothing changed for 30 s.
+    watcher.activity()
+    assert watcher._interval() == 1.0
+    watcher.quiet_since -= 31
+    watcher.requests["pending"] = time.monotonic() + 60
+    assert watcher._interval() == 1.0  # A capture request is awaited.
+    watcher.requests.clear()
+    watcher.visible = False
+    assert watcher._interval() == 5.0

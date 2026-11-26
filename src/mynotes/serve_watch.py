@@ -9,7 +9,9 @@ another connection commits data, and the window lease by its session: the
 lease renewal every 5 s rewrites both without changing any answer. A topic is
 recomputed only when its signature changes, when its time-dependent fields may
 have aged (`refresh` seconds), or every 2 s while queue jobs run. A
-notification is sent only when the snapshot's hash changes.
+notification is sent only when the snapshot's hash changes. After 30 s
+without a change, a running job, a pending capture request or a client
+request, a visible window is checked every 2 s instead of every second.
 
 Cache: the last snapshot per topic is reused by watch.snapshot while its
 signature is unchanged and it is younger than the topic's refresh interval.
@@ -35,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 VISIBLE_SECONDS, HIDDEN_SECONDS = 1.0, 5.0
+QUIET_SECONDS, QUIET_AFTER_SECONDS = 2.0, 30.0  # Visible, but nothing changed for 30 s.
 LEASE_SECONDS = 5.0
 REQUEST_EXPIRY_SECONDS = 70.0  # Capture requests expire after 60 s.
 
@@ -104,6 +107,8 @@ class Topic:
     error: dict | None = None
     digest: str | None = None
     computations: int = 0
+    path_key: tuple | None = None
+    path_strings: list[str] = field(default_factory=list)  # Built once: pathlib costs more than stat.
 
 
 def topics() -> dict[str, Topic]:
@@ -115,7 +120,7 @@ def topics() -> dict[str, Topic]:
     )}
 
 
-def signature(paths: list[Path]) -> tuple:
+def signature(paths: list) -> tuple:
     values = []
     for path in paths:
         try:
@@ -144,6 +149,9 @@ class Watcher:
         self.stopping = threading.Event()
         self.thread: threading.Thread | None = None
         self._library_dirs: tuple[tuple, list[Path]] = ((), [])
+        self._library_config = [str(self.root / "config" / "settings.json"), str(self.root / "config" / "capture.json"),
+                                str(self.root / "state" / "recording-library")]
+        self.quiet_since = time.monotonic()
         self._database: sqlite3.Connection | None = None
         self._database_inode: int | None = None
         self._database_lock = threading.Lock()
@@ -152,8 +160,7 @@ class Watcher:
     def _extra_paths(self, topic: Topic) -> list[Path]:
         if topic.name != "library":
             return []
-        config = signature([self.root / "config" / "settings.json", self.root / "config" / "capture.json",
-                            self.root / "state" / "recording-library"])
+        config = signature(self._library_config)
         if config != self._library_dirs[0]:
             self._library_dirs = (config, self._recording_dirs())
         return self._library_dirs[1]
@@ -202,7 +209,11 @@ class Watcher:
             return None
 
     def _signature(self, topic: Topic) -> tuple:
-        parts: tuple = (signature(topic.paths(self.root, self._extra_paths(topic))),)
+        extra = self._extra_paths(topic)
+        if topic.path_key != tuple(extra) or not topic.path_strings:
+            topic.path_strings = [os.fspath(path) for path in topic.paths(self.root, extra)]
+            topic.path_key = tuple(extra)
+        parts: tuple = (signature(topic.path_strings),)
         if topic.name in {"queue", "library"}:
             parts += (self._queue_version(),)
         if topic.name == "queue":
@@ -260,7 +271,12 @@ class Watcher:
 
     def set_visible(self, visible: bool) -> None:
         self.visible = visible
+        self.activity()
         self.wake.set()
+
+    def activity(self) -> None:
+        """A client request: return to checking every second."""
+        self.quiet_since = time.monotonic()
 
     def track_request(self, request_id: str) -> None:
         with self.lock:
@@ -297,9 +313,19 @@ class Watcher:
                     continue
                 if payload["hash"] != before:
                     self.notify(f"{name}.changed", payload)
+                    self.activity()
             self._check_requests()
-            self.wake.wait(VISIBLE_SECONDS if self.visible else HIDDEN_SECONDS)
+            self.wake.wait(self._interval())
             self.wake.clear()
+
+    def _interval(self) -> float:
+        if not self.visible:
+            return HIDDEN_SECONDS
+        with self.lock:
+            pending = bool(self.requests)
+        if pending or self._busy(self.topics["queue"]):
+            self.activity()
+        return QUIET_SECONDS if time.monotonic() - self.quiet_since >= QUIET_AFTER_SECONDS else VISIBLE_SECONDS
 
     def _check_requests(self) -> None:
         with self.lock:
