@@ -2,8 +2,8 @@
  * Window-side helpers the onboarding needs beyond RPC. Inside Tauri they call Rust commands;
  * in the browser mock they stand in with harmless defaults so every flow stays clickable.
  *
- * Rust side (src-tauri): `open_path` exists. `open_system_settings` and the asset protocol for
- * test playback are still to add (see the report's backend gaps).
+ * Rust side (src-tauri): `open_system_settings` (commands.rs, panes per OS in external.rs) and
+ * `audio_source`, which allows one checked recording in the asset protocol for test playback.
  */
 import { isTauriRuntime } from "../../rpc/transports/tauri";
 
@@ -42,8 +42,8 @@ export async function openPath(path: string): Promise<boolean> {
 export async function openSystemSettings(pane: SettingsPane): Promise<boolean> {
   if (!isTauriRuntime()) return false;
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("open_system_settings", { pane });
+    const { openSystemSettings: open } = await import("../../rpc/native");
+    await open(pane);
     return true;
   } catch {
     return false;
@@ -54,10 +54,10 @@ export async function openSystemSettings(pane: SettingsPane): Promise<boolean> {
 export async function playableUrl(path: string): Promise<string | null> {
   if (!isTauriRuntime()) return null;
   try {
-    const { convertFileSrc } = await import("@tauri-apps/api/core");
-    return convertFileSrc(path);
+    const native = await import("../../rpc/native");
+    return await native.playableUrl(path);
   } catch {
-    return null;
+    return null; // Refused by Rust (outside the recording folders) or not playable.
   }
 }
 

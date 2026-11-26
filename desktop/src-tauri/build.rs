@@ -10,6 +10,9 @@ fn main() {
         "setup_status",
         "setup_run",
         "take_pending_action",
+        "audio_source",
+        "open_external",
+        "open_system_settings",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(manifest)).expect("failed to run tauri-build");
 }

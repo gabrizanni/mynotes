@@ -4,14 +4,20 @@ name: Desktop
 # smoke test on Linux. Every action is pinned by commit SHA (tag in the trailing comment).
 
 on:
+  # The contract tests and the smoke run the real `mynotes serve` from src/mynotes, and the
+  # public-tree audit is scripts/check_public_tree.py: a change there must run this workflow too.
   pull_request:
     paths:
       - "desktop/**"
+      - "src/mynotes/**"
+      - "scripts/**"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main, develop]
     paths:
       - "desktop/**"
+      - "src/mynotes/**"
+      - "scripts/**"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
 

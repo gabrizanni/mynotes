@@ -2,6 +2,7 @@
 import type { Messages } from "../en";
 import { activity } from "./activity";
 import { assistant } from "./assistant";
+import { backend } from "./backend";
 import { calendar } from "./calendar";
 import { capture } from "./capture";
 import { common } from "./common";
@@ -29,6 +30,7 @@ export const it: Messages = {
   settings,
   onboarding,
   assistant,
+  backend,
   capture,
   gallery,
   palette,

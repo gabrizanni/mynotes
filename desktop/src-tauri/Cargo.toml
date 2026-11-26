@@ -16,7 +16,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# protocol-asset: recordings play from local files; the scope starts empty (tauri.conf.json)
+# and `audio_source` allows one checked file at a time.
+tauri = { version = "2", features = ["tray-icon", "protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -30,7 +32,7 @@ tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macr
 
 [dev-dependencies]
 # Tauri's mock runtime, for window-routing tests without a display.
-tauri = { version = "2", features = ["tray-icon", "test"] }
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "test"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

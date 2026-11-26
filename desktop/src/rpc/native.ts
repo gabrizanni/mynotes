@@ -9,8 +9,12 @@
  *   or a second launch (`mynotes-desktop --action record-dialog`, the Wayland key bind).
  * - `openPath()` / `revealPath()`: Rust checks the path (local, inside MyNotes folders, a
  *   document or media type) before the OS opens it; the webview has no opener permission.
+ * - `openExternal()` / `openSystemSettings()`: an install guide in the browser (https, known
+ *   hosts only) and the OS microphone or sound settings, both checked and opened by Rust.
+ * - `playableUrl()`: Rust checks a recording (an audio file in a recording folder the backend
+ *   reports) and adds only that file to the asset protocol scope, which starts empty.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { z } from "zod";
 
@@ -77,3 +81,15 @@ export const onAppAction = (listener: (action: AppAction) => void) =>
 
 export const openPath = (path: string) => command("open_path", z.null(), { path });
 export const revealPath = (path: string) => command("reveal_path", z.null(), { path });
+
+/** The checked, canonical path of a recording the webview may play (`audio_source`). */
+export const audioSource = (path: string) => command("audio_source", z.string(), { path });
+
+/** An asset-protocol URL for a local recording, once Rust has allowed that one file. */
+export async function playableUrl(path: string): Promise<string> {
+  return convertFileSrc(await audioSource(path));
+}
+
+export const openExternal = (url: string) => command("open_external", z.null(), { url });
+export const openSystemSettings = (pane: "microphone" | "privacy" | "sound") =>
+  command("open_system_settings", z.null(), { pane });

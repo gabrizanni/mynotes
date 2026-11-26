@@ -9,7 +9,9 @@
 //!   an action (see `actions.rs`).
 //!
 //! Side effects, all driven by notifications so they work with the window closed:
-//! - `config.changed` → course folders allowed for `open_path` / `reveal_path`;
+//! - `config.changed` → course folders allowed for `open_path` / `reveal_path`, and the
+//!   recording folders `audio_source` plays from (with `capture.changed`'s output folder and
+//!   `library.changed`'s managed folder);
 //! - `capture.changed` → tray recording state and the recording capsule window;
 //! - `job.finished` of a notes job → the "notes ready" system notification.
 //!
@@ -18,7 +20,7 @@
 //! and the webview's notifications survive a backend restart.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
@@ -94,6 +96,47 @@ pub fn course_folders(config: &Value) -> Vec<PathBuf> {
     folders
 }
 
+/// Folders recordings live in, from the configuration: `paths.recording_dirs` and each course's
+/// `folders.recordings`. The asset protocol may serve audio from these only.
+pub fn config_audio_folders(config: &Value) -> Vec<PathBuf> {
+    let mut folders: Vec<PathBuf> = Vec::new();
+    let mut add = |value: &Value| match value {
+        Value::String(text) if !text.is_empty() => folders.push(PathBuf::from(text)),
+        Value::Array(items) => {
+            folders.extend(items.iter().filter_map(Value::as_str).filter(|t| !t.is_empty()).map(PathBuf::from))
+        }
+        _ => {}
+    };
+    add(&config["paths"]["recording_dirs"]);
+    for course in config["courses"].as_array().into_iter().flatten() {
+        add(&course["folders"]["recordings"]);
+    }
+    folders.sort();
+    folders.dedup();
+    folders
+}
+
+/// The managed recording folder (`folder` of the library snapshot), where imported audio is
+/// copied; any one-string field of a snapshot.
+pub fn snapshot_audio_folder(data: &Value, key: &str) -> Vec<PathBuf> {
+    data[key].as_str().filter(|text| !text.is_empty()).map(PathBuf::from).into_iter().collect()
+}
+
+/// Capture's recordings: its `outputDirectory`, and the folder of each microphone test the
+/// dashboard lists (`runtime.sessions[]` with `isTest` and an `outputPath`), which onboarding plays.
+pub fn capture_audio_folders(dashboard: &Value) -> Vec<PathBuf> {
+    let mut folders = snapshot_audio_folder(dashboard, "outputDirectory");
+    for session in dashboard["runtime"]["sessions"].as_array().into_iter().flatten() {
+        let output = session["outputPath"].as_str().filter(|text| !text.is_empty());
+        if let (Some(true), Some(output)) = (session["isTest"].as_bool(), output) {
+            folders.extend(Path::new(output).parent().map(Path::to_path_buf));
+        }
+    }
+    folders.sort();
+    folders.dedup();
+    folders
+}
+
 /// A finished notes job worth a notification: completed, exit code 0.
 pub fn notes_ready(method: Option<&str>, finished: &Value) -> bool {
     method.is_some_and(|method| NOTES_METHODS.contains(&method))
@@ -114,9 +157,7 @@ impl<R: Runtime> TauriSink<R> {
     }
 
     fn apply_config(&self, config: &Value) {
-        let folders = course_folders(config);
-        log::debug!("[Events] Course folders updated — {{ count: {} }}", folders.len());
-        self.roots.set_course_folders(&folders);
+        apply_config_roots(&self.roots, config);
     }
 
     fn track_job(&self, params: &Value) {
@@ -150,7 +191,13 @@ impl<R: Runtime> EventSink for TauriSink<R> {
             }
             "capture.changed" => {
                 if let Some(dashboard) = snapshot_data(params) {
+                    self.roots.set_audio_folders("capture", &capture_audio_folders(dashboard));
                     apply_recording(&self.app, &recording_state(dashboard));
+                }
+            }
+            "library.changed" => {
+                if let Some(library) = snapshot_data(params) {
+                    self.roots.set_audio_folders("library", &snapshot_audio_folder(library, "folder"));
                 }
             }
             "job.started" => self.track_job(params),
@@ -168,6 +215,15 @@ impl<R: Runtime> EventSink for TauriSink<R> {
             subscribe_native_topics(self.app.clone());
         }
     }
+}
+
+/// Course folders for open/reveal and recording folders for playback, from one configuration.
+fn apply_config_roots(roots: &AllowedRoots, config: &Value) {
+    let folders = course_folders(config);
+    let audio = config_audio_folders(config);
+    log::debug!("[Events] Folders updated — {{ courses: {}, audio: {} }}", folders.len(), audio.len());
+    roots.set_course_folders(&folders);
+    roots.set_audio_folders("config", &audio);
 }
 
 fn apply_recording<R: Runtime>(app: &AppHandle<R>, recording: &Recording) {
@@ -202,9 +258,13 @@ fn subscribe_native_topics<R: Runtime>(app: AppHandle<R>) {
             }
         };
         if let Some(config) = snapshot_data(&snapshots["snapshots"]["config"]) {
-            roots.set_course_folders(&course_folders(config));
+            apply_config_roots(&roots, config);
+        }
+        if let Some(library) = snapshot_data(&snapshots["snapshots"]["library"]) {
+            roots.set_audio_folders("library", &snapshot_audio_folder(library, "folder"));
         }
         if let Some(dashboard) = snapshot_data(&snapshots["snapshots"]["capture"]) {
+            roots.set_audio_folders("capture", &capture_audio_folders(dashboard));
             apply_recording(&app, &recording_state(dashboard));
         }
     });
@@ -258,6 +318,31 @@ mod tests {
             ["/srv/more", "/srv/rec", "/srv/ws", "/srv/ws/DEMO/Materials"].iter().map(PathBuf::from).collect();
         assert_eq!(course_folders(&config), folders);
         assert!(course_folders(&json!({})).is_empty());
+    }
+
+    #[test]
+    fn audio_folders_are_the_recording_folders_only() {
+        let config = json!({
+            "courses": [{"folders": {"materials": "/srv/ws/DEMO/Materials", "recordings": ["/srv/rec", ""]}},
+                        {"folders": {"recordings": "/srv/stat-audio"}}],
+            "paths": {"recording_dirs": ["/srv/rec", "/srv/more"], "workspace": "/srv/ws"}
+        });
+        let folders: Vec<PathBuf> = ["/srv/more", "/srv/rec", "/srv/stat-audio"].iter().map(PathBuf::from).collect();
+        assert_eq!(config_audio_folders(&config), folders, "no workspace, no materials, no home");
+        assert!(config_audio_folders(&json!({})).is_empty());
+        let dashboard = json!({"outputDirectory": "/srv/ws/recordings/capture", "runtime": {"sessions": [
+            {"isTest": true, "status": "COMPLETED", "outputPath": "/srv/stage/tests/t1/microphone-test.m4a"},
+            {"isTest": false, "outputPath": "/srv/elsewhere/lesson.m4a"},
+            {"isTest": true, "outputPath": null}
+        ]}});
+        let capture: Vec<PathBuf> =
+            ["/srv/stage/tests/t1", "/srv/ws/recordings/capture"].iter().map(PathBuf::from).collect();
+        assert_eq!(capture_audio_folders(&dashboard), capture);
+        assert_eq!(
+            snapshot_audio_folder(&json!({"folder": "/srv/managed"}), "folder"),
+            vec![PathBuf::from("/srv/managed")]
+        );
+        assert!(snapshot_audio_folder(&json!({"folder": ""}), "folder").is_empty());
     }
 
     #[test]

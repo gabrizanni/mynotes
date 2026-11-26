@@ -1,0 +1,56 @@
+.screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--space-8) var(--space-6);
+  background: var(--color-bg-canvas);
+}
+
+.panel {
+  display: grid;
+  gap: var(--space-4);
+  width: min(720px, 100%);
+}
+
+.title {
+  font: var(--text-display);
+  color: var(--color-text-brand);
+}
+
+.body {
+  max-width: 60ch;
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.label {
+  font: var(--text-body);
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.details {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-hairline);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-sunken);
+  font: var(--text-mono);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.note {
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}

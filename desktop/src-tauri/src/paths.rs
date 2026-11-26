@@ -18,12 +18,17 @@
 //! Residual risk: a junction inside an allowed local root that points to a network share is
 //! followed by step 2; roots themselves are never network paths.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
 /// Extensions the app may hand to the OS default application or reveal.
 pub const OPENABLE_EXTENSIONS: &[&str] =
     &["docx", "pdf", "txt", "md", "m4a", "mp3", "wav", "pptx", "xlsx", "png", "jpg", "jpeg"];
+
+/// Audio the webview may play through the asset protocol (`allow_audio`): the recording types
+/// MyNotes imports (`course_links.AUDIO_TYPES` and the ingestion defaults).
+pub const PLAYABLE_EXTENSIONS: &[&str] = &["m4a", "mp3", "wav", "aac", "aiff", "flac", "ogg", "caf"];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PathError {
@@ -197,6 +202,8 @@ fn std_prefix_is_local(raw: &str) -> bool {
 pub struct AllowedRoots {
     base: RwLock<Vec<PathKey>>,
     courses: RwLock<Vec<PathKey>>,
+    /// Folders the backend reports recordings in, per reporting topic; audio plays only from them.
+    audio: RwLock<BTreeMap<&'static str, Vec<PathKey>>>,
 }
 
 /// Register a root: refused unless it passes gate 1 and exists; stored in canonical form.
@@ -214,7 +221,7 @@ impl AllowedRoots {
     pub fn new(base: &[PathBuf]) -> Self {
         let flavor = Flavor::current();
         let keys = base.iter().filter_map(|path| root_key(path, flavor)).collect();
-        Self { base: RwLock::new(keys), courses: RwLock::new(Vec::new()) }
+        Self { base: RwLock::new(keys), courses: RwLock::new(Vec::new()), audio: RwLock::new(BTreeMap::new()) }
     }
 
     /// Home, the MyNotes runtime home and the workspace (`MYNOTES_WORKSPACE`, or
@@ -246,6 +253,20 @@ impl AllowedRoots {
         if let Ok(mut courses) = self.courses.write() {
             *courses = keys;
         }
+    }
+
+    /// Replace the folders of one audio source (`"config"`, `"capture"`, `"library"`): each
+    /// topic reports its own folders, and the playable set is their union.
+    pub fn set_audio_folders(&self, source: &'static str, folders: &[PathBuf]) {
+        let flavor = Flavor::current();
+        let keys = folders.iter().filter_map(|path| root_key(path, flavor)).collect();
+        if let Ok(mut audio) = self.audio.write() {
+            audio.insert(source, keys);
+        }
+    }
+
+    pub fn audio_keys(&self) -> Vec<PathKey> {
+        self.audio.read().map(|audio| audio.values().flatten().cloned().collect()).unwrap_or_default()
     }
 
     pub fn keys(&self) -> Vec<PathKey> {
@@ -282,6 +303,21 @@ fn has_openable_extension(path: &Path) -> bool {
 pub fn check_openable(raw: &str, roots: &AllowedRoots) -> Result<PathBuf, PathError> {
     let path = resolve(raw, &roots.keys())?;
     if path.is_file() && has_openable_extension(&path) {
+        Ok(path)
+    } else {
+        Err(PathError::NotAllowed)
+    }
+}
+
+/// A recording the webview may play: gates 1 to 3 against the audio folders only (never the
+/// home folder), then an audio extension. The canonical path is what the asset scope allows.
+pub fn check_playable(raw: &str, roots: &AllowedRoots) -> Result<PathBuf, PathError> {
+    let path = resolve(raw, &roots.audio_keys())?;
+    let audio = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| PLAYABLE_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()));
+    if path.is_file() && audio {
         Ok(path)
     } else {
         Err(PathError::NotAllowed)
@@ -435,6 +471,38 @@ mod tests {
             assert!(check_openable(slides.to_str().unwrap(), &roots).is_ok());
             assert_eq!(check_openable(course.join("gone.docx").to_str().unwrap(), &roots), Err(PathError::Missing));
             assert_eq!(check_openable("relative/notes.docx", &roots), Err(PathError::NotAbsolute));
+            fs::remove_dir_all(dir).unwrap();
+        }
+
+        #[test]
+        fn audio_plays_only_from_the_reported_recording_folders() {
+            let dir = scratch("audio");
+            let recordings = dir.join("recordings");
+            let notes = dir.join("notes");
+            fs::create_dir_all(&recordings).unwrap();
+            fs::create_dir_all(&notes).unwrap();
+            let lesson = recordings.join("STAT-L01.M4A");
+            fs::write(&lesson, b"audio").unwrap();
+            let elsewhere = notes.join("memo.m4a");
+            fs::write(&elsewhere, b"audio").unwrap();
+            let handout = recordings.join("handout.docx");
+            fs::write(&handout, b"docx").unwrap();
+            // The home folder is an open/reveal root, never an audio one.
+            let roots = AllowedRoots::new(std::slice::from_ref(&dir));
+            assert_eq!(check_playable(lesson.to_str().unwrap(), &roots), Err(PathError::OutsideRoots));
+            roots.set_audio_folders("config", std::slice::from_ref(&recordings));
+            assert_eq!(check_playable(lesson.to_str().unwrap(), &roots), Ok(lesson.canonicalize().unwrap()));
+            assert_eq!(check_playable(elsewhere.to_str().unwrap(), &roots), Err(PathError::OutsideRoots));
+            assert_eq!(check_playable(handout.to_str().unwrap(), &roots), Err(PathError::NotAllowed));
+            assert_eq!(check_playable(recordings.to_str().unwrap(), &roots), Err(PathError::NotAllowed));
+            let traversal = format!("{}/../notes/memo.m4a", recordings.display());
+            assert_eq!(check_playable(&traversal, &roots), Err(PathError::Traversal));
+            // Each topic keeps its own folders; replacing one leaves the others.
+            roots.set_audio_folders("capture", std::slice::from_ref(&notes));
+            assert!(check_playable(elsewhere.to_str().unwrap(), &roots).is_ok());
+            assert!(check_playable(lesson.to_str().unwrap(), &roots).is_ok());
+            roots.set_audio_folders("config", &[]);
+            assert_eq!(check_playable(lesson.to_str().unwrap(), &roots), Err(PathError::OutsideRoots));
             fs::remove_dir_all(dir).unwrap();
         }
     }

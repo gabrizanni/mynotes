@@ -21,15 +21,21 @@ function useAudioEngine(path: string | null, state: PlayerState, dispatch: Dispa
     if (!tauri || !path) return undefined;
     let element: HTMLAudioElement | null = null;
     let cancelled = false;
-    void import("@tauri-apps/api/core").then(({ convertFileSrc }) => {
+    const attach = (url: string) => {
       if (cancelled) return;
-      element = new Audio(convertFileSrc(path));
+      element = new Audio(url);
       element.preload = "metadata";
       element.addEventListener("timeupdate", () => element && dispatch({ type: "tick", position: element.currentTime }));
       element.addEventListener("loadedmetadata", () => element && Number.isFinite(element.duration) && dispatch({ type: "duration", duration: element.duration }));
       element.addEventListener("ended", () => dispatch({ type: "ended" }));
       audio.current = element;
-    });
+    };
+    // Rust allows this one file in the asset scope first; a refusal (outside the recording
+    // folders, or the file is gone) leaves the player paused.
+    void import("../../rpc/native")
+      .then((native) => native.playableUrl(path))
+      .then(attach)
+      .catch(() => dispatch({ type: "pause" }));
     return () => {
       cancelled = true;
       element?.pause();

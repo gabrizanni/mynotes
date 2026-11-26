@@ -19,9 +19,11 @@ use serde_json::Value;
 use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_log::log;
 
+use crate::backend::locate::Platform;
 use crate::backend::methods::{lane_of, RUST_ONLY_METHODS};
 use crate::backend::protocol::{codes, RpcError};
 use crate::backend::supervisor::{BackendStatus, Supervisor};
+use crate::external;
 use crate::installer::{Installer, SetupRunRequest, SetupStatus};
 use crate::paths;
 
@@ -171,24 +173,88 @@ pub fn reveal_path(state: State<'_, AppState>, path: String) -> Result<(), Comma
         .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not show the file: {error}")))
 }
 
+/// Let the webview play one recording through the asset protocol. The path must pass
+/// [`paths::check_playable`] (an audio file inside a recording folder the backend reports);
+/// then only that file joins the asset scope, which starts empty (`tauri.conf.json`).
+/// Returns the canonical path, the form the scope matches, for `convertFileSrc`.
+#[tauri::command]
+pub fn audio_source(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<String, CommandError> {
+    use tauri::Manager;
+    let checked = paths::check_playable(&path, &state.roots).map_err(path_error)?;
+    app.asset_protocol_scope()
+        .allow_file(&checked)
+        .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not allow the recording: {error}")))?;
+    log::info!("[Commands] Recording allowed for playback — {{ extension: {:?} }}", checked.extension());
+    checked
+        .to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| CommandError::new(codes::INVALID_PARAMS, "the recording path is not valid UTF-8"))
+}
+
 /// First-run state, the same shape as `setupStatusSchema` in `src/rpc/schema.ts`.
 #[tauri::command]
 pub fn setup_status(state: State<'_, AppState>) -> SetupStatus {
     state.installer.status()
 }
 
-/// Run `setup_runtime.py`; progress arrives as `setup://progress` events.
+/// Run `setup_runtime.py`; progress arrives as `setup://progress` events. Async, and the
+/// launch (Python lookup, payload checks, spawn) runs on a blocking worker: a sync command runs
+/// on the main thread, which also draws the window.
 #[tauri::command]
-pub fn setup_run(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    request: SetupRunRequest,
-) -> Result<SetupStatus, CommandError> {
-    state.installer.run(app, request).map_err(|error| CommandError {
+pub async fn setup_run(app: AppHandle, request: SetupRunRequest) -> Result<SetupStatus, CommandError> {
+    use tauri::Manager;
+    let worker = app.clone();
+    let launched = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker.state::<AppState>();
+        state.installer.run(worker.clone(), request)
+    })
+    .await
+    .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("setup could not start: {error}")))?;
+    launched.map_err(|error| CommandError {
         code: codes::INVALID_PARAMS,
         message: error.to_string(),
         data: Some(serde_json::json!({ "reason": error.code() })),
     })
+}
+
+/// Open an install guide in the default browser, after [`external::check_link`].
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), CommandError> {
+    let checked =
+        external::check_link(&url).map_err(|error| CommandError::new(codes::INVALID_PARAMS, error.to_string()))?;
+    log::info!("[Commands] Opening link — {{ host: {:?} }}", checked.host_str());
+    tauri_plugin_opener::open_url(checked.as_str(), None::<&str>)
+        .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not open the link: {error}")))
+}
+
+/// Open the system's microphone or sound settings ([`external::settings_target`]).
+#[tauri::command]
+pub fn open_system_settings(pane: String) -> Result<(), CommandError> {
+    let refused = |error: external::ExternalError| CommandError::new(codes::INVALID_PARAMS, error.to_string());
+    let pane = external::SettingsPane::parse(&pane).map_err(refused)?;
+    let path = crate::backend::locate::cached_backend_path();
+    let target = external::settings_target(Platform::current(), pane, path.as_deref()).map_err(refused)?;
+    log::info!("[Commands] Opening system settings — {{ pane: {pane:?} }}");
+    match target {
+        external::SettingsTarget::Url(url) => tauri_plugin_opener::open_url(url, None::<&str>)
+            .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not open the settings: {error}"))),
+        external::SettingsTarget::Program { program, args } => {
+            let mut child = std::process::Command::new(program)
+                .args(args)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|error| {
+                    CommandError::new(codes::INTERNAL_ERROR, format!("could not open the settings: {error}"))
+                })?;
+            // Reap it when the user closes it, so no zombie stays behind.
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            Ok(())
+        }
+    }
 }
 
 /// The `--action` the app was launched with, once (`record-dialog`, `show`).
@@ -257,6 +323,33 @@ mod tests {
         assert_eq!(intent.replay(), Some(serde_json::json!({"visible": false})));
         intent.observe("session.close", None);
         assert_eq!(intent.replay(), None);
+    }
+
+    /// Audio playback needs the asset protocol, but nothing may be served from it until
+    /// `audio_source` has checked one file: no static scope, and only media may load from it.
+    #[test]
+    fn the_asset_protocol_serves_only_what_audio_source_allows() {
+        let config: Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let security = &config["app"]["security"];
+        assert_eq!(security["assetProtocol"], serde_json::json!({"enable": true, "scope": []}), "no $HOME/** scope");
+        for key in ["csp", "devCsp"] {
+            let csp = security[key].as_str().unwrap();
+            let directive = |name: &str| {
+                csp.split(';').map(str::trim).find(|d| d.split_whitespace().next() == Some(name)).unwrap().to_owned()
+            };
+            assert_eq!(directive("media-src"), "media-src 'self' asset: http://asset.localhost", "{key}");
+            assert_eq!(directive("default-src"), "default-src 'self'", "{key}");
+            assert_eq!(directive("script-src"), "script-src 'self'", "{key}");
+            assert!(!directive("connect-src").contains("asset"), "{key}");
+        }
+        let cargo = include_str!("../Cargo.toml");
+        assert!(cargo.lines().any(|line| line.starts_with("tauri = ") && line.contains("\"protocol-asset\"")));
+        let main: Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let capsule: Value = serde_json::from_str(include_str!("../capabilities/capsule.json")).unwrap();
+        let grants = |capability: &Value| {
+            capability["permissions"].as_array().unwrap().contains(&serde_json::json!("allow-audio-source"))
+        };
+        assert!(grants(&main) && !grants(&capsule), "only the main window plays recordings");
     }
 
     #[test]

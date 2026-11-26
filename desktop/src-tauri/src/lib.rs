@@ -7,7 +7,8 @@
 //! - `backend::supervisor`: the child process (spawn, handshake, ping, restart, shutdown);
 //! - `commands`: what the webviews may call (`rpc_call` allowlist, paths, setup, status);
 //! - `events`: supervisor reports → Tauri events, tray, capsule, course folders, notifications;
-//! - `paths`: open/reveal validation: local-only prefixes, allowed roots, file types (tested);
+//! - `paths`: open/reveal/play validation: local-only prefixes, allowed roots, file types (tested);
+//! - `external`: install-guide links (https allowlist) and system settings panes (tested);
 //! - `installer`: first-run `setup_runtime.py` with progress;
 //! - `tray`, `capsule`, `actions`: native surfaces; `selfcheck`: the headless proof.
 
@@ -16,6 +17,7 @@ pub mod backend;
 pub mod capsule;
 pub mod commands;
 pub mod events;
+pub mod external;
 pub mod installer;
 pub mod paths;
 pub mod selfcheck;
@@ -144,6 +146,9 @@ pub fn run() {
             commands::setup_status,
             commands::setup_run,
             commands::take_pending_action,
+            commands::audio_source,
+            commands::open_external,
+            commands::open_system_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building MyNotes Desktop");

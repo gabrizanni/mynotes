@@ -8,10 +8,16 @@ import { useOnboarding } from "../controller";
 import { AUTO_ADVANCE_MS, LOGIN_POLL_MS, PROVIDERS, signInPhase, type Provider } from "../model";
 import styles from "../Onboarding.module.css";
 import { GUIDES } from "../platform";
+import { isTauriRuntime } from "../../../rpc/transports/tauri";
 import { StepLayout } from "../StepLayout";
 
+/** In the app, Rust opens the guide in the browser (https, known hosts); the preview uses a tab. */
 function openGuide(url: string) {
-  window.open(url, "_blank", "noopener,noreferrer");
+  if (!isTauriRuntime()) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  void import("../../../rpc/native").then(({ openExternal }) => openExternal(url)).catch(() => undefined);
 }
 
 /** 1 · Language: defaults to the OS language and switches the window at once. */
