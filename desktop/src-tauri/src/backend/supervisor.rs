@@ -12,7 +12,8 @@
 //! - **Spawn.** The command comes from a [`LaunchFn`] resolved at every (re)start, so a runtime
 //!   installed while the app runs is picked up. Unix: own process group (`process_group(0)`),
 //!   signalled with `killpg`. Windows: a Job Object with kill-on-close, so the whole tree dies
-//!   with the app even after a crash.
+//!   with the app even after a crash, except what `mynotes serve` starts with
+//!   `CREATE_BREAKAWAY_FROM_JOB` (its jobs and queue runner), which the job allows.
 //! - **Handshake.** `system.hello {protocol: 1}` within [`SupervisorConfig::hello_timeout`]; a
 //!   different protocol (or `-32005`) is a permanent failure, not a crash loop.
 //! - **Health.** `system.ping` every 15 s; no answer within the ping timeout kills the process
@@ -793,6 +794,18 @@ async fn stop_child(child: &mut Child, tree: &process_tree::Tree, grace: Duratio
 mod process_tree {
     use tokio::process::{Child, Command};
 
+    /// `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (winnt.h): the server's tree ends with the app.
+    #[cfg_attr(not(windows), allow(dead_code))] // Used on Windows; tested everywhere.
+    pub const KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+    /// `JOB_OBJECT_LIMIT_BREAKAWAY_OK`: a child created with `CREATE_BREAKAWAY_FROM_JOB` may
+    /// leave. `mynotes serve` asks for it for its jobs and queue runner only (provider_process.py),
+    /// so a running notes job outlives the app as docs/SERVE.md says; assistant replies do not
+    /// ask, stay in this job and end with it. Never `SILENT_BREAKAWAY_OK`, which frees every child.
+    #[cfg_attr(not(windows), allow(dead_code))] // Used on Windows; tested everywhere.
+    pub const BREAKAWAY_OK: u32 = 0x0000_0800;
+    #[cfg_attr(not(windows), allow(dead_code))] // Used on Windows; tested everywhere.
+    pub const JOB_LIMIT_FLAGS: u32 = KILL_ON_JOB_CLOSE | BREAKAWAY_OK;
+
     #[cfg(unix)]
     pub struct Tree {
         pgid: Option<libc::pid_t>,
@@ -851,8 +864,10 @@ mod process_tree {
     pub fn adopt(child: &Child) -> std::io::Result<Tree> {
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         };
+        const _: () = assert!(KILL_ON_JOB_CLOSE == JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+        const _: () = assert!(BREAKAWAY_OK == JOB_OBJECT_LIMIT_BREAKAWAY_OK);
         let process = child.raw_handle().ok_or_else(|| std::io::Error::other("the backend already exited"))?;
         // SAFETY: plain Win32 calls on handles owned by this function or by `child`.
         unsafe {
@@ -862,7 +877,7 @@ mod process_tree {
             }
             let tree = Tree { job };
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            limits.BasicLimitInformation.LimitFlags = JOB_LIMIT_FLAGS;
             let size = std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
             if SetInformationJobObject(job, JobObjectExtendedLimitInformation, std::ptr::addr_of!(limits).cast(), size)
                 == 0
@@ -907,6 +922,22 @@ mod process_tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checked here on every platform; the values are asserted against windows-sys at compile
+    /// time on Windows. That a job really survives the app is only observable on Windows.
+    #[test]
+    fn the_windows_job_kills_the_server_tree_but_lets_serve_jobs_break_away() {
+        use process_tree::{BREAKAWAY_OK, JOB_LIMIT_FLAGS, KILL_ON_JOB_CLOSE};
+        const SILENT_BREAKAWAY_OK: u32 = 0x0000_1000;
+        assert_eq!(JOB_LIMIT_FLAGS, 0x2000 | 0x0800);
+        assert_ne!(JOB_LIMIT_FLAGS & KILL_ON_JOB_CLOSE, 0);
+        assert_ne!(JOB_LIMIT_FLAGS & BREAKAWAY_OK, 0);
+        assert_eq!(JOB_LIMIT_FLAGS & SILENT_BREAKAWAY_OK, 0, "children must ask to leave");
+        // The Python side asks for exactly this breakaway.
+        let python = include_str!("../../../../src/mynotes/provider_process.py");
+        assert!(python.contains("CREATE_BREAKAWAY_FROM_JOB = 0x01000000"));
+        assert!(python.contains("JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800"));
+    }
 
     #[test]
     fn backoff_doubles_from_half_a_second_and_caps_at_thirty() {
