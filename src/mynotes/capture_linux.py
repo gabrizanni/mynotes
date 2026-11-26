@@ -47,6 +47,11 @@ TICK_SECONDS = 0.5
 STATUS_SECONDS = 4
 SYNC_MINUTES = 5
 STOP_TIMEOUT_SECONDS = 10
+# A recorder still running this long after Popen has opened its source. One
+# that exits sooner (no device, no PipeWire session) fails the attempt once,
+# instead of being relaunched on every tick for the rest of the lesson.
+STARTUP_CHECK_SECONDS = 0.5
+STDERR_TAIL_BYTES = 2048
 EXPORT_TIMEOUT_SECONDS = 30 * 60
 SUSPEND_GAP_SECONDS = 2.0
 REQUEST_LIFETIME = timedelta(minutes=1)
@@ -273,6 +278,8 @@ class MicrophoneRecording:
         self.error: Exception | None = None
         self._process: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
+        self._stderr_tail = b""
         self._writer: WavSegmentWriter | None = None
         self._gate = threading.Lock()
         self._stopping = False
@@ -284,10 +291,32 @@ class MicrophoneRecording:
         return self._reader is not None and not self._reader.is_alive() and not self._stopping
 
     def start(self) -> None:
+        """Start the recorder; CaptureError if it exits within STARTUP_CHECK_SECONDS."""
         self._process = subprocess.Popen(self.command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, start_new_session=True)
+                                         stderr=subprocess.PIPE, start_new_session=True)
+        self._stderr_reader = threading.Thread(target=self._keep_stderr, name="capture-recorder-stderr", daemon=True)
+        self._stderr_reader.start()
         self._reader = threading.Thread(target=self._read, name="capture-reader", daemon=True)
         self._reader.start()
+        try:
+            code = self._process.wait(timeout=STARTUP_CHECK_SECONDS)
+        except subprocess.TimeoutExpired:
+            return
+        self._stopping = True  # Not a lost device: this attempt never started.
+        self._reader.join(STOP_TIMEOUT_SECONDS)
+        self._stderr_reader.join(STOP_TIMEOUT_SECONDS)
+        detail = self._stderr_tail.decode("utf-8", errors="replace").strip().splitlines()
+        message = f"The recorder {Path(self.command[0]).name} exited at once with status {code}"
+        raise CaptureError(message + (f": {detail[-1]}" if detail else ""))
+
+    def _keep_stderr(self) -> None:
+        """Drain the recorder's stderr so it never blocks; keep the end for error messages."""
+        assert self._process is not None and self._process.stderr is not None
+        try:
+            while chunk := self._process.stderr.read1(4096):
+                self._stderr_tail = (self._stderr_tail + chunk)[-STDERR_TAIL_BYTES:]
+        except (OSError, ValueError):
+            pass
 
     def _read(self) -> None:
         assert self._process is not None and self._process.stdout is not None
@@ -357,10 +386,13 @@ class MicrophoneRecording:
     def dispose(self) -> None:
         self._stopping = True
         self._terminate()
-        if self._reader is not None:
-            self._reader.join(STOP_TIMEOUT_SECONDS)
-        if self._process is not None and self._process.stdout is not None:
-            self._process.stdout.close()
+        for reader in (self._reader, self._stderr_reader):
+            if reader is not None:
+                reader.join(STOP_TIMEOUT_SECONDS)
+        if self._process is not None:
+            for stream in (self._process.stdout, self._process.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 # ---------------------------------------------------------------- helpers
@@ -1057,11 +1089,43 @@ def _systemd_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def unit_text(python: Path, workspace: Path, home: Path) -> str:
+def stable_python(python: Path) -> Path:
+    """`<app>/current/…/python` for an installed `<app>/versions/<v>/…/python` that `current` selects.
+
+    setup_runtime.py installs each version under `versions/<v>` and switches
+    the `current` symlink atomically, so a unit that names `current` runs the
+    new version after an update without being rewritten. A source checkout or
+    a version that `current` does not select keeps its own path.
+    """
+    for version in python.parents:
+        if version.parent.name != "versions":
+            continue
+        current = version.parent.parent / "current"
+        candidate = current / python.relative_to(version)
+        try:
+            if current.is_symlink() and current.resolve() == version.resolve() and candidate.is_file():
+                return candidate
+        except OSError:
+            pass
+        break
+    return python
+
+
+def recorder_environment(environment: dict[str, str] | None = None) -> dict[str, str]:
+    """The recorder settings of the enabling shell that the service must keep."""
+    environment = os.environ if environment is None else environment
+    chosen = {name: environment[name] for name in (SOURCE_ENV, RECORDER_ENV) if environment.get(name)}
+    if chosen.get(RECORDER_ENV, "pw-record") not in {"pw-record", "ffmpeg"}:
+        raise CaptureError(f"{RECORDER_ENV} must be pw-record or ffmpeg")
+    return chosen
+
+
+def unit_text(python: Path, workspace: Path, home: Path, environment: dict[str, str] | None = None) -> str:
     if not python.is_absolute() or not workspace.is_absolute() or not home.is_absolute():
         raise CaptureError("Capture needs absolute Python, workspace and runtime paths")
     command = [str(python), "-I", "-X", "utf8", "-m", "mynotes.capture_linux",
                "--workspace", str(workspace), "--capture-home", str(home)]
+    variables = {NOTIFY_ENV: "1", **dict(sorted((environment or {}).items()))}
     return "\n".join((
         "# Written by mynotes capture enable; removed by mynotes capture disable.",
         "[Unit]",
@@ -1071,7 +1135,7 @@ def unit_text(python: Path, workspace: Path, home: Path) -> str:
         "[Service]",
         "Type=simple",
         "ExecStart=" + " ".join(_systemd_quote(part) for part in command),
-        "Environment=" + _systemd_quote(f"{NOTIFY_ENV}=1"),
+        *("Environment=" + _systemd_quote(f"{name}={value}") for name, value in variables.items()),
         "Restart=on-failure",
         "RestartSec=30",
         # Stop only the worker; it ends the recorder and finishes exports itself.
@@ -1110,6 +1174,13 @@ def installed() -> bool:
     return unit_path().is_file() and recorder_available()
 
 
+def _unit_is(text: str) -> bool:
+    try:
+        return unit_path().read_text(encoding="utf-8") == text
+    except (OSError, UnicodeError):
+        return False
+
+
 def _write_unit(text: str) -> None:
     path = unit_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1146,7 +1217,10 @@ def set_enabled(store: CaptureStore, enabled: bool, *,
         if enabled and (not store.config_path.exists() or not store.schedule_path.exists()):
             raise CaptureError("Configure Capture and import or synchronize a calendar first")
         state = capture_status(store)
-        if enabled and active and store.config()["enabled"] and state["running"] is True:
+        # Computed first: a running service whose unit differs (another
+        # version, other recorder settings) is rewritten and restarted below.
+        text = unit_text(stable_python(Path(sys.executable)), workspace, home, recorder_environment()) if enabled else ""
+        if enabled and active and store.config()["enabled"] and state["running"] is True and _unit_is(text):
             return {"status": "ENABLED", "alreadyRunning": True}
         if not enabled:
             with store.lock():
@@ -1161,7 +1235,7 @@ def set_enabled(store: CaptureStore, enabled: bool, *,
             return {"status": "DISABLED"}
         if not recorder_available():
             raise CaptureError("Install PipeWire (pw-record) or FFmpeg with PulseAudio input to record audio")
-        _write_unit(unit_text(Path(sys.executable), workspace, home))
+        _write_unit(text)
         previously_enabled = store.config()["enabled"]
         try:
             _require(systemctl("daemon-reload"), "reload")

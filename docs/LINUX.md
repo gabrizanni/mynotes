@@ -21,14 +21,19 @@ non lo è ancora.
 | Verification | `mynotes verify-transcription --audio SAMPLE` (Linux has no built-in speech synthesizer, so a spoken sample is required, for example whisper.cpp's public `samples/jfk.wav`). `mynotes verify-word-renderer`. `mynotes doctor --json`. |
 | Audio import | PyAV decodes and resamples; `afconvert` and `afinfo` are not used. |
 | Recording | `mynotes.capture_linux`, a Python port of the Windows worker. It reads and writes the same request, response, session and `runtime.json` files. Audio is 48 kHz mono PCM staged in WAV segments that rotate every 10 minutes, then exported to M4A. Recordings and staging folders are owner-only (0600 and 0700). |
-| Background service | `mynotes capture enable` writes `~/.config/systemd/user/mynotes-capture.service` (`Restart=on-failure`, `RestartSec=30`, `WantedBy=default.target`) and starts it; `mynotes capture disable` stops and removes it. |
+| Background service | `mynotes capture enable` writes `~/.config/systemd/user/mynotes-capture.service` (`Restart=on-failure`, `RestartSec=30`, `WantedBy=default.target`) and starts it; `mynotes capture disable` stops and removes it. For a runtime installed by `setup_runtime.py`, the unit runs `<app>/current/venv/bin/python`, the symlink that setup switches to each new version; from a source checkout it runs that checkout's Python. Run again while the service runs, `capture enable` answers `alreadyRunning` only when the unit it would write is the one installed; otherwise it rewrites the unit, reloads systemd and restarts the service. |
+| Recorder errors | A recorder that exits within 0.5 s of starting (no PipeWire session, no device) fails that lesson once: the session is saved `FAILED` with the recorder's last stderr line, and the worker does not relaunch it for the rest of the lesson. A recorder lost after that interrupts the recording; during a scheduled lesson the worker starts it again and the session is marked partial, with a gap. |
 | Suspend | A jump between `CLOCK_BOOTTIME` and `CLOCK_MONOTONIC` marks a suspend; the attempt is interrupted and resumes as a partial recording, as on Windows. |
 | Notifications | `notify-send` at recording start and stop, only when `MYNOTES_CAPTURE_NOTIFY=1`. The service sets it. |
 
-Optional recorder settings for the service environment:
-`MYNOTES_CAPTURE_SOURCE` (a PipeWire target or PulseAudio source name; the
-default input otherwise) and `MYNOTES_CAPTURE_RECORDER` (`pw-record` or
-`ffmpeg`).
+Optional recorder settings: `MYNOTES_CAPTURE_SOURCE` (a PipeWire target or
+PulseAudio source name; the default input otherwise) and
+`MYNOTES_CAPTURE_RECORDER` (`pw-record` or `ffmpeg`). `mynotes capture enable`
+copies the ones set in its own environment into the unit as `Environment=`
+lines, for example `MYNOTES_CAPTURE_SOURCE=alsa_input.usb-mic mynotes capture
+enable`. To change or drop them, run `capture enable` again with the new
+values, or without them; it rewrites the unit and restarts the service. A hand
+edit of the unit file is replaced the next time `capture enable` writes it.
 
 ## Install from a source checkout
 
@@ -90,14 +95,18 @@ was recorded. "Not proved" rows still need a run.
 | Offline transcription | ASR engine registry and normalized transcript format | Proved: `install-speech-model` (51 s), `verify-transcription --audio jfk.wav` with `large-v3-turbo` (11.0 s of audio in 19.8 s at the default 4 threads), PyAV normalization of recorded M4A. Measured `whisper-cli` speed: on a 120 s Italian LibriVox excerpt, 71.7 s with 4 threads (0.60 × real time) and 55.0 s with 8 threads (0.46 ×); on the 11 s JFK clip, 19.2 s and 11.5 s. Other jobs shared the CPU (load average 3 to 7). Long lessons, speaker attribution and cache reuse are not proved. |
 | External chat | `chat --provider`, workspace rules, provider preferences | Not proved. The doctor probe found a signed-in Claude Code; no chat or paid call was made. |
 | Notes and Word | Preparation, notes, publication and undo commands | Partly proved: `verify-word-renderer` rendered the equation test document with the system LibreOffice. Note generation with a provider is not proved. |
-| Distribution | Release archive and SHA-256 | Partly proved: the payload builds and installs on this machine, and its SHA-256 file verifies. Upgrade, rollback and a clean second distribution are not proved; the CI job has not run yet. |
+| Distribution | Release archive and SHA-256 | Partly proved: the payload builds and installs on this machine, and its SHA-256 file verifies. The `linux-x64-runtime` CI job (Ubuntu 24.04: the test suite, the public-tree audit, the payload build with CMake, transcription of the public sample with the tiny model and Word rendering with the system LibreOffice) passed on a fork pull request ([checks](https://github.com/Danascaaa/mynotes/pull/1/checks)). That job builds the payload but does not install it. Upgrade, rollback and a clean second distribution are not proved. |
 
 ## Known limits
 
 - MyNotes does not pass a thread count, so whisper.cpp uses its default of 4.
   On this machine 8 threads took 23% less time on the 120 s excerpt.
-- The service runs the Python of the version that enabled it. After an update,
-  run `mynotes capture enable` again to point it at the new version.
+- An update leaves the service unit unchanged: the unit names
+  `<app>/current`, and the installer stops the service before it switches
+  `current` and starts it again afterwards. A unit written before this change
+  names `<app>/versions/<version>`; run `mynotes capture enable` once to
+  rewrite it. Updating an installed runtime with an enabled service is
+  covered by tests only, not by a run on a real machine.
 - Until `mynotes capture enable` has installed the service, unassigned recordings and
   all-timed calendar imports are refused, as on a computer without the recorder app.
   Enable Capture first.

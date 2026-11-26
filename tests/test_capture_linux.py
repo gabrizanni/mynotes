@@ -144,7 +144,8 @@ def test_recording_rotates_segments_and_keeps_every_frame(tmp_path):
 
 
 def test_lost_recorder_is_reported_as_completed_with_an_error(tmp_path):
-    recording = fake_recorder("5")(tmp_path / "stage")
+    # 200 chunks of 5 ms: the device is lost after the startup check (0.5 s).
+    recording = fake_recorder("200")(tmp_path / "stage")
     recording.start()
     deadline = time.monotonic() + 10
     while not recording.completed and time.monotonic() < deadline:
@@ -201,7 +202,7 @@ def test_manual_start_and_stop_saves_a_partial_recording(store):
 
 def test_lost_device_interrupts_then_recovers_after_the_window(store):
     clock = Clock()
-    worker = make_worker(store, clock, recorder=fake_recorder("20"))
+    worker = make_worker(store, clock, recorder=fake_recorder("200"))  # Lost after the startup check.
     event = standalone_event(clock.now, minutes=1)
     started = capture.request(store, "start", {"event": event}, wait_seconds=0)
     worker.tick()
@@ -215,6 +216,40 @@ def test_lost_device_interrupts_then_recovers_after_the_window(store):
     settle(worker)
     recovered = session(store, identity)
     assert recovered["status"] == "PARTIAL" and "Recovered after interruption" in recovered["reason"]
+    worker.shutdown()
+
+
+def test_a_recorder_that_exits_at_once_fails_the_lesson_once(store, monkeypatch, tmp_path):
+    """No device or PipeWire session: one attempt and a clear error, not a relaunch every 500 ms."""
+    monkeypatch.setenv("MYNOTES_USER_HOME", str(tmp_path / "user"))
+    code = onboarding.add_first_course(store.workspace, "Economia")["code"]
+    now = datetime.now(UTC).replace(microsecond=0)
+    capture.import_schedule(store, {"events": [{"courseCode": code, "lessonNumber": 1, "title": "Economia",
+                                                "startsAt": capture.iso(now - timedelta(minutes=1)),
+                                                "endsAt": capture.iso(now + timedelta(minutes=30))}]})
+    config = store.config()
+    config["enabled"] = True
+    store.save_config(config)
+    launches, notifications = [], []
+    exits_at_once = [sys.executable, "-c", "import sys; sys.stderr.write('Connection refused: no PipeWire session'); sys.exit(1)"]
+
+    def recorder(folder):
+        launches.append(folder)
+        return capture_linux.MicrophoneRecording(folder, exits_at_once)
+
+    monkeypatch.setattr(capture_linux, "notify", lambda *message: notifications.append(message))
+    worker = make_worker(store, Clock(), recorder=recorder)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        worker.tick()
+        time.sleep(0.1)
+    assert len(launches) == 1 and notifications == []
+    assert worker.current is None and worker.recorder is None
+    [failed] = [json.loads(path.read_text()) for path in (store.directory / "sessions").glob("*.json")]
+    assert failed["status"] == "FAILED"
+    assert failed["reason"] == (f"The recorder {Path(sys.executable).name} exited at once with status 1: "
+                                "Connection refused: no PipeWire session")
+    assert worker.detail == failed["reason"] and worker.permission == "UNAVAILABLE"
     worker.shutdown()
 
 
@@ -309,6 +344,67 @@ def test_service_unit_quotes_paths_and_mirrors_the_launch_agent(tmp_path):
         capture_linux.unit_text(Path("/usr/bin/python3"), tmp_path / "bad\nname", tmp_path)
     with pytest.raises(capture.CaptureError):
         capture_linux.unit_text(Path("python3"), workspace, tmp_path)
+
+
+def test_service_unit_carries_the_recorder_settings_of_the_enabling_shell(tmp_path):
+    settings = capture_linux.recorder_environment({"MYNOTES_CAPTURE_SOURCE": "alsa_input.usb-mic", "MYNOTES_CAPTURE_RECORDER": "ffmpeg",
+                                                   "MYNOTES_CAPTURE_NOTIFY": "0", "HOME": "/home/someone"})
+    assert settings == {"MYNOTES_CAPTURE_SOURCE": "alsa_input.usb-mic", "MYNOTES_CAPTURE_RECORDER": "ffmpeg"}
+    text = capture_linux.unit_text(Path("/opt/mynotes/venv/bin/python"), tmp_path / "w", tmp_path / "Capture", settings)
+    assert [line for line in text.splitlines() if line.startswith("Environment=")] == [
+        'Environment="MYNOTES_CAPTURE_NOTIFY=1"', 'Environment="MYNOTES_CAPTURE_RECORDER=ffmpeg"',
+        'Environment="MYNOTES_CAPTURE_SOURCE=alsa_input.usb-mic"']
+    assert capture_linux.recorder_environment({}) == {}
+    with pytest.raises(capture.CaptureError, match="pw-record or ffmpeg"):
+        capture_linux.recorder_environment({"MYNOTES_CAPTURE_RECORDER": "arecord"})
+
+
+def installed_versions(root: Path, *versions: str) -> Path:
+    """`setup_runtime.py`'s layout: versions/<v>/venv/bin/python and a `current` symlink."""
+    for version in versions:
+        python = root / "versions" / version / "venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\n")
+    (root / "current").symlink_to(root / "versions" / versions[0])
+    return root
+
+
+def test_the_service_names_the_current_version_of_an_installed_runtime(tmp_path):
+    app = installed_versions(tmp_path / "app", "0.4.1", "0.4.2")
+    selected = app / "versions/0.4.1/venv/bin/python"
+    assert capture_linux.stable_python(selected) == app / "current/venv/bin/python"
+    other = app / "versions/0.4.2/venv/bin/python"  # Installed, but not the one `current` selects.
+    assert capture_linux.stable_python(other) == other
+    checkout = tmp_path / "checkout/.venv/bin/python"
+    assert capture_linux.stable_python(checkout) == checkout
+
+
+def test_enable_rewrites_and_restarts_a_running_service_whose_unit_is_outdated(store, monkeypatch, tmp_path):
+    """After an update the old unit named versions/<old>/…/python; `capture enable` must not answer alreadyRunning."""
+    app = installed_versions(tmp_path / "app", "0.4.2")
+    monkeypatch.setattr(sys, "executable", str(app / "versions/0.4.2/venv/bin/python"))
+    monkeypatch.setattr(capture_linux, "recorder_available", lambda: True)
+    monkeypatch.setattr(capture_linux, "capture_status", lambda _store: {"running": True})
+    monkeypatch.delenv("MYNOTES_CAPTURE_SOURCE", raising=False)
+    monkeypatch.delenv("MYNOTES_CAPTURE_RECORDER", raising=False)
+    home = capture.runtime_home().resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    workspace = store.workspace.root.resolve()
+    (home / "active.json").write_text(json.dumps({"workspace": str(workspace)}))
+    unit = capture_linux.unit_path()
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(capture_linux.unit_text(app / "versions/0.4.1/venv/bin/python", workspace, home))
+    run, calls = fake_systemctl()
+    assert capture_linux.set_enabled(store, True, systemctl=run) == {"status": "ENABLED", "audioReadinessVerified": False}
+    assert calls == [("daemon-reload",), ("enable", "mynotes-capture.service"), ("restart", "mynotes-capture.service")]
+    assert f'ExecStart="{app / "current/venv/bin/python"}"' in unit.read_text()
+    calls.clear()
+    assert capture_linux.set_enabled(store, True, systemctl=run) == {"status": "ENABLED", "alreadyRunning": True}
+    assert calls == []  # Up to date: nothing to restart.
+    monkeypatch.setenv("MYNOTES_CAPTURE_SOURCE", "alsa_input.usb-mic")  # A new recorder setting is a change too.
+    assert "alreadyRunning" not in capture_linux.set_enabled(store, True, systemctl=run)
+    assert calls[-1] == ("restart", "mynotes-capture.service")
+    assert 'Environment="MYNOTES_CAPTURE_SOURCE=alsa_input.usb-mic"' in unit.read_text().splitlines()
 
 
 def fake_systemctl(fail=None):
