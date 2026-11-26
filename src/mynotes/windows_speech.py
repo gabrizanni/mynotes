@@ -1,4 +1,4 @@
-"""Locate and verify the optional local speech model used on Windows."""
+"""Locate and verify the optional local Whisper.cpp speech model (Windows and Linux)."""
 from __future__ import annotations
 
 import base64
@@ -27,6 +27,10 @@ MODEL_SHA256 = "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69
 
 
 def whisper_executable(configured: str | None = None) -> str | None:
+    if os.name != "nt":
+        # POSIX installs register whisper-cli as a managed tool (passed in as
+        # ``configured``), like Argmax on macOS; otherwise use the PATH.
+        return shutil.which(configured or "whisper-cli")
     bundled = Path(sys.executable).parent.parent / "speech/whisper/whisper-cli.exe"
     if configured:
         candidate = shutil.which(configured)
@@ -159,6 +163,8 @@ def verify_transcription(executable: str, model_dir: Path, *, model: str = DEFAU
     from .asr import WhisperCppEngine, audio_duration, normalize_audio
     if audio is None and language != "en":
         raise ValueError("Supply a short audio sample to verify a language other than English.")
+    if audio is None and sys.platform.startswith("linux"):
+        raise ValueError("Supply a short spoken sample with --audio, for example the public whisper.cpp samples/jfk.wav.")
     weights = model_dir / f"ggml-{model}.bin"
     if not weights.is_file():
         raise ValueError(f"Install the local Whisper.cpp model {model} first.")

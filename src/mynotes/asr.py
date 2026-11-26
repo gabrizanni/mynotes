@@ -23,6 +23,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Protocol
 
+from .platform_paths import is_linux
 from .utils import atomic_json_write, file_sha256
 from .workspace import Workspace
 
@@ -509,7 +510,7 @@ def normalize_audio(source: Path, destination: Path, *, afconvert: str = "/usr/b
     if source.suffix.casefold() == ".wav" and os.name != "nt":
         shutil.copy2(source, destination)
         return destination
-    if os.name == "nt":
+    if os.name == "nt" or is_linux():
         try:
             _normalize_with_pyav(source, destination)
         except Exception as error:
@@ -806,7 +807,7 @@ def default_engines(workspace: Workspace, settings: dict[str, Any]) -> dict[str,
     if "whispercpp" in (settings.get("primary_engine"), settings.get("secondary_engine"), settings.get("extra_pass_engine")):
         configured = tools.get("whispercpp") or managed_tool("whispercpp")
         model_dir = data_root / "whisper.cpp"
-        if os.name == "nt":
+        if os.name == "nt" or is_linux():
             from .windows_speech import model_directory, whisper_executable
             executable = whisper_executable(configured)
             if not (tools.get("model_cache") or managed.get("model_cache") or model_dir.is_dir()):

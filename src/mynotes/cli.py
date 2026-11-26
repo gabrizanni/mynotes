@@ -1355,7 +1355,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Word rendering verified ({proof['word_pages']} page(s)).")
             return 0
         if arguments.command in {"install-speech-model", "verify-transcription"}:
-            if os.name != "nt":
+            from .platform_paths import is_linux
+            if os.name != "nt" and not is_linux():
                 raise ValueError("This local speech setup command is available on Windows.")
             from .asr import default_engines
             from .windows_speech import install_default_model, verify_transcription
@@ -1367,7 +1368,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 workspace = Workspace.from_value(arguments.workspace)
                 engine = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
                 if not engine:
-                    raise ValueError("The native Whisper.cpp runtime is missing. Repair the Windows installation.")
+                    repair = "Install whisper-cli as described in docs/LINUX.md." if is_linux() else "Repair the Windows installation."
+                    raise ValueError("The native Whisper.cpp runtime is missing. " + repair)
                 proof = verify_transcription(engine.executable, engine.model_dir,
                                              audio=arguments.audio, language=arguments.language)
                 report = {"status": "VERIFIED", **proof}

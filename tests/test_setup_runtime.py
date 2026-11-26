@@ -215,6 +215,7 @@ def test_update_smoke_failure_restores_previous_selection_registry(tmp_path, mon
     assert json.loads((home / "setup.json").read_text()) == {"version": "0.1.1"}
 
 
+@pytest.mark.skipif(not Path("/bin/zsh").is_file(), reason="the macOS installer script runs under /bin/zsh")
 def test_retry_after_failed_smoke_uses_rollback_and_restores_launcher(tmp_path, monkeypatch):
     """Exercise the real rollback shell path; dependencies/smoke are synthetic."""
     import os
@@ -265,6 +266,7 @@ def test_retry_after_failed_smoke_uses_rollback_and_restores_launcher(tmp_path, 
     assert "fixture launcher works" in output.stdout
 
 
+@pytest.mark.skipif(not Path("/bin/zsh").is_file(), reason="the macOS installer script runs under /bin/zsh")
 def test_real_rollback_preserves_unmanaged_launcher_and_selection(tmp_path):
     import os
     import sys
