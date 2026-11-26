@@ -1,0 +1,157 @@
+.palette {
+  width: min(600px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 96px));
+  margin: 12vh auto auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-dialog);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e3);
+  color: var(--color-text-primary);
+  overflow: hidden;
+}
+
+.palette[open] {
+  display: flex;
+  flex-direction: column;
+  animation: enter var(--duration-base) var(--ease-standard);
+}
+
+.palette::backdrop {
+  background: var(--color-scrim);
+}
+
+.inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.searchRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.searchIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.back {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border: 0;
+  border-radius: var(--radius-input);
+  background: transparent;
+  color: var(--color-text-primary);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.back:hover {
+  background: var(--color-bg-hover);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: var(--text-title);
+  font-weight: 500;
+}
+
+.input::placeholder {
+  color: var(--color-text-muted);
+  opacity: 1;
+}
+
+/* The listbox shows the active option; the field itself needs no second ring. */
+.input:focus-visible {
+  outline: none;
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: var(--space-2);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.groupLabel {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+/* The active option carries the selection fill and a check of shape: an outline ring. */
+.active {
+  background: var(--color-action-soft);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+.active .optionLabel {
+  color: var(--color-action-soft-label);
+}
+
+.optionIcon {
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.optionLabel {
+  flex: 1;
+  min-width: 0;
+  font: var(--text-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kbd {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--radius-inner);
+  background: var(--color-neutral-bg);
+  color: var(--color-text-muted);
+  font: var(--text-caption);
+  font-family: var(--font-sans);
+}
+
+.empty {
+  padding: var(--space-6) var(--space-5);
+  color: var(--color-text-muted);
+}
+
+.hint {
+  padding: var(--space-2) var(--space-5) var(--space-3);
+  border-top: 1px solid var(--color-border-hairline);
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-enter-offset) * -1)) scale(var(--motion-enter-scale));
+  }
+}

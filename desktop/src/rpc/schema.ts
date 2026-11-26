@@ -495,6 +495,8 @@ export const workspaceMethods = {
     result: cli(modelCatalogSchema),
   },
   "provider.login": { params: z.object({ provider: str }), result: jobRefSchema },
+  /** `undo CODE`: restores the course notes before the last update; a safety copy is kept. */
+  "notes.undo": { params: z.object({ course: str }), result: cli(okSchema) },
   "profile.save": { params: z.object({ background: str, skip: z.boolean().optional() }), result: cli(okSchema) },
   "word.verifyRenderer": { params: none, result: jobRefSchema },
   "speech.installModel": { params: none, result: jobRefSchema },
