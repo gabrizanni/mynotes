@@ -144,6 +144,7 @@ export const settings: Messages["settings"] = {
     checkAgain: "Verifica di nuovo",
     checking: "Verifica in corso…",
     allReady: "È tutto pronto.",
+    problemCount: (n: number) => (n === 1 ? "Una verifica ti aspetta." : `${n} verifiche ti aspettano.`),
     names: {
       installation: "MyNotes",
       agent: "Assistente AI",

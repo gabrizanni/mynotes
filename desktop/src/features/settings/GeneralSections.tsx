@@ -180,7 +180,8 @@ export function DiagnosticsSection() {
   };
 
   const checks = sortedChecks(doctor.value);
-  const allReady = checks.length > 0 && checks.every(([, check]) => check.status === "ready" || check.status === "optional");
+  const problems = checks.filter(([, check]) => check.status !== "ready" && check.status !== "optional").length;
+  const allReady = checks.length > 0 && problems === 0;
 
   return (
     <div className={styles.stack}>
@@ -200,7 +201,7 @@ export function DiagnosticsSection() {
                 {d.allReady}
               </>
             ) : (
-              d.intro
+              d.problemCount(problems)
             )}
           </p>
           <Button size="sm" variant="ghost" icon={RotateCw} loading={doctor.load.status === "loading"} onClick={() => void actions.settings.loadDoctor(true)}>
@@ -216,7 +217,7 @@ export function DiagnosticsSection() {
               <li key={name}>
                 <ListRow
                   title={d.names[name] ?? d.unknownCheck}
-                  description={ready ? (d.statuses.ready ?? "") : (d.problems[name] ?? d.statuses[check.status] ?? "")}
+                  description={ready ? undefined : (d.problems[name] ?? d.statuses[check.status])}
                   meta={
                     <>
                       <StatusChip kind="check" status={check.status} />

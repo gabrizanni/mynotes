@@ -142,6 +142,7 @@ export const settings = {
     checkAgain: "Check again",
     checking: "Checking…",
     allReady: "Everything is ready.",
+    problemCount: (n: number) => (n === 1 ? "1 check needs you." : `${n} checks need you.`),
     names: {
       installation: "MyNotes",
       agent: "AI assistant",
