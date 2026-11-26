@@ -12,6 +12,7 @@
 import { RpcCode, RpcError } from "../errors";
 import type { Transport } from "../transport";
 import { dayOffset, resolveFixtures, shiftDates, type Json } from "./fixtures";
+import { createNotesMock } from "./mockNotes"; // feat/desktop-lessons
 
 export interface MockOptions {
   scenario: string;
@@ -185,6 +186,11 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
     },
   };
 
+  // ===== BEGIN feat/desktop-lessons: Generate notes flow, transcription, transcript =====
+  const notesMock = createNotesMock({ state, emit, simulate: options.simulate, stageMs: options.stageMs, latencyMs: options.latencyMs, now: options.now });
+  Object.assign(handlers, notesMock.handlers);
+  // ===== END feat/desktop-lessons =====
+
   return {
     kind: "mock",
     async request(method, params) {
@@ -202,6 +208,7 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
       return () => listeners.delete(listener);
     },
     close() {
+      notesMock.dispose(); // feat/desktop-lessons
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       listeners.clear();

@@ -322,7 +322,118 @@ const notesParams = z.object({
   instructions: str.optional(),
   imageLimit: z.number().int().optional(),
   speakerFocus: z.literal("professor").optional(),
+  // feat/desktop-lessons: `--resume BATCH` and `--context-lessons` (Generate notes › Resume, More).
+  resume: str.optional(),
+  contextLessons: str.optional(),
 });
+
+// ===== BEGIN feat/desktop-lessons: courses, lesson detail, notes history =====================
+// Shapes follow the CLI JSON: `history` / `undo` / `restore` / `publish` (publication.py),
+// `style show|edit|preview` (cli._style), `course link --dry-run --json` (course_links.py),
+// transcript segments (asr.py: start_seconds, end_seconds, text, speaker).
+
+/** One cumulative-Word backup (`mynotes history CODE`). `reason`: "before STAT-L06 publication". */
+export const notesBackupSchema = z.looseObject({
+  backup_id: str,
+  course: str,
+  path: optStr,
+  source: optStr,
+  reason: optStr,
+  /** Compact UTC stamp, e.g. 20261124T105812123456Z (utils.now_compact_utc). */
+  created_at: str,
+  publication_state: z.looseObject({ lessons: z.array(z.looseObject({ lecture_id: str })).optional() }).nullable().optional(),
+});
+
+export const notesUndoSchema = z.looseObject({
+  status: str,
+  course: optStr,
+  lecture_id: optStr,
+  output: optStr,
+  pre_restore_backup: z.unknown().optional(),
+});
+
+export const notesRestoreSchema = z.looseObject({ status: str, backup_id: optStr, output: optStr, pre_restore_backup: z.unknown().optional() });
+
+export const notesPublishSchema = z.looseObject({ status: str, lecture_id: optStr, output: optStr });
+
+/** Editable style fields (configuration.EDITABLE_STYLE_FIELDS plus counts). */
+export const styleProfileSchema = z.looseObject({
+  writing_style: str,
+  list_density: str,
+  image_policy: str,
+  image_limit: z.number().int().nullable().optional(),
+  question_count: z.number().int(),
+  recap: z.boolean(),
+  recap_language: str,
+  slide_scope: optStr,
+});
+
+export const styleShowSchema = z.looseObject({ scope: str, effective: styleProfileSchema });
+export const stylePreviewSchema = z.looseObject({ scope: str, preview: str });
+
+const fileCountsSchema = z.record(str, z.number());
+
+/** `course link CODE PATH --dry-run --json`: READY, NEEDS_SELECTION or LINKED. */
+export const courseLinkSchema = z.looseObject({
+  status: str,
+  course: str,
+  saved: z.boolean(),
+  connections: z.record(str, str).optional(),
+  proposed_connections: z.record(str, str).optional(),
+  note_files: z.looseObject({ personal_notes: optStr, handout: optStr }).optional(),
+  proposed_files: z.looseObject({ personal_notes: optStr, handout: optStr }).optional(),
+  ambiguities: z.record(str, z.array(str)).optional(),
+  inventory: z.looseObject({ resolved_folder: optStr, file_counts: fileCountsSchema.optional(), files: z.record(str, z.array(str)).optional() }).optional(),
+  publication_mode: optStr,
+});
+
+export const transcriptSegmentSchema = z.looseObject({
+  start_seconds: z.number(),
+  end_seconds: optNum,
+  text: str,
+  speaker: optStr,
+});
+
+/** Timestamped transcript of one lesson (name to confirm: no CLI command prints it yet). */
+export const lessonTranscriptSchema = z.looseObject({
+  lecture_id: str,
+  path: optStr,
+  language: optStr,
+  segments: z.array(transcriptSegmentSchema),
+});
+
+export const courseRecordSchema = z.looseObject({ code: str, name: str });
+
+const coursesLessonMethods = {
+  "notes.history": { params: z.object({ course: str.optional() }), result: cli(z.array(notesBackupSchema)) },
+  "notes.undo": { params: z.object({ course: str }), result: cli(notesUndoSchema) },
+  "notes.restore": { params: z.object({ backupId: str }), result: cli(notesRestoreSchema) },
+  /** `publish CODE-LNN --candidate PATH` (Approve & update Word). Not in the A table yet. */
+  "notes.publish": { params: z.object({ lectureId: str, candidate: str.optional() }), result: cli(notesPublishSchema) },
+  "transcription.run": { params: z.object({ lectureId: str.optional(), recordingId: str.optional() }), result: jobRefSchema },
+  "style.show": { params: z.object({ course: str.optional() }), result: cli(styleShowSchema) },
+  /** `style edit --course CODE --file|--reset`. Not in the A table yet. */
+  "style.edit": {
+    params: z.object({ course: str.optional(), style: z.record(str, z.unknown()).optional(), reset: z.boolean().optional() }),
+    result: cli(styleShowSchema),
+  },
+  "style.preview": { params: z.object({ course: str.optional() }), result: cli(stylePreviewSchema) },
+  /** `course edit --file`: the whole course record (it replaces, it does not merge). */
+  "course.edit": { params: z.object({ course: z.record(str, z.unknown()) }), result: cli(courseRecordSchema) },
+  "course.link": {
+    params: z.object({ code: str, path: str, dryRun: z.boolean().optional(), publicationMode: z.enum(["automatic", "review"]).optional() }),
+    result: cli(courseLinkSchema),
+  },
+  "library.transcript": { params: z.object({ lectureId: str }), result: cli(lessonTranscriptSchema) },
+  /** `transcription-queue prefer-audio --recording ID` (Use for transcription). */
+  "library.preferAudio": { params: z.object({ recording: str }), result: cli(z.looseObject({ status: str.optional() })) },
+  /** `transcription-queue lesson-edit --file` ({action: update|hide, id, title?, date?}). */
+  "library.lessonEdit": {
+    params: z.object({ action: str, id: str, title: str.optional(), date: str.optional() }),
+    result: cli(z.looseObject({ status: str.optional() })),
+  },
+} as const;
+// ===== END feat/desktop-lessons ===============================================================
 
 export const methods = {
   "system.hello": { params: z.object({ protocol: z.literal(1) }), result: helloSchema },
@@ -363,6 +474,7 @@ export const methods = {
   "job.list": { params: none, result: jobListSchema },
   "job.get": { params: z.object({ jobId: str }), result: jobSchema },
   "job.cancel": { params: z.object({ jobId: str, force: z.boolean().optional() }), result: z.unknown() },
+  ...coursesLessonMethods, // feat/desktop-lessons
 } as const;
 
 export type MethodName = keyof typeof methods;
@@ -402,3 +514,9 @@ export type Config = z.output<typeof configSchema>;
 export type Job = z.output<typeof jobSchema>;
 export type SetupStatus = z.output<typeof setupStatusSchema>;
 export type NotesQuality = z.output<typeof qualitySchema>;
+// feat/desktop-lessons
+export type NotesBackup = z.output<typeof notesBackupSchema>;
+export type StyleProfile = z.output<typeof styleProfileSchema>;
+export type CourseLink = z.output<typeof courseLinkSchema>;
+export type LessonTranscript = z.output<typeof lessonTranscriptSchema>;
+export type TranscriptSegment = z.output<typeof transcriptSegmentSchema>;

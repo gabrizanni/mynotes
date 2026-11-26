@@ -1,0 +1,9 @@
+{
+  "simulation": {
+    "outcome": "COMPLETED_WITH_WARNINGS",
+    "warnings": [
+      "Slide 14 of Lecture 7 was unreadable and was skipped.",
+      "Two formulas were rebuilt from the transcript. Check them."
+    ]
+  }
+}

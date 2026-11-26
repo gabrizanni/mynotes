@@ -1,0 +1,13 @@
+{
+  "data": {
+    "status": "AWAITING_APPROVAL",
+    "lessons": [
+      {
+        "lecture_id": "STAT-L06",
+        "content_validated": true,
+        "word_candidate": "~/Documents/MyNotes/workspace/runs/STAT-L06/word/STAT-L06.candidate.docx",
+        "status": "AWAITING_APPROVAL"
+      }
+    ]
+  }
+}
