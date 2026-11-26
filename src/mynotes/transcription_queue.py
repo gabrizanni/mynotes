@@ -303,6 +303,20 @@ def library(workspace, *, query=None, date=None, course=None):
     return sorted(values, key=lambda r: (r["created_at"], r["path"]))
 
 
+def library_view(workspace, *, query=None, date=None, course=None):
+    """The `transcription-queue library` answer, shared with mynotes serve."""
+    from .recording_library import folder, options
+    return {"status": "OK", "recordings": library(workspace, query=query, date=date, course=course), "folder": str(folder(workspace)), "lessons": __import__("mynotes.lesson_registry", fromlist=["listing"]).listing(workspace), "folder_configured": bool(options(workspace).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(workspace) if options(workspace).get("folder") else []}
+
+
+def queue_has_work(workspace):
+    """True when a runner has something to start or to reconcile."""
+    if not (root(workspace) / "queue.sqlite3").exists():
+        return False
+    with database(workspace, readonly=True) as conn:
+        return conn.execute("SELECT 1 FROM jobs WHERE status IN ('QUEUED','RUNNING','CANCELLING') LIMIT 1").fetchone() is not None
+
+
 def _read(path, default):
     try:
         return json.loads(path.read_text())
@@ -616,7 +630,53 @@ def _worker_command(workspace, action, identifier=None):
             "--workspace", str(workspace.root)] + (["--job", identifier] if identifier else [])
 
 
+def runner_active(workspace):
+    """True while a queue runner holds runner.lock; the probe never blocks.
+
+    The probe holds the lock only for an instant. A runner starting in that
+    instant exits as if another runner were active, which is harmless because
+    a probe that finds the lock free is followed by launching a runner.
+    """
+    path = root(workspace) / "runner.lock"
+    if not path.is_file():
+        return False
+    try:
+        with path.open("a+") as lease:
+            try:
+                file_lock.flock(lease, file_lock.LOCK_EX | file_lock.LOCK_NB)
+            except BlockingIOError:
+                return True
+            file_lock.flock(lease, file_lock.LOCK_UN)
+    except OSError:
+        return False  # Unknown: launch as before; a redundant runner exits at once.
+    return False
+
+
+# The only runner-written wait reason that status() reports; a runner must refresh it.
+_RUNNER_HOLD = 'In attesa di memoria disponibile'
+
+
+def runner_needed(workspace):
+    """True when a runner would do something: start, reconcile or re-check a hold.
+
+    With nothing queued, running or cancelling, a runner only rewrites
+    wait.json and exits; status() reads back only the memory hold from it.
+    """
+    if queue_has_work(workspace):
+        return True
+    return _read(root(workspace) / 'wait.json', {}).get('reason') == _RUNNER_HOLD
+
+
 def launch_runner(workspace):
+    """Start the queue runner when it has work and none is running; returns the process or None."""
+    if runner_active(workspace):
+        return None
+    try:
+        needed = runner_needed(workspace)
+    except (OSError, ValueError, sqlite3.Error):
+        needed = True  # Unknown: launch as before; an idle runner exits at once.
+    if not needed:
+        return None
     root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
     with (root(workspace) / "runner.log").open("ab") as log:
         options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
@@ -1001,9 +1061,9 @@ def run_cli(args):
         from .transcript_library import scan
         value = {"status": "OK", "transcripts": scan(ws, persist=getattr(args, "sync", False))}
     elif action == "library":
-        from .recording_library import sync, folder, options
+        from .recording_library import sync
         if getattr(args, 'sync', False): sync(ws)
-        value = {"status": "OK", "recordings": library(ws, query=args.query, date=args.date, course=args.course), "folder": str(folder(ws)), "lessons": __import__("mynotes.lesson_registry", fromlist=["listing"]).listing(ws), "folder_configured": bool(options(ws).get("folder")), "transcripts": __import__("mynotes.transcript_library", fromlist=["scan"]).scan(ws) if options(ws).get("folder") else []}
+        value = library_view(ws, query=args.query, date=args.date, course=args.course)
     elif action == "enqueue":
         value = enqueue(ws, args.parallel, recording_id=args.recording, ready_recording_ids=args.ready_recording)
         launch_runner(ws)

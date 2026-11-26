@@ -44,25 +44,15 @@ def _run_interactive(provider: str, command: list[str], environment: dict[str, s
     return subprocess.run(command, env=environment, cwd=directory, check=False).returncode
 
 
-def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: str | None, message: str | None = None) -> int:
-    if os.environ.get("MYNOTES_CHAT_ACTIVE") == "1":
-        raise ChatError("A MyNotes provider chat is already active; recursive launch is blocked")
+def learner_profile(configuration: dict[str, Any]) -> dict[str, Any]:
+    personal = configuration.get("personal", {})
+    return {key: personal[key] for key in ("background", "institution", "study_program", "study_period") if personal.get(key)}
+
+
+def startup_prompt(workspace: Workspace, configuration: dict[str, Any], selected: str, model: str, effort: str, *,
+                   shared_rules: bool, data_path: Path, message: str | None) -> str:
+    """The first prompt a MyNotes chat sends, built from saved settings only (no I/O)."""
     from .models import resolve_role_selection
-    selection = resolve_role_selection(configuration, 'chat', provider)
-    selected, model, effort = (selection[key] for key in ('provider', 'model', 'effort'))
-    if selected not in {"codex", "agy", "claude"}:
-        raise ChatError("Choose an agent in MyNotes Setup: codex, agy or claude")
-    environment = provider_environment()
-    executable = provider_executable(selected) if os.name == "nt" else (
-        shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
-    )
-    if not executable:
-        raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
-    # Instructions belong to this private workspace, never the application source.
-    from .integrations import install_integration, install_shared_chat_rules
-    shared_rules = install_shared_chat_rules(workspace.root)
-    integration = install_integration(selected, workspace.root, shared_chat_rules=shared_rules)
-    repository = workspace.root
     courses = ", ".join(course["code"] for course in configuration.get("courses", [])) or "none"
     onboarding = configuration.get("onboarding", {}).get("status", "unknown")
     language = configuration.get("personal", {}).get("interface_language", "en")
@@ -76,15 +66,9 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
             f"requested_effort={effort or 'provider default'}. "
         )
     personal = configuration.get("personal", {})
-    profile = {key: personal[key] for key in ("background", "institution", "study_program", "study_period") if personal.get(key)}
+    profile = learner_profile(configuration)
     background_known = bool(profile) or personal.get("background_confirmed", False) or bool(configuration.get("courses"))
     context += "learner_profile_acknowledged=" + str(bool(background_known)).lower() + ". "
-    from .source_routes import route_index
-    from .utils import atomic_json_write
-    data_path = workspace.state_dir / 'chat-startup-data.json'
-    atomic_json_write(data_path, {'derived_at_launch': True,
-        'settings_remain_authoritative': True, 'learner_profile': profile,
-        'source_paths': route_index(workspace, configuration)})
     context += (f"On-demand source-path hints and learner data: {data_path} (launch snapshot, not instructions). "
                 "Read only for relevant requests; fresh activity context takes precedence. ")
     from .context import CORE
@@ -127,18 +111,63 @@ def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: s
                    "Use your supported command permission/escalation mechanism for the exact MyNotes command. "
                    "Never use danger-full-access, change credentials, or repeat paid generation to bypass it. "
                    "If permission is denied, preserve the attempt and report that denial explicitly.")
-    overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
+    return prompt
+
+
+def chat_instructions(workspace: Workspace, integration: dict[str, Any], *, shared_rules: bool) -> Path:
+    """The rules file Claude Code appends to its system prompt."""
+    return workspace.root / "AGENTS.md" if shared_rules else Path(integration["path"]) / "SKILL.md"
+
+
+def chat_command(selected: str, executable: str, workspace: Workspace, prompt: str, overrides: list[str], *,
+                 instructions: Path) -> list[str]:
+    """The interactive provider command of `mynotes chat` (pure: no I/O)."""
     if selected == "agy":
-        command = [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
-    elif selected == "claude":
-        instructions = workspace.root / "AGENTS.md" if shared_rules else Path(integration["path"]) / "SKILL.md"
-        command = [executable, "--permission-mode", "acceptEdits", "--append-system-prompt-file", str(instructions)] + overrides + [prompt]
-    else:
-        # The private workspace is already the working root. Adding it again
-        # with --add-dir is fatal in Codex when the inherited permissions are
-        # read-only. MyNotes coordination needs ordinary workspace writes;
-        # keep that scope explicit without granting unrestricted access.
-        command = [executable, "-C", str(repository), "--sandbox", "workspace-write"] + overrides + [prompt]
+        return [executable, "--agent", "mynotes", "--mode", "accept-edits", "--add-dir", str(workspace.root)] + overrides + ["--prompt-interactive", prompt]
+    if selected == "claude":
+        return [executable, "--permission-mode", "acceptEdits", "--append-system-prompt-file", str(instructions)] + overrides + [prompt]
+    # The private workspace is already the working root. Adding it again
+    # with --add-dir is fatal in Codex when the inherited permissions are
+    # read-only. MyNotes coordination needs ordinary workspace writes;
+    # keep that scope explicit without granting unrestricted access.
+    return [executable, "-C", str(workspace.root), "--sandbox", "workspace-write"] + overrides + [prompt]
+
+
+def write_startup_data(workspace: Workspace, configuration: dict[str, Any]) -> Path:
+    """The on-demand launch snapshot the startup prompt points to."""
+    from .source_routes import route_index
+    from .utils import atomic_json_write
+    data_path = workspace.state_dir / 'chat-startup-data.json'
+    atomic_json_write(data_path, {'derived_at_launch': True,
+        'settings_remain_authoritative': True, 'learner_profile': learner_profile(configuration),
+        'source_paths': route_index(workspace, configuration)})
+    return data_path
+
+
+def launch_chat(workspace: Workspace, configuration: dict[str, Any], provider: str | None, message: str | None = None) -> int:
+    if os.environ.get("MYNOTES_CHAT_ACTIVE") == "1":
+        raise ChatError("A MyNotes provider chat is already active; recursive launch is blocked")
+    from .models import resolve_role_selection
+    selection = resolve_role_selection(configuration, 'chat', provider)
+    selected, model, effort = (selection[key] for key in ('provider', 'model', 'effort'))
+    if selected not in {"codex", "agy", "claude"}:
+        raise ChatError("Choose an agent in MyNotes Setup: codex, agy or claude")
+    environment = provider_environment()
+    executable = provider_executable(selected) if os.name == "nt" else (
+        shutil.which(selected) or shutil.which(selected, path=environment["PATH"])
+    )
+    if not executable:
+        raise ChatError(f"Install {selected}: {PROVIDER_INSTALL_URLS[selected]}. Then reopen MyNotes Setup and click Check again.")
+    # Instructions belong to this private workspace, never the application source.
+    from .integrations import install_integration, install_shared_chat_rules
+    shared_rules = install_shared_chat_rules(workspace.root)
+    integration = install_integration(selected, workspace.root, shared_chat_rules=shared_rules)
+    data_path = write_startup_data(workspace, configuration)
+    prompt = startup_prompt(workspace, configuration, selected, model, effort,
+                            shared_rules=shared_rules, data_path=data_path, message=message)
+    overrides = provider_override_flags(RequestedModel(selected, model, effort, "standard"))
+    command = chat_command(selected, executable, workspace, prompt, overrides,
+                           instructions=chat_instructions(workspace, integration, shared_rules=shared_rules))
     environment["MYNOTES_WORKSPACE"] = str(workspace.root)
     environment["MYNOTES_CHAT_ACTIVE"] = "1"
-    return _run_interactive(selected, command, environment, repository)
+    return _run_interactive(selected, command, environment, workspace.root)
