@@ -47,6 +47,11 @@ TICK_SECONDS = 0.5
 STATUS_SECONDS = 4
 SYNC_MINUTES = 5
 STOP_TIMEOUT_SECONDS = 10
+# A recorder still running this long after Popen has opened its source. One
+# that exits sooner (no device, no PipeWire session) fails the attempt once,
+# instead of being relaunched on every tick for the rest of the lesson.
+STARTUP_CHECK_SECONDS = 0.5
+STDERR_TAIL_BYTES = 2048
 EXPORT_TIMEOUT_SECONDS = 30 * 60
 SUSPEND_GAP_SECONDS = 2.0
 REQUEST_LIFETIME = timedelta(minutes=1)
@@ -273,6 +278,8 @@ class MicrophoneRecording:
         self.error: Exception | None = None
         self._process: subprocess.Popen | None = None
         self._reader: threading.Thread | None = None
+        self._stderr_reader: threading.Thread | None = None
+        self._stderr_tail = b""
         self._writer: WavSegmentWriter | None = None
         self._gate = threading.Lock()
         self._stopping = False
@@ -284,10 +291,32 @@ class MicrophoneRecording:
         return self._reader is not None and not self._reader.is_alive() and not self._stopping
 
     def start(self) -> None:
+        """Start the recorder; CaptureError if it exits within STARTUP_CHECK_SECONDS."""
         self._process = subprocess.Popen(self.command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                         stderr=subprocess.DEVNULL, start_new_session=True)
+                                         stderr=subprocess.PIPE, start_new_session=True)
+        self._stderr_reader = threading.Thread(target=self._keep_stderr, name="capture-recorder-stderr", daemon=True)
+        self._stderr_reader.start()
         self._reader = threading.Thread(target=self._read, name="capture-reader", daemon=True)
         self._reader.start()
+        try:
+            code = self._process.wait(timeout=STARTUP_CHECK_SECONDS)
+        except subprocess.TimeoutExpired:
+            return
+        self._stopping = True  # Not a lost device: this attempt never started.
+        self._reader.join(STOP_TIMEOUT_SECONDS)
+        self._stderr_reader.join(STOP_TIMEOUT_SECONDS)
+        detail = self._stderr_tail.decode("utf-8", errors="replace").strip().splitlines()
+        message = f"The recorder {Path(self.command[0]).name} exited at once with status {code}"
+        raise CaptureError(message + (f": {detail[-1]}" if detail else ""))
+
+    def _keep_stderr(self) -> None:
+        """Drain the recorder's stderr so it never blocks; keep the end for error messages."""
+        assert self._process is not None and self._process.stderr is not None
+        try:
+            while chunk := self._process.stderr.read1(4096):
+                self._stderr_tail = (self._stderr_tail + chunk)[-STDERR_TAIL_BYTES:]
+        except (OSError, ValueError):
+            pass
 
     def _read(self) -> None:
         assert self._process is not None and self._process.stdout is not None
@@ -357,10 +386,13 @@ class MicrophoneRecording:
     def dispose(self) -> None:
         self._stopping = True
         self._terminate()
-        if self._reader is not None:
-            self._reader.join(STOP_TIMEOUT_SECONDS)
-        if self._process is not None and self._process.stdout is not None:
-            self._process.stdout.close()
+        for reader in (self._reader, self._stderr_reader):
+            if reader is not None:
+                reader.join(STOP_TIMEOUT_SECONDS)
+        if self._process is not None:
+            for stream in (self._process.stdout, self._process.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 # ---------------------------------------------------------------- helpers

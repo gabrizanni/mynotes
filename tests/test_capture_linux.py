@@ -144,7 +144,8 @@ def test_recording_rotates_segments_and_keeps_every_frame(tmp_path):
 
 
 def test_lost_recorder_is_reported_as_completed_with_an_error(tmp_path):
-    recording = fake_recorder("5")(tmp_path / "stage")
+    # 200 chunks of 5 ms: the device is lost after the startup check (0.5 s).
+    recording = fake_recorder("200")(tmp_path / "stage")
     recording.start()
     deadline = time.monotonic() + 10
     while not recording.completed and time.monotonic() < deadline:
@@ -201,7 +202,7 @@ def test_manual_start_and_stop_saves_a_partial_recording(store):
 
 def test_lost_device_interrupts_then_recovers_after_the_window(store):
     clock = Clock()
-    worker = make_worker(store, clock, recorder=fake_recorder("20"))
+    worker = make_worker(store, clock, recorder=fake_recorder("200"))  # Lost after the startup check.
     event = standalone_event(clock.now, minutes=1)
     started = capture.request(store, "start", {"event": event}, wait_seconds=0)
     worker.tick()
@@ -215,6 +216,40 @@ def test_lost_device_interrupts_then_recovers_after_the_window(store):
     settle(worker)
     recovered = session(store, identity)
     assert recovered["status"] == "PARTIAL" and "Recovered after interruption" in recovered["reason"]
+    worker.shutdown()
+
+
+def test_a_recorder_that_exits_at_once_fails_the_lesson_once(store, monkeypatch, tmp_path):
+    """No device or PipeWire session: one attempt and a clear error, not a relaunch every 500 ms."""
+    monkeypatch.setenv("MYNOTES_USER_HOME", str(tmp_path / "user"))
+    code = onboarding.add_first_course(store.workspace, "Economia")["code"]
+    now = datetime.now(UTC).replace(microsecond=0)
+    capture.import_schedule(store, {"events": [{"courseCode": code, "lessonNumber": 1, "title": "Economia",
+                                                "startsAt": capture.iso(now - timedelta(minutes=1)),
+                                                "endsAt": capture.iso(now + timedelta(minutes=30))}]})
+    config = store.config()
+    config["enabled"] = True
+    store.save_config(config)
+    launches, notifications = [], []
+    exits_at_once = [sys.executable, "-c", "import sys; sys.stderr.write('Connection refused: no PipeWire session'); sys.exit(1)"]
+
+    def recorder(folder):
+        launches.append(folder)
+        return capture_linux.MicrophoneRecording(folder, exits_at_once)
+
+    monkeypatch.setattr(capture_linux, "notify", lambda *message: notifications.append(message))
+    worker = make_worker(store, Clock(), recorder=recorder)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        worker.tick()
+        time.sleep(0.1)
+    assert len(launches) == 1 and notifications == []
+    assert worker.current is None and worker.recorder is None
+    [failed] = [json.loads(path.read_text()) for path in (store.directory / "sessions").glob("*.json")]
+    assert failed["status"] == "FAILED"
+    assert failed["reason"] == (f"The recorder {Path(sys.executable).name} exited at once with status 1: "
+                                "Connection refused: no PipeWire session")
+    assert worker.detail == failed["reason"] and worker.permission == "UNAVAILABLE"
     worker.shutdown()
 
 
