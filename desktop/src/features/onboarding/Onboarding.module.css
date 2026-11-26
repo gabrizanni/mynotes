@@ -113,13 +113,17 @@
   max-width: 920px;
 }
 
+/* Each step slides in by a few pixels. Only the position moves: the text is fully visible from
+   the first frame, so a webview whose animations do not advance (WebKitGTK under Xvfb, a
+   throttled or hidden window) still shows the step instead of a blank page. No fill mode: when
+   the animation ends, or never starts, the step sits in its normal place. Reduced motion sets
+   the offset to 0 (tokens.css). */
 .enter {
-  animation: enter var(--duration-slow) var(--ease-standard) both;
+  animation: enter var(--duration-slow) var(--ease-standard);
 }
 
 @keyframes enter {
   from {
-    opacity: 0;
     transform: translateY(var(--motion-enter-offset));
   }
 }

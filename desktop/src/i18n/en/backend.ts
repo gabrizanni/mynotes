@@ -1,4 +1,4 @@
-/** The window shown when MyNotes' backend cannot run. */
+/** The window shown when MyNotes' backend cannot run, and when this window itself fails. */
 export const backend = {
   failure: {
     title: "MyNotes stopped working",
@@ -11,5 +11,10 @@ export const backend = {
     retry: "Try again",
     copied: "Details copied",
     copyFailed: "Copying was blocked: select the details and copy them by hand.",
+  },
+  crash: {
+    title: "This window ran into a problem",
+    body: "Recordings and notes are not affected. Reload the window; if it happens again, copy the details.",
+    reload: "Reload window",
   },
 };

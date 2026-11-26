@@ -13,4 +13,9 @@ export const backend: Messages["backend"] = {
     copied: "Dettagli copiati",
     copyFailed: "La copia è stata bloccata: seleziona i dettagli e copiali a mano.",
   },
+  crash: {
+    title: "Questa finestra ha avuto un problema",
+    body: "Registrazioni e appunti non sono toccati. Ricarica la finestra; se succede di nuovo, copia i dettagli.",
+    reload: "Ricarica la finestra",
+  },
 };

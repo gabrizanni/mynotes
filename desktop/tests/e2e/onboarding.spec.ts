@@ -112,6 +112,28 @@ test("launch resumes at the first incomplete required step", async ({ page }) =>
   await expect(page).toHaveURL(/#\/welcome\/course$/);
 });
 
+/** Product of the opacities of an element and its ancestors: what the eye actually gets. */
+const visibleOpacity = (element: Element) => {
+  let value = 1;
+  for (let node: Element | null = element; node; node = node.parentElement) value *= Number(getComputedStyle(node).opacity);
+  return value;
+};
+
+test("the first step is readable even when CSS animations never advance", async ({ page }) => {
+  // WebKitGTK under Xvfb (the real-app smoke) can leave animations at their first frame.
+  await page.addInitScript(() => {
+    const style = document.createElement("style");
+    style.textContent = "*, *::before, *::after { animation-play-state: paused !important; }";
+    document.documentElement.appendChild(style);
+  });
+  await seed(page, null);
+  await page.goto("/?lang=en&scenario=first-run#/today");
+  const title = heading(page, "Your lectures, turned into study notes.");
+  await expect(title).toBeAttached();
+  expect(await title.evaluate(visibleOpacity)).toBe(1);
+  expect(await page.evaluate(() => document.body.innerText.trim().length)).toBeGreaterThan(40);
+});
+
 test("an installed MyNotes opens Today, not onboarding", async ({ page }) => {
   await seed(page, null);
   await page.goto("/?lang=en&simulate=0#/today");

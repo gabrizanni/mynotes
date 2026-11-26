@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: the app's own commands, event listening, and the open-file dialog. No opener, shell or filesystem permission is granted to the webview; paths are opened from Rust after validation.",
+  "description": "Main window: the app's own commands, event listening, the open-file dialog and writing its errors to the app log. No opener, shell or filesystem permission is granted to the webview; paths are opened from Rust after validation.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -17,6 +17,7 @@
     "allow-take-pending-action",
     "allow-audio-source",
     "allow-open-external",
-    "allow-open-system-settings"
+    "allow-open-system-settings",
+    "log:allow-log"
   ]
 }

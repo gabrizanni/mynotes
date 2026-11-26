@@ -149,6 +149,9 @@
   --duration-base: 240ms; /* panels, dialogs */
   --duration-slow: 320ms; /* capsule expand, step change */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* TODO: [TECH-DEBT] Popover, Menu, Dialog, Sheet, Toast, Disclosure and the assistant dock
+     still enter from opacity 0; like the onboarding steps, they should stay visible when
+     animations do not advance. */
   --motion-enter-offset: 6px;
   --motion-enter-scale: 0.97;
 
