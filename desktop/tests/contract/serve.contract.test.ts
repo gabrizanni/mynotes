@@ -393,7 +393,6 @@ describe("mynotes serve contract (protocol 1)", () => {
   });
 
   describe("job-lane methods end in the answer the app reads (runJob)", () => {
-    const linux = process.platform === "linux";
 
     it("capture.sync: job.finished carries {exitCode, data}", async () => {
       const answer = await runJob(rpc, "capture.sync", { ifDue: true });
@@ -409,9 +408,17 @@ describe("mynotes serve contract (protocol 1)", () => {
       expect(data.code).toMatch(/^INVALID_/);
     }, 120_000);
 
-    // On macOS and Windows these would install or remove the real recorder service.
-    it.runIf(linux).each(["capture.enable", "capture.disable"] as const)("%s: the command's error arrives as an RpcError", async (method: JobMethod) => {
-      await expect(runJob(rpc, method, undefined)).rejects.toMatchObject({ code: RpcCode.CliError, message: "The recording app requires macOS or Windows 11" });
+    // These install or remove the real recorder service of the machine running the tests
+    // (LaunchAgent on macOS, systemd user unit on Linux, Windows worker), so they only run
+    // when explicitly asked for, on a disposable machine.
+    const recorderService = process.env.MYNOTES_CONTRACT_RECORDER_SERVICE === "1";
+    it.runIf(recorderService).each(["capture.enable", "capture.disable"] as const)("%s: job.finished carries {exitCode, data} or the command's error", async (method: JobMethod) => {
+      const outcome = await runJob(rpc, method, undefined).then(
+        (answer) => ({ answer }),
+        (error: unknown) => ({ error }),
+      );
+      if ("answer" in outcome) expect(typeof outcome.answer.exitCode).toBe("number");
+      else expect(outcome.error).toMatchObject({ code: RpcCode.CliError });
     }, 120_000);
 
     it("notes.publish: runs `mynotes publish` (no candidate yet: the CLI's own error)", async () => {
