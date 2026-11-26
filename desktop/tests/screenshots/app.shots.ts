@@ -18,6 +18,7 @@ for (const { lang, locale } of LANGS) {
           await page.goto(`${scene.path}?lang=${lang}&scenario=${scene.scenario}&simulate=0${scene.hash}`);
           await expect(page.locator("h1").first()).toBeVisible();
           if (scene.name.startsWith("today")) await expect(page.locator("section[aria-labelledby]").first()).toBeVisible();
+          if (scene.act) await scene.act(page); // workspace screens: dialogs, popovers, palette
           await page.evaluate(() => document.fonts.ready.then(() => undefined));
           await page.waitForTimeout(400);
           await page.screenshot({ path: `tests/shots/${scene.name}-${lang}-${theme}.png`, fullPage: scene.fullPage ?? false });
