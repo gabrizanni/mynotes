@@ -102,7 +102,6 @@ export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps
             aria-keyshortcuts="Meta+F Control+F"
             placeholder={s.shortcut(shortcutLabel("F"))}
             value={query}
-            disabled={status !== "ready"}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
           />

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { MethodName, MethodParams, MethodResult } from "../../rpc";
 import { useRpc } from "../../state";
@@ -40,5 +40,6 @@ export function useRpcData<M extends MethodName>(method: M, params: MethodParams
   }, [rpc, method, key, round]);
 
   const reload = useCallback(() => setRound((value) => value + 1), []);
-  return { ...state, reload };
+  // Stable between renders, so callers can memoize on it (a new object each render looped StyleTab).
+  return useMemo(() => ({ ...state, reload }), [state, reload]);
 }

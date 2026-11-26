@@ -72,7 +72,7 @@ test("several lessons go into one notes job from the course", async ({ page }) =
 
 test("transcript search counts matches, steps with arrows, and timestamps seek", async ({ page }) => {
   await page.goto("/?lang=en&scenario=generate&simulate=0#/lessons/STAT-L07");
-  await expect(page.getByRole("heading", { level: 1, name: "Lesson 7" })).toBeVisible();
+  await expect(page.getByText(/^Good morning\./)).toBeVisible();
   await page.keyboard.press("Control+f");
   const search = page.getByRole("searchbox", { name: "Search transcript" });
   await expect(search).toBeFocused();
