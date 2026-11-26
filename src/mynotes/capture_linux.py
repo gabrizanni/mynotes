@@ -17,6 +17,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -52,6 +53,9 @@ REQUEST_LIFETIME = timedelta(minutes=1)
 REQUEST_CLOCK_SKEW = timedelta(seconds=5)
 LATE_START = timedelta(seconds=5)
 DOTNET_EPOCH_TICKS = 621_355_968_000_000_000
+# Lecture audio and its metadata are private: owner-only folders and files.
+PRIVATE_DIRECTORY = 0o700
+PRIVATE_FILE = 0o600
 # Opt-in so tests and foreground debugging never show desktop notifications.
 NOTIFY_ENV = "MYNOTES_CAPTURE_NOTIFY"
 SOURCE_ENV = "MYNOTES_CAPTURE_SOURCE"
@@ -181,6 +185,23 @@ def can_resume(previous: Lesson, item: Lesson) -> bool:
             and same_times and output_stem(previous).casefold() == output_stem(item).casefold())
 
 
+# ------------------------------------------------------------- privacy
+
+def private_directory(path: Path) -> Path:
+    """Create a folder as 0700, and tighten one this user already owns."""
+    path.mkdir(parents=True, exist_ok=True, mode=PRIVATE_DIRECTORY)
+    details = path.stat()
+    if details.st_uid == os.getuid() and stat.S_IMODE(details.st_mode) != PRIVATE_DIRECTORY:
+        path.chmod(PRIVATE_DIRECTORY)
+    return path
+
+
+def create_private_file(path: Path):
+    """Exclusive 0600 creation; an existing file is never reused or truncated."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_FILE)
+    return os.fdopen(descriptor, "wb")
+
+
 # ------------------------------------------------------------- recording
 
 def segment_name(now_ns: int | None = None) -> str:
@@ -195,7 +216,7 @@ class WavSegmentWriter:
     def __init__(self, path: Path) -> None:
         self.path = path
         self.data_bytes = 0
-        self._handle = path.open("xb")
+        self._handle = create_private_file(path)
         self._write_header()
 
     def _write_header(self) -> None:
@@ -255,7 +276,7 @@ class MicrophoneRecording:
         self._writer: WavSegmentWriter | None = None
         self._gate = threading.Lock()
         self._stopping = False
-        folder.mkdir(parents=True, exist_ok=True)
+        private_directory(folder)
 
     @property
     def completed(self) -> bool:
@@ -482,8 +503,8 @@ class Worker:
         self._last_suspend = suspend_probe()
         self.instance = self._acquire(capture_home / "app.lock")
         try:
-            for directory in (self.request_directory, self.response_directory, self.session_directory):
-                directory.mkdir(parents=True, exist_ok=True)
+            for directory in (self.state_directory, self.request_directory, self.response_directory, self.session_directory):
+                private_directory(directory)
             self._load_sessions()
         except BaseException:
             self.instance.close()
@@ -493,7 +514,7 @@ class Worker:
 
     @staticmethod
     def _acquire(path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        private_directory(path.parent)
         lease = path.open("a+b")
         try:
             file_lock.flock(lease, file_lock.LOCK_EX | file_lock.LOCK_NB)
@@ -729,7 +750,8 @@ class Worker:
                 late = not is_test and now > timestamp(item["startsAt"]) + LATE_START
                 reason = ("New attempt after a calendar change or ambiguity; earlier audio retained" if interrupted
                           else "Started late; beginning of the lesson was not recorded" if late else "")
-                stage = Path(self.config["stageDirectory"]) / ("tests" if is_test else "") / identity
+                stage_root = private_directory(Path(self.config["stageDirectory"]))
+                stage = (private_directory(stage_root / "tests") if is_test else stage_root) / identity
                 self.current = {
                     "schemaVersion": 1, "id": identity, "event": item, "directory": str(stage), "actualStart": iso(now),
                     "actualStop": None, "status": "RECORDING", "partial": late or bool(interrupted), "reason": reason,
@@ -1110,8 +1132,7 @@ def _remove_unit(systemctl: Callable[..., subprocess.CompletedProcess]) -> None:
 def set_enabled(store: CaptureStore, enabled: bool, *,
                 systemctl: Callable[..., subprocess.CompletedProcess] = _systemctl) -> dict:
     """Install or remove the systemd user service; mirrors the Windows task flow."""
-    home = runtime_home().resolve()
-    home.mkdir(parents=True, exist_ok=True)
+    home = private_directory(runtime_home().resolve())
     active_path = home / "active.json"
     workspace = store.workspace.root.resolve()
     with (home / "update.lock").open("a+b") as lease:

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -410,3 +412,35 @@ def test_scheduled_lessons_start_alone_and_elapsed_ones_are_reported(store, monk
     assert sorted(runtime["scheduleIssues"]) == ["FIN L3: Duplicate recording filename"] * 2
     worker.shutdown()
     assert session(store, runtime["currentSession"]["id"])["status"] == "INTERRUPTED"
+
+
+def mode(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def test_recordings_and_their_folders_are_owner_only(store):
+    previous = os.umask(0o022)
+    try:
+        clock = Clock()
+        stage_root = Path(store.config()["stageDirectory"])
+        stage_root.chmod(0o755)
+        worker = make_worker(store, clock)
+        started = capture.request(store, "start", {"event": standalone_event(clock.now)}, wait_seconds=0)
+        worker.tick()
+        record = session(store, response(store, started["requestID"])["sessionID"])
+        deadline = time.monotonic() + 10
+        while not list(Path(record["directory"]).glob("*.wav")) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        segments = list(Path(record["directory"]).glob("*.wav"))
+        assert segments and all(mode(path) == 0o600 for path in segments)
+        capture.request(store, "stop", wait_seconds=0)
+        settle(worker)
+        audio = Path(session(store, record["id"])["outputPath"])
+        assert audio.is_file() and mode(audio) == 0o600
+        for folder in (capture.runtime_home(), stage_root, Path(record["directory"]), store.directory,
+                       store.directory / "requests", store.directory / "responses", store.directory / "sessions"):
+            assert mode(folder) == 0o700, folder
+        assert all(mode(path) == 0o600 for path in (store.directory / "sessions").glob("*.json"))
+        worker.shutdown()
+    finally:
+        os.umask(previous)

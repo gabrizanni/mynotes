@@ -6,6 +6,7 @@ writes the exclusive temporary file named in that receipt.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from pathlib import Path
 
@@ -14,6 +15,17 @@ from .capture import CaptureError, CaptureStore, read_json
 from .workspace import Workspace
 
 SESSION_ID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+
+
+def _create_temporary(path: Path):
+    """Exclusive creation; on POSIX the recording is owner-only (0600) from the start.
+
+    The worker publishes this inode by link or rename, so the final audio keeps
+    the same mode. Windows keeps its existing ACL-based behavior.
+    """
+    if os.name == "nt":
+        return path.open("xb")
+    return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb")
 
 
 def export(store: CaptureStore, session_id: str) -> float:
@@ -43,7 +55,7 @@ def export(store: CaptureStore, session_id: str) -> float:
     total_samples = 0
     # The worker owns the final rename and records a digest before publishing.
     # Exclusive creation prevents a stale temporary file from being overwritten.
-    with temporary.open("xb") as handle:
+    with _create_temporary(temporary) as handle:
         try:
             with av.open(handle, mode="w", format="ipod") as container:
                 output = container.add_stream("aac", rate=sample_rate)
