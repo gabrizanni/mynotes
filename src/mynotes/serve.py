@@ -22,6 +22,7 @@ from . import cli_invoke
 from .serve_methods import (BY_NAME, INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, METHODS,
                             PARSE_ERROR, PROTOCOL, PROTOCOL_MISMATCH, REQUEST_CANCELLED, SHUTTING_DOWN, RpcError,
                             build_argv, cli_result, describe, lane, remove, validate)
+from .serve_assistant import ASSISTANT_METHODS, AfterResponse, Assistant, method_rows as assistant_rows
 from .serve_jobs import JobManager
 from .serve_watch import Lease, Watcher
 
@@ -52,7 +53,7 @@ def method_table() -> list[dict]:
     rows = [{"name": name, "lane": "server", "params": [{"name": key, "type": kind, "required": False}
              for key, kind in spec["params"].items()], "command": None, "summary": spec["summary"]}
             for name, spec in SERVER_METHODS.items()]
-    return sorted(rows + [describe(method) for method in METHODS], key=lambda row: row["name"])
+    return sorted(rows + assistant_rows() + [describe(method) for method in METHODS], key=lambda row: row["name"])
 
 
 class Server:
@@ -68,6 +69,7 @@ class Server:
                       # job.wait blocks; it must never hold a fast-lane thread.
                       "wait": ThreadPoolExecutor(8, thread_name_prefix="serve-wait")}
         self.jobs = JobManager(workspace, self.notify)
+        self.assistant = Assistant(workspace, self.notify)
         self.watcher = Watcher(workspace, self.notify)
         self.lease = Lease(workspace, self._count_spawn)
         self.started = time.monotonic()
@@ -172,6 +174,8 @@ class Server:
     def _lane(self, method: str, params: Any) -> str:
         if method in SERVER_METHODS:
             return "wait" if method == "job.wait" else "fast"
+        if method in ASSISTANT_METHODS:
+            return ASSISTANT_METHODS[method]["lane"]
         spec = BY_NAME.get(method)
         if spec is None:
             raise RpcError(METHOD_NOT_FOUND, f"Unknown method: {method}")
@@ -200,6 +204,10 @@ class Server:
         except Exception as error:
             self._error(identifier, RpcError(INTERNAL_ERROR, f"{type(error).__name__}: {error}"))
             return
+        if isinstance(result, AfterResponse):  # Answer first, then start what notifies.
+            self.send({"jsonrpc": "2.0", "id": identifier, "result": result.result})
+            result.then()
+            return
         self.send({"jsonrpc": "2.0", "id": identifier, "result": result})
 
     # Dispatch ------------------------------------------------------------
@@ -209,6 +217,8 @@ class Server:
             if not isinstance(params, dict):
                 raise RpcError(INVALID_PARAMS, "Parameters must be a JSON object")
             return getattr(self, "m_" + method.replace(".", "_"))(params)
+        if method in ASSISTANT_METHODS:
+            return self.assistant.dispatch(method, params)
         spec = BY_NAME[method]
         params = validate(spec, params)
         if lane(spec, params) == "job":
@@ -303,6 +313,7 @@ class Server:
                 "cpuSeconds": times.user + times.system, "childCpuSeconds": times.children_user + times.children_system,
                 "rssBytes": _rss_bytes(), "threads": threading.active_count(), **counters,
                 "jobsStarted": self.jobs.started, "jobsRunning": self.jobs.running(),
+                "assistantRunning": self.assistant.running(),
                 "spawns": self.jobs.started + counters["runnerSpawns"],
                 "topicComputations": {name: topic.computations for name, topic in self.watcher.topics.items()}}
 
@@ -373,6 +384,7 @@ class Server:
         self.lease.close(release=False)  # The lease lapses within 15 s, as after a crash.
         self.watcher.close()
         self.jobs.close()
+        self.assistant.close()  # Replies use pipes to this process: none outlives it.
 
 
 def _rss_bytes() -> int | None:
