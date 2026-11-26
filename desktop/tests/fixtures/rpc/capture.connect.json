@@ -1,0 +1,14 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "CONNECTED",
+    "sourceID": "timetable",
+    "summary": {
+      "imported": 34,
+      "recognizedCourses": 1,
+      "pending": 3,
+      "excluded": 0
+    },
+    "message": null
+  }
+}

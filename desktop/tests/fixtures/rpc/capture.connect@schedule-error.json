@@ -1,0 +1,12 @@
+{
+  "exitCode": 1,
+  "data": {
+    "status": "FAILED",
+    "sourceID": null,
+    "summary": null,
+    "code": "GOOGLE_FEED_UNAVAILABLE",
+    "message": "Il calendario Google non è accessibile tramite il feed pubblico.",
+    "retryable": false,
+    "suggestedAction": "use_private_ical"
+  }
+}

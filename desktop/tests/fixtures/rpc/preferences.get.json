@@ -1,0 +1,16 @@
+{
+  "exitCode": 0,
+  "data": {
+    "default": {
+      "provider": "claude",
+      "model": "",
+      "effort": ""
+    },
+    "overrides": {
+      "chat": null,
+      "notes": null
+    },
+    "language": "en",
+    "revision": "mock-revision-1"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "ADDED",
+    "code": "STAT",
+    "course": {
+      "code": "STAT",
+      "name": "Statistics"
+    }
+  }
+}

@@ -310,6 +310,112 @@ export const jobSchema = z.looseObject({
 export const jobListSchema = z.looseObject({ jobs: z.array(jobSchema) });
 
 // ---------------------------------------------------------------------------------------------
+// >>> onboarding (feat/desktop-onboarding) >>>
+// Setup, sign-in, profile, course, folders, calendar, microphone and first notes (UX-SPEC §2).
+// Spread into `methods` below with `...onboardingMethods`.
+// ---------------------------------------------------------------------------------------------
+
+const providerId = z.enum(["claude", "codex", "agy"]);
+
+/** `setup.status` plus the fields the onboarding header and checklist read (installer.rs). */
+export const setupDetailSchema = setupStatusSchema.extend({
+  overallDone: optNum,
+  overallTotal: optNum,
+  components: z
+    .array(z.looseObject({ id: str, title: str, state: str, bytesDone: optNum, bytesTotal: optNum }))
+    .optional(),
+});
+
+const modelChoice = z.looseObject({ provider: str, model: str, effort: str });
+/** `preferences --show` (preferences.model_preferences). */
+export const preferencesSchema = z.looseObject({
+  default: modelChoice.nullable(),
+  overrides: z.looseObject({ chat: modelChoice.nullable().optional(), notes: modelChoice.nullable().optional() }),
+  language: str,
+  revision: str,
+});
+
+export const courseAddSchema = z.looseObject({ status: str.optional(), code: optStr, course: z.looseObject({ code: str }).nullable().optional() });
+
+/** `course link --json` (course_links.link_course_folder): READY · LINKED · NEEDS_SELECTION. */
+export const courseLinkSchema = z.looseObject({
+  status: str,
+  course: optStr,
+  saved: optBool,
+  proposed_files: z.looseObject({ personal_notes: optStr, handout: optStr }).nullable().optional(),
+  note_files: z.looseObject({ personal_notes: optStr, handout: optStr }).nullable().optional(),
+  ambiguities: z.record(str, z.array(str)).nullable().optional(),
+  inventory: z
+    .looseObject({ file_counts: z.record(str, z.number()).optional(), files: z.record(str, z.array(str)).optional() })
+    .nullable()
+    .optional(),
+  publication_mode: optStr,
+});
+
+/** `capture connect` (capture.connect): CONNECTED with a summary, or FAILED with a capture_links code. */
+export const captureConnectSchema = z.looseObject({
+  status: str,
+  sourceID: optStr,
+  summary: z.looseObject({ imported: z.number(), pending: z.number().optional() }).nullable().optional(),
+  code: optStr,
+  message: optStr,
+  retryable: optBool,
+  suggestedAction: optStr,
+});
+
+const anyObject = z.looseObject({});
+const noParams = z.object({}).optional();
+const courseSettingsParams = z.looseObject({});
+
+const onboardingMethods = {
+  "setup.run": { params: z.object({ provider: providerId }), result: jobRefSchema },
+  "provider.login": { params: z.object({ provider: providerId }), result: jobRefSchema },
+  "preferences.get": { params: noParams, result: cli(preferencesSchema) },
+  "preferences.saveModels": {
+    params: z.object({
+      models: z.object({ default: modelChoice.nullable(), overrides: z.object({ chat: modelChoice.nullable(), notes: modelChoice.nullable() }), language: z.enum(["en", "it"]) }),
+      expectedRevision: str,
+    }),
+    result: cli(preferencesSchema),
+  },
+  "profile.save": { params: z.union([z.object({ background: str }), z.object({ skip: z.literal(true) })]), result: cli(anyObject) },
+  "course.add": {
+    params: z.object({ name: str, notesLanguage: z.enum(["en", "it"]), settingsJson: courseSettingsParams, contextAnswer: str.optional() }),
+    result: cli(courseAddSchema),
+  },
+  "course.edit": { params: z.object({ code: str, file: anyObject }), result: cli(anyObject) },
+  "course.link": {
+    params: z.object({
+      code: str,
+      path: str,
+      dryRun: z.boolean().optional(),
+      notes: str.optional(),
+      recordings: str.optional(),
+      notesFile: str.optional(),
+      publicationMode: z.enum(["automatic", "review"]).optional(),
+    }),
+    result: cli(courseLinkSchema),
+  },
+  "style.preview": { params: z.object({ course: str }), result: cli(z.looseObject({ path: optStr, output: optStr })) },
+  "capture.configure": { params: z.object({ file: anyObject }).optional(), result: cli(anyObject) },
+  "capture.connect": { params: z.object({ file: anyObject }), result: cli(captureConnectSchema) },
+  "capture.unsubscribe": { params: z.object({ source: str }), result: cli(anyObject) },
+  "capture.enable": { params: noParams, result: cli(anyObject) },
+  "capture.pause": { params: noParams, result: cli(anyObject) },
+  "capture.resume": { params: noParams, result: cli(anyObject) },
+  "capture.test": { params: z.object({ waitSeconds: z.number().optional() }).optional(), result: cli(captureActionSchema) },
+  "capture.confirmTest": { params: z.object({ audio: str, audibleConfirmed: z.literal(true) }), result: cli(anyObject) },
+  /** A4 `lesson process`; `transcript` is a requested addition (the CLI has `prepare --transcript`). */
+  "lesson.process": { params: z.object({ lectureId: str, audio: str.optional(), transcript: str.optional() }), result: jobRefSchema },
+} as const;
+
+export type SetupDetailResult = z.output<typeof setupDetailSchema>;
+export type CourseLinkResult = z.output<typeof courseLinkSchema>;
+export type PreferencesResult = z.output<typeof preferencesSchema>;
+
+// <<< onboarding (feat/desktop-onboarding) <<<
+
+// ---------------------------------------------------------------------------------------------
 // Method table
 // ---------------------------------------------------------------------------------------------
 
@@ -363,6 +469,8 @@ export const methods = {
   "job.list": { params: none, result: jobListSchema },
   "job.get": { params: z.object({ jobId: str }), result: jobSchema },
   "job.cancel": { params: z.object({ jobId: str, force: z.boolean().optional() }), result: z.unknown() },
+  // onboarding (feat/desktop-onboarding)
+  ...onboardingMethods,
 } as const;
 
 export type MethodName = keyof typeof methods;
