@@ -74,7 +74,7 @@ class Method:
     slow_if: str | None = None  # boolean parameter that moves a fast call to the slow lane
     progress: str = "stderr"  # job progress source: stderr JSON lines, or "asr" status files
     direct: Callable[..., Any] | None = field(default=None, compare=False)
-    exclusive: tuple[str, ...] = ()  # parameters of which at most one may be given
+    exclusive: tuple[tuple[str, ...], ...] = ()  # groups of parameters of which at most one may be given
     one_of: tuple[str, ...] = ()  # parameters of which exactly one is required
 
 
@@ -278,8 +278,9 @@ METHODS: tuple[Method, ...] = (
     Method("notes.publish", "job", ("publish",), (P("lecture", required=True), P("candidate", "--candidate")),
            summary="Publish a validated Word candidate into the course handout (renders with LibreOffice)."),
     Method("lesson.process", "job", ("lesson", "process"), (P("lectureId", required=True), P("audio", "--audio"),
-           P("transcript", "--transcript"), PROVIDER, P("quality", "--quality"), P("instructions", "--instructions")),
-           json_flag=True, exclusive=("audio", "transcript"),
+           P("transcript", "--transcript"), P("resume", "--resume"), P("regenerate", "--regenerate", "bool"), PROVIDER,
+           P("quality", "--quality"), P("instructions", "--instructions")),
+           json_flag=True, exclusive=(("audio", "transcript", "resume"), ("resume", "regenerate")),
            summary="Check, transcribe only if needed (or import a transcript), prepare and write notes for one lesson."),
     Method("usage.get", "fast", ("usage",), (LESSON, P("batchId", "--batch")), json_flag=True,
            one_of=("lectureId", "batchId"), summary="Local provider attempt counters."),
@@ -318,8 +319,9 @@ def validate(method: Method, params: Any) -> dict:
     given = [name for name in method.one_of if params.get(name) not in (None, False, [], "")]
     if method.one_of and len(given) != 1:
         raise RpcError(INVALID_PARAMS, f"Give exactly one of: {', '.join(method.one_of)}")
-    if len([name for name in method.exclusive if params.get(name) not in (None, False, [], "")]) > 1:
-        raise RpcError(INVALID_PARAMS, f"Give at most one of: {', '.join(method.exclusive)}")
+    for group in method.exclusive:
+        if len([name for name in group if params.get(name) not in (None, False, [], "")]) > 1:
+            raise RpcError(INVALID_PARAMS, f"Give at most one of: {', '.join(group)}")
     return {key: value for key, value in params.items() if value is not None}
 
 

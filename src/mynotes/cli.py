@@ -539,6 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
     lesson_source = lesson_process.add_mutually_exclusive_group()
     lesson_source.add_argument("--audio", help="specific recording; otherwise reuse a transcript or resolve this lesson's audio")
     lesson_source.add_argument("--transcript", help="existing transcript (TXT or normalized JSON) to import without ASR, as prepare --transcript")
+    lesson_retry = lesson_process.add_mutually_exclusive_group()
+    lesson_retry.add_argument("--resume", metavar="BATCH_ID", help="continue this lesson's saved notes job, as notes --resume")
+    lesson_retry.add_argument("--regenerate", action="store_true",
+                              help="start a new generation that keeps earlier attempts, as notes --regenerate")
     lesson_process.add_argument("--provider", choices=("codex", "agy", "claude"))
     lesson_process.add_argument("--quality", help="saved quality or standard")
     lesson_process.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
@@ -1078,7 +1082,8 @@ def _lesson(arguments: argparse.Namespace) -> int:
                                   audio=Path(arguments.audio).expanduser() if arguments.audio else None,
                                   transcript=Path(arguments.transcript).expanduser() if arguments.transcript else None,
                                   provider=arguments.provider, quality=arguments.quality,
-                                  instructions=arguments.instructions, progress=progress)
+                                  instructions=arguments.instructions, resume=arguments.resume,
+                                  regenerate=arguments.regenerate, progress=progress)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return code
 

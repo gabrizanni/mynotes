@@ -242,4 +242,51 @@ def test_lesson_process_rpc_passes_the_transcript(tmp_path):
         "lesson", "process", "OPS-L01", "--transcript", str(tmp_path / "t.txt"), "--workspace", str(tmp_path), "--json"]
     with pytest.raises(RpcError) as refused:
         validate(method, {"lectureId": "OPS-L01", "audio": "a.wav", "transcript": "a.txt"})
-    assert refused.value.code == -32602 and refused.value.message == "Give at most one of: audio, transcript"
+    assert refused.value.code == -32602 and refused.value.message == "Give at most one of: audio, transcript, resume"
+    for both in ({"resume": "OPS-0123456789ab", "regenerate": True}, {"resume": "OPS-0123456789ab", "transcript": "a.txt"}):
+        with pytest.raises(RpcError):
+            validate(method, {"lectureId": "OPS-L01", **both})
+    params = validate(method, {"lectureId": "OPS-L01", "regenerate": True})
+    assert build_argv(method, params, str(tmp_path))[0][3:5] == ["--regenerate", "--workspace"]
+
+
+def test_after_a_failed_paid_attempt_regenerate_is_the_explicit_way_out(ops, monkeypatch):
+    from mynotes.providers import ProviderError
+    from mynotes.workflow import WorkflowError
+    monkeypatch.setattr(pub, "_render_and_validate", fake_render)
+    monkeypatch.setattr(bd, "_render_and_validate", fake_render)
+    monkeypatch.setattr("mynotes.transcription.run_transcription", lambda *a, **k: pytest.fail("prepared lesson needs no ASR"))
+
+    class Failed:
+        calls = 0
+
+        def generate(self, request):
+            self.calls += 1
+            raise ProviderError("Interrupted stream")
+
+    failed = Failed()
+    code, first = process_lesson(ops, "OPS-L01", provider_adapter=failed)
+    assert code == 2 and first["status"] == "FAILED" and failed.calls == 1
+    adapter = Recorded()
+    # An ordinary rerun (and a resume of that batch) never repeats a paid attempt that already started.
+    for retry in ({}, {"resume": first["notes"]["batch_id"]}):
+        code, refused = process_lesson(ops, "OPS-L01", provider_adapter=adapter, **retry)
+        assert code == 2 and refused["status"] == "FAILED" and adapter.calls == []
+        assert "no automatic whole-lesson restart" in refused["notes"]["problem"]["message"]
+    with pytest.raises(WorkflowError, match="--resume continues a saved notes job"):
+        process_lesson(ops, "OPS-L01", resume="OPS-0123456789ab", regenerate=True)
+    events = []
+    code, result = process_lesson(ops, "OPS-L01", regenerate=True, provider_adapter=adapter, progress=record(events))
+    assert code == 0, result
+    assert result["status"] in {"COMPLETED", "COMPLETED_WITH_WARNINGS"} and len(adapter.calls) == 1
+    assert Path(result["notes"]["publication"]["output"]).is_file()
+
+
+def test_resume_and_regenerate_reach_the_notes_step(ops, monkeypatch, capsys):
+    calls = fake_steps(monkeypatch, pending_before=[])
+    assert main(["lesson", "process", "OPS-L01", "--resume", "OPS-0123456789ab", "--workspace", str(ops.root), "--json"]) == 0
+    assert main(["lesson", "process", "OPS-L01", "--regenerate", "--workspace", str(ops.root), "--json"]) == 0
+    assert [(kwargs["resume"], kwargs["regenerate"]) for _, _, kwargs in calls["notes"]] == [("OPS-0123456789ab", False), (None, True)]
+    with pytest.raises(SystemExit):
+        main(["lesson", "process", "OPS-L01", "--resume", "B", "--regenerate", "--workspace", str(ops.root)])
+    assert "not allowed with argument" in capsys.readouterr().err

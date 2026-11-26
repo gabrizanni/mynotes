@@ -12,6 +12,10 @@ Stages, reported through `progress(stage, detail)`:
    other).
 3. PREPARING: the source pack, from the new or imported transcript.
 4. The `notes` stages (GENERATING, BUILDING_WORD, UPDATING_WORD, ...).
+   `resume` continues a saved notes job (`notes --resume BATCH`) and
+   `regenerate` explicitly starts a new generation that keeps the old attempts
+   (`notes --regenerate`): the way out after a failed paid writing attempt,
+   which an ordinary rerun refuses to repeat.
 
 Exit codes follow `transcribe` and `notes`: 0 completed (or awaiting
 approval), 2 not completed, 3 BUSY, 4 NEEDS_REVIEW. Errors raised by the notes
@@ -121,6 +125,7 @@ def _import_transcript(workspace: Workspace, lecture_id: str, transcript: Path, 
 
 def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None = None, transcript: Path | None = None,
                    provider: str | None = None, quality: str | None = None, instructions: str | None = None,
+                   resume: str | None = None, regenerate: bool = False,
                    progress: Progress | None = None, engines=None, provider_adapter=None) -> tuple[int, dict[str, Any]]:
     """Run the four stages for one lesson; returns (exit code, result)."""
     from .cli import _notes_preparation
@@ -130,6 +135,8 @@ def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None 
     course, number = parse_lecture_id(lecture)
     if audio is not None and transcript is not None:
         raise WorkflowError("Give an audio file or a transcript, not both")
+    if resume and (regenerate or audio is not None or transcript is not None):
+        raise WorkflowError("--resume continues a saved notes job: give no audio, transcript or --regenerate")
     emit("CHECKING", {"lecture_id": lecture})
     if not any(item["code"] == course for item in workspace.configuration_store().load()["courses"]):
         raise WorkflowError(f"Course not found: {course}")
@@ -144,7 +151,8 @@ def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None 
             return 2, {**result, "status": "NEEDS_TRANSCRIPT", "stage": "PREPARING",
                        "lessons_needing_preparation": pending, "asr_started": False}
         return _write_notes(workspace, course, number, result, provider=provider, quality=quality,
-                            instructions=instructions, emit=emit, provider_adapter=provider_adapter)
+                            instructions=instructions, resume=resume, regenerate=regenerate, emit=emit,
+                            provider_adapter=provider_adapter)
     pending = [] if audio is not None else _notes_preparation(workspace, [lecture])
     transcribed = audio is not None or (pending and all(item["reason"] in TRANSCRIPT_REASONS for item in pending))
     if transcribed:
@@ -161,13 +169,15 @@ def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None 
         return 2, {**result, "status": "NEEDS_TRANSCRIPT", "stage": "PREPARING", "lessons_needing_preparation": pending,
                    "asr_started": bool(transcribed)}
     return _write_notes(workspace, course, number, result, provider=provider, quality=quality,
-                        instructions=instructions, emit=emit, provider_adapter=provider_adapter)
+                        instructions=instructions, resume=resume, regenerate=regenerate, emit=emit,
+                            provider_adapter=provider_adapter)
 
 
 def _write_notes(workspace: Workspace, course: str, number: int, result: dict[str, Any], *, provider, quality,
-                 instructions, emit: Progress, provider_adapter) -> tuple[int, dict[str, Any]]:
+                 instructions, resume, regenerate, emit: Progress, provider_adapter) -> tuple[int, dict[str, Any]]:
     from .notes_run import run_notes
     notes = run_notes(workspace, course, [number], provider=provider, quality=quality, instructions=instructions,
-                      progress=emit, **({"provider_adapter": provider_adapter} if provider_adapter is not None else {}))
+                      resume=resume, regenerate=regenerate, progress=emit,
+                      **({"provider_adapter": provider_adapter} if provider_adapter is not None else {}))
     result.update(status=notes["status"], notes=notes, provider_invoked=notes.get("provider_invoked"))
     return (0 if notes["status"] in NOTES_DONE else 2), result
