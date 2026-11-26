@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -67,6 +68,27 @@ def test_claude_structured_transport_preserves_actual_model_usage_and_requested_
     attempt = json.loads(Path(response.attempt_path).read_text())
     assert attempt["requested"]["model"] == "requested-alias"
     assert attempt["envelope"] == envelope
+
+
+def test_claude_prompt_cannot_be_read_as_an_add_dir_value(tmp_path, monkeypatch):
+    # `--add-dir <directories...>` takes several values. Claude Code 2.1.332 read
+    # the trailing prompt as one of them and stopped before any model call:
+    # "... was read as a value of --add-dir, not as a prompt · put a prompt
+    # before --add-dir or after --".
+    monkeypatch.setattr("mynotes.providers.shutil.which", lambda _: "/bin/claude")
+    commands = []
+    envelope = {"type": "result", "subtype": "success", "is_error": False, "structured_output": {"title": "test"}}
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, json.dumps(envelope), "")
+    monkeypatch.setattr("mynotes.providers.subprocess.run", run)
+    ClaudeAdapter().generate(request(tmp_path, "claude"))
+    command = commands[0]
+    after_dirs = command[command.index("--add-dir") + 2:]
+    if os.name == "nt":
+        assert after_dirs == []  # the prompt goes to stdin
+    else:
+        assert after_dirs[0] == "--" and len(after_dirs) == 2 and after_dirs[1].strip()
 
 
 @pytest.mark.parametrize("returncode,output,error", [
