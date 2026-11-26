@@ -1,0 +1,12 @@
+{
+  "jobId": "job-b56371ed7c289469",
+  "state": "COMPLETED",
+  "exitCode": 0,
+  "result": {
+    "exitCode": 0,
+    "data": {
+      "sources": [],
+      "status": "SYNCED"
+    }
+  }
+}

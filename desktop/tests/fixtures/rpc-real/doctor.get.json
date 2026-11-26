@@ -1,0 +1,38 @@
+{
+  "exitCode": 1,
+  "data": {
+    "capture_optional": true,
+    "checks": {
+      "agent": {
+        "action": "Open MyNotes setup and choose an AI agent.",
+        "status": "missing"
+      },
+      "capture": {
+        "action": "Configure Capture, record a microphone test, listen to it and confirm audibility.",
+        "status": "optional"
+      },
+      "installation": {
+        "action": "Open MyNotes setup.",
+        "configuration_error": null,
+        "status": "ready",
+        "workspace": "/tmp/mynotes-contract/workspace"
+      },
+      "transcription": {
+        "action": "Open MyNotes setup to download local transcription components.",
+        "executable": null,
+        "execution_verified": false,
+        "model_present": false,
+        "status": "missing"
+      },
+      "word": {
+        "action": "Open MyNotes setup to install the Word renderer.",
+        "executable": "/usr/bin/soffice",
+        "execution_verified": false,
+        "status": "missing"
+      }
+    },
+    "managed_registry_error": null,
+    "ready": false
+  },
+  "cached": false
+}

@@ -17,6 +17,7 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:contract": "vitest run --config tests/contract/vitest.config.ts",
     "test:e2e": "playwright test -c playwright.config.ts --project e2e",
     "shots": "playwright test -c playwright.config.ts --project shots",
     "tauri": "tauri"

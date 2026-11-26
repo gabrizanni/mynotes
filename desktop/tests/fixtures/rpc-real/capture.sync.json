@@ -1,0 +1,14 @@
+{
+  "jobId": "job-b56371ed7c289469",
+  "job": {
+    "id": "job-b56371ed7c289469",
+    "method": "capture.sync",
+    "params": {
+      "ifDue": true
+    },
+    "state": "RUNNING",
+    "pid": 75492,
+    "startedAt": 1795692040.5942113,
+    "cancelRequested": false
+  }
+}

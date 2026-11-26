@@ -1,0 +1,8 @@
+{
+  "jobId": "job-b56371ed7c289469",
+  "method": "capture.sync",
+  "params": {
+    "ifDue": true
+  },
+  "pid": 75492
+}

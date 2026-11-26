@@ -1,0 +1,64 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "ADDED",
+    "course": {
+      "code": "SYNTHETICSYS",
+      "name": "Synthetic Systems",
+      "aliases": [],
+      "languages": {
+        "lesson": "en",
+        "notes": "en"
+      },
+      "kind": "mixed",
+      "instructors": [],
+      "modules": [],
+      "assessment": "",
+      "context": "",
+      "context_setup": "pending",
+      "preparation": "",
+      "difficult_topics": [],
+      "folders": {
+        "materials": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Materials",
+        "personal_notes": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Personal Notes",
+        "handout": "/tmp/mynotes-contract/user-home/Documents/MyNotes/SYNTHETICSYS/Handouts",
+        "syllabus": "",
+        "recordings": "",
+        "transcripts": ""
+      },
+      "lesson_sources": {},
+      "files": {
+        "personal_notes": "",
+        "handout": ""
+      },
+      "files_explained": false,
+      "publication": {
+        "mode": "automatic"
+      },
+      "style": {},
+      "preferences": {
+        "persistent_instructions": []
+      },
+      "web_access": "disabled",
+      "transcription": {
+        "language": "auto",
+        "vocabulary": [],
+        "accent": "",
+        "primary_engine": "argmax",
+        "primary_model": "large-v3-v20240930_626MB",
+        "secondary_engine": null,
+        "secondary_model": "v2",
+        "extra_pass_engine": null,
+        "extra_pass_model": "mlx-community/whisper-large-v3-mlx",
+        "agreement_threshold": 0.72,
+        "verification_mode": "selective",
+        "recovery_engine": "fluidaudio",
+        "recovery_model": "v2",
+        "diarization_engine": null,
+        "professor_reference": "",
+        "tools": {}
+      }
+    },
+    "created": true
+  }
+}

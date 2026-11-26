@@ -9,9 +9,18 @@ export const RpcCode = {
   CliError: -32001,
   Busy: -32002,
   NeedsReview: -32003,
+  /** `job.*` with an unknown job id. */
+  UnknownJob: -32004,
+  /** `system.hello` with a protocol the server does not speak. */
+  UnsupportedProtocol: -32005,
+  ShuttingDown: -32006,
+  /** Cancelled before it started (`$/cancelRequest`, or the server stopping). */
+  RequestCancelled: -32800,
   BackendRestarted: -32010,
   BackendUnavailable: -32011,
   MethodNotAllowed: -32012,
+  /** App-side: no answer within the method's time limit (the server may still finish). */
+  Timeout: -32013,
   /** App-side: the result did not match its zod schema. */
   InvalidResult: -32090,
 } as const;
