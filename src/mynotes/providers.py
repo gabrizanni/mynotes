@@ -1045,7 +1045,9 @@ class ClaudeAdapter:
             command.extend(["--add-dir", str(request.run_dir.resolve())])
         prompt = _prompt(request)
         if os.name != "nt":
-            command.append(prompt)
+            # `--add-dir` takes several directories: without `--`, Claude Code
+            # reads the prompt as one more directory and stops.
+            command.extend(["--", prompt])
         timeout = invocation_timeout(request.timeout_seconds)
         if timeout <= 0:
             raise ProviderTimeoutError(f"{request.requested.provider} {request.phase} phase has no remaining execution allowance; no provider was invoked")
