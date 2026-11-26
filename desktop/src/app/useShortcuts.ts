@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 import { routeForSection, SECTIONS } from "../state/routes";
 import { useActions } from "../state";
@@ -7,7 +7,9 @@ import { isMac } from "./platform";
 /** ⌘/Ctrl 1–5 sections, ⌘/Ctrl J assistant, ⌘/Ctrl , settings (UX-SPEC §1 and §3 Keyboard). */
 export function useShortcuts(): void {
   const { ui } = useActions();
-  useEffect(() => {
+  // Layout effect: the keys work as soon as the window is painted, even on a busy machine
+  // (a passive effect left a gap where an early ⌘5 was lost; seen in parallel e2e runs).
+  useLayoutEffect(() => {
     const mac = isMac();
     const onKey = (event: KeyboardEvent) => {
       const mod = mac ? event.metaKey : event.ctrlKey;
