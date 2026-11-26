@@ -7,6 +7,8 @@ quattro comandi ogni cinque secondi: riceve notifiche quando i file cambiano.
 I comandi esistenti restano invariati; ogni risultato è il JSON che il comando
 stampa. Ciò che può chiamare un agente, la trascrizione, LibreOffice o la rete
 gira come job in un processo separato, che sopravvive al riavvio del server.
+L'assistente della chat (`assistant.*`) usa lo stesso agente di `mynotes chat`
+e manda la risposta a pezzi, con notifiche, mentre l'agente lavora.
 
 This page is the contract a desktop app can be built against, protocol 1.
 `mynotes serve --list-methods --json` prints the same method table from the
@@ -84,6 +86,8 @@ passed by path and deleted when the command ends.
 | -32004 | Unknown job id | — |
 | -32005 | Unsupported protocol version | `{supported}` |
 | -32006 | The server is shutting down | — |
+| -32007 | Unknown assistant session | — |
+| -32008 | A reply is still running in this conversation, or 3 replies already run | — |
 | -32800 | Request cancelled before it started | — |
 
 ## Lanes
@@ -94,6 +98,10 @@ passed by path and deleted when the command ends.
 | slow | in the server, 2 threads | commands that write local files, probe agent CLIs (`doctor`), copy or hash audio |
 | job | `python -I -X utf8 -m mynotes.rpc_job`, own session (Unix) or Windows job object | anything that can call an agent, transcription, LibreOffice or the network, or that installs signal handlers |
 | server | in the server, 4 threads (`job.wait`: its own 8) | `system.*`, `session.*`, `watch.*`, `job.*` |
+
+`assistant.start` and `assistant.send` are listed in the job lane: they answer
+at once and the reply runs in a separate provider process (see Assistant).
+Unlike a job, that process reads from a pipe and ends with the server.
 
 In-process commands run the unchanged `cli.main()`. Thread-local stand-ins for
 stdout and stderr capture each call's own output, so it is the text the
@@ -200,9 +208,78 @@ This rule lives in `transcription_queue.launch_runner()` itself
 (`runner_active()` and `runner_needed()`), so the heartbeat of the macOS and
 Windows apps no longer starts a runner that would exit at once.
 
+## Assistant
+
+The assistant panel talks to the same chat agent as `mynotes chat`, with the
+same startup prompt (`chat.startup_prompt`), the same workspace rules
+(`AGENTS.md`, or the managed skill when a user-owned rules file wins) and the
+same MyNotes skills. Each message is one non-interactive turn of the agent
+CLI, started in the workspace with `MYNOTES_WORKSPACE` and
+`MYNOTES_CHAT_ACTIVE=1`; the prompt goes to stdin. The first prompt adds the
+page the user is on (`context`, as data) and one paragraph about the panel:
+nobody can approve a permission request there, and HTML is not rendered.
+
+| Agent | First turn | Next turns |
+| --- | --- | --- |
+| Claude Code | `claude --print --output-format stream-json --verbose --include-partial-messages --permission-mode dontAsk --tools Bash,Read,Glob,Grep --allowedTools Bash(mynotes:*),Read,Glob,Grep --append-system-prompt-file <rules> [--model M] [--effort E]` | the same, plus `--resume <session_id>` |
+| Codex | `codex exec --json --skip-git-repo-check -C <workspace> --sandbox workspace-write [--model M] [-c model_reasoning_effort="E"] -` | the same, then `resume <thread_id> -` |
+| Antigravity | `agy --agent mynotes --mode accept-edits --add-dir <workspace> [--model M] [--effort E] --input-format stream-json --output-format stream-json --print-timeout 0`, one stream-json user message on stdin, closed after the `result` event | the same, plus `--conversation <conversation_id>` |
+
+- **Permissions.** Claude Code may run `mynotes` commands and read files,
+  nothing else: other tools are not loaded, and anything that would ask is
+  denied (`dontAsk`), never `--dangerously-skip-permissions`. Codex keeps the
+  workspace-write sandbox of `mynotes chat`. Antigravity uses the managed
+  `mynotes` agent, as `mynotes chat` does.
+- **Resume.** The provider's own session id (`session_id`, `thread_id`,
+  `conversation_id`) is kept as `providerSession`. If a provider reported
+  none, the next turn sends the startup prompt again with the last 6
+  exchanges (12 000 characters at most) as a transcript, and the
+  conversation's `resume` becomes `replay`.
+- **Stop.** `assistant.cancel` interrupts the turn's process group (SIGINT),
+  waits 5 s, terminates it (SIGTERM), waits 5 s, then kills it; `force: true`
+  kills at once. On Windows the turn runs in a job object, which is closed. A
+  turn also ends after 30 minutes. When the agent exits, what is left of its
+  process group (a shell, a tool) is terminated too.
+- **Shutdown and restart.** Closing the server kills running turns: they end
+  `CANCELLED`. A transcript that a crash left `RUNNING` reads back as
+  `INTERRUPTED`.
+- **Transcripts.** `state/assistant/<sessionId>.json`, mode 0600, folder 0700:
+  the messages, the streamed text, tool rows, errors and usage.
+- **Parsing.** One JSON object per line. Unknown event types are ignored;
+  invalid JSON lines and lines over 8 MiB are skipped and counted in the
+  turn's `invalidLines`; a reply keeps at most 200 000 characters
+  (`truncated: true`), a turn at most 200 tool rows.
+
+Notifications, in order for one turn: `assistant.delta` and `assistant.tool`
+while the agent works, then exactly one of `assistant.done` or
+`assistant.error`. They are sent only after the `assistant.start` or
+`assistant.send` answer.
+
+| Notification | Params |
+| --- | --- |
+| `assistant.delta` | `{sessionId, turnId, text}`: new text, to append |
+| `assistant.tool` | `{sessionId, turnId, toolId, name, summary, status, command, durationMs}`; `status` is `running`, `completed`, `failed` or `denied`; the same `toolId` is sent again when it changes |
+| `assistant.done` | `{sessionId, turnId, text, providerSession, usage?}`; `text` is the whole reply |
+| `assistant.error` | `{sessionId, turnId, code, message}`; `code` is `QUOTA`, `AUTH`, `NETWORK`, `TIMEOUT`, `UNAVAILABLE` (CLI not installed), `CANCELLED` or `PROVIDER`, from the existing provider error classes |
+
+Conversation (from `assistant.get`): `id`, `provider`, `model`, `effort`,
+`providerSession`, `resume`, `title`, `createdAt`, `updatedAt`, `turns`. Turn:
+`id` (`turn-1`, `turn-2`, ...), `message`, `context`, `state` (`RUNNING`,
+`COMPLETED`, `FAILED`, `CANCELLED`, `INTERRUPTED`), `text`, `tools`, `error`
+(`{code, message}`), `usage`, `startedAt`, `finishedAt`, `invalidLines`.
+
+`context` is `{course?, lesson?, lectureId?, page?}`: a course code, a lesson
+number from 1 to 999, a lesson id such as `STAT-L03`, and a page label of at
+most 80 characters. `message` is 1 to 20 000 characters.
+
 ## Methods
 | Method | Lane | Params | Result | Notifications | Errors |
 | --- | --- | --- | --- | --- | --- |
+| `assistant.cancel` | fast | `sessionId`: string<br>`force`?: boolean | `{sessionId, turnId, cancelRequested}` | `assistant.error` (`CANCELLED`) | -32602, -32007 |
+| `assistant.get` | fast | `sessionId`: string | Conversation | — | -32602, -32007 |
+| `assistant.list` | fast | `limit`?: integer (1-200) | `{sessions: [{id, title, provider, model, effort, resume, createdAt, updatedAt, turns, state, running}]}` | — | -32602 |
+| `assistant.send` | job | `sessionId`: string<br>`message`: string<br>`context`?: json | `{sessionId, turnId}` | `assistant.delta`, `assistant.tool`, `assistant.done`, `assistant.error` | -32602, -32007, -32008 |
+| `assistant.start` | job | `message`: string<br>`provider`?: string (codex \| agy \| claude)<br>`model`?: string<br>`effort`?: string<br>`context`?: json | `{sessionId, turnId, session}`; the chat role's agent and model unless given | `assistant.delta`, `assistant.tool`, `assistant.done`, `assistant.error` | -32602, -32001, -32008 |
 | `capture.addLesson` | slow | `lesson`: json | `{exitCode, data}` of `mynotes capture add-lesson` | — | -32602, -32001 |
 | `capture.assign` | slow | `assignments`: json | `{exitCode, data}` of `mynotes capture assign` | — | -32602, -32001 |
 | `capture.configure` | slow | `config`?: json | `{exitCode, data}` of `mynotes capture configure` | — | -32602, -32001 |
@@ -294,7 +371,7 @@ Windows apps no longer starts a runner that would exit at once.
 | `system.hello` | server | `protocol`?: integer | `{protocol, server, version, python, platform, pid, workspace, methods, topics, limits}` | — | -32005 |
 | `system.ping` | server | — | `{ok, uptimeSeconds}` | — | — |
 | `system.shutdown` | server | — | `{ok, jobsRunning}`, then the server exits | — | — |
-| `system.stats` | server | — | `{pid, uptimeSeconds, cpuSeconds, childCpuSeconds, rssBytes, threads, requests, notifications, runnerSpawns, jobsStarted, jobsRunning, spawns, topicComputations}` | — | — |
+| `system.stats` | server | — | `{pid, uptimeSeconds, cpuSeconds, childCpuSeconds, rssBytes, threads, requests, notifications, runnerSpawns, jobsStarted, jobsRunning, assistantRunning, spawns, topicComputations}` | — | — |
 | `transcription.run` | job | `lectureId`?: string<br>`recordingId`?: string<br>`audio`?: string<br>exactly one of `lectureId`, `recordingId` | `{jobId, job}`; then `job.finished.result` = `{exitCode, data}` of `mynotes transcribe` | `job.started`, `job.progress`, `job.output`, `job.finished`; `job.progress` stage `TRANSCRIBING` with `phase`, `elapsedSeconds` | -32602; the command's error in `job.finished.error` (-32001, -32002, -32003) |
 | `transcription.status` | fast | `lectureId`?: string<br>`recordingId`?: string<br>exactly one of `lectureId`, `recordingId` | `{exitCode, data}` of `mynotes transcription-status` | — | -32602, -32001 |
 | `usage.get` | fast | `lectureId`?: string<br>`batchId`?: string<br>exactly one of `lectureId`, `batchId` | `{exitCode, data}` of `mynotes usage` | — | -32602, -32001 |
