@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from .office import find_soffice
+from .platform_paths import default_runtime_home, is_linux
 from .provider_process import run_windows_job
 from .utils import atomic_json_write, file_sha256
-from .workspace import Workspace, windows_data_home
+from .workspace import Workspace
 
 INSTALL_URLS = {
     "codex": "https://developers.openai.com/codex/cli/",
@@ -25,8 +26,7 @@ INSTALL_URLS = {
 
 
 def runtime_home() -> Path:
-    default = windows_data_home() if os.name == "nt" else Path.home() / "Library/Application Support/MyNotes"
-    return Path(os.environ.get("MYNOTES_HOME", str(default))).expanduser()
+    return Path(os.environ.get("MYNOTES_HOME", str(default_runtime_home()))).expanduser()
 
 
 def _managed_registry() -> tuple[dict[str, Any], str | None]:
@@ -209,6 +209,8 @@ def add_first_course(workspace: Workspace, name: str, notes_language: str = "en"
             course['folders']['recordings'] = recordings
         tools = managed_tools()
         course["transcription"]["tools"].update({k: tools[k] for k in ("argmax", "model_cache") if isinstance(tools.get(k), str)})
+        if is_linux() and isinstance(tools.get("whispercpp"), str):
+            course["transcription"]["tools"]["whispercpp"] = tools["whispercpp"]
         settings["courses"].append(course)
         if recordings:
             folder = clean_path(recordings)
@@ -321,6 +323,22 @@ def doctor(workspace: Workspace, provider: str | None = None) -> dict:
         soffice = find_soffice(managed_soffice)
         word_verified = bool(soffice and _current_word_proof(soffice))
         word_action = "Verify the Word renderer." if soffice else "Install LibreOffice for Word validation."
+    elif is_linux():
+        from .asr import default_engines
+        from .windows_speech import DEFAULT_MODEL, current_proof
+        whisper = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+        asr_executable = whisper.executable if whisper else None
+        weights = whisper.model_dir / f"ggml-{DEFAULT_MODEL}.bin" if whisper else None
+        model_ready = bool(weights and weights.is_file())
+        asr_verified = bool(weights and current_proof(asr_executable, weights))
+        asr_action = "Install whisper-cli as described in docs/LINUX.md."
+        if asr_executable:
+            asr_action = ("Run mynotes verify-transcription --audio with a short spoken sample." if model_ready
+                          else "Run mynotes install-speech-model to download the local speech model.")
+        soffice = find_soffice(managed_soffice)
+        word_verified = bool(soffice and _current_word_proof(soffice))
+        word_action = ("Run mynotes verify-word-renderer." if soffice
+                       else "Install LibreOffice Writer (for example pacman -S libreoffice-fresh or apt install libreoffice-writer).")
     else:
         asr_executable = managed_tool("argmax") or shutil.which("argmax-cli")
         model_cache = Path(tools.get("model_cache", workspace.root / "local-models"))
@@ -377,8 +395,8 @@ def confirm_capture_audio(workspace: Workspace, audio: Path, *, audible: bool) -
             continue
     if not verified_session:
         raise ValueError("Select the completed microphone test from Capture status; ordinary recordings cannot confirm readiness.")
-    if os.name == "nt":
-        from .capture_windows import valid_audio
+    if os.name == "nt" or is_linux():
+        from .audio_probe import valid_audio
         audio_is_valid = valid_audio(audio)
     else:
         checked = subprocess.run(["/usr/bin/afinfo", str(audio)], capture_output=True, text=True, timeout=15)

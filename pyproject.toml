@@ -42,3 +42,4 @@ artifacts = ["src/mynotes/resources/*.json", "src/mynotes/resources/*.docx", "sr
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["linux_defaults: use the host platform's course transcription defaults"]

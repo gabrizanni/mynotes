@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from .utils import atomic_json_write, now_compact_utc
 from .onboarding import runtime_home as mynotes_runtime_home
+from .platform_paths import is_linux
 from .process_status import probe_process
 from .workspace import Workspace
 from . import capture_links
@@ -66,7 +67,7 @@ def iso(value: datetime) -> str:
 
 
 def runtime_home() -> Path:
-    if os.name == "nt":
+    if os.name == "nt" or is_linux():
         return Path(os.environ.get("MYNOTES_CAPTURE_HOME", str(mynotes_runtime_home() / "Capture"))).expanduser()
     return Path(os.environ.get("MYNOTES_CAPTURE_HOME", str(Path.home() / "Library/Application Support/MyNotes/Capture"))).expanduser()
 
