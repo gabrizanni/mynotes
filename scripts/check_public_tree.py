@@ -18,6 +18,7 @@ PUBLIC_FILES = (
     "CONTRIBUTING.md",
     ".github/pull_request_template.md",
     "docs/GIT_WORKFLOW.md",
+    "docs/LINUX.md",
     "docs/LIBRARY_COURSE_MANAGEMENT.md",
     "docs/SOFT_PROGRESS_POLICY.md",
     ".github/workflows/ci.yml",
