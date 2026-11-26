@@ -720,8 +720,12 @@ class Session:
                 "turns": len(turns), "state": turns[-1]["state"] if turns else None, "running": self.running()}
 
     def public(self) -> dict:
+        """The transcript; a running turn shows the text streamed so far."""
         with self.lock:
-            return json.loads(json.dumps(self.record))
+            record = json.loads(json.dumps(self.record))
+            if self.turn is not None and record["turns"]:
+                record["turns"][-1]["text"] = self.turn.output.text
+            return record
 
 
 class Assistant:

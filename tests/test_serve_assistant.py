@@ -514,6 +514,8 @@ def test_cancel_mid_stream_leaves_no_process(fakes, monkeypatch, stubborn):
     with pytest.raises(RpcError) as busy:
         assistant.dispatch("assistant.send", {"sessionId": started["sessionId"], "message": "More"})
     assert busy.value.code == TURN_RUNNING
+    live = assistant.dispatch("assistant.get", {"sessionId": started["sessionId"]})["turns"][0]
+    assert (live["state"], live["text"]) == ("RUNNING", "Working")
     begun = time.monotonic()
     assert assistant.dispatch("assistant.cancel", {"sessionId": started["sessionId"]})["cancelRequested"] is True
     name, error = recorder.end(started["turnId"])
