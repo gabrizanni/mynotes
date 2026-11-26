@@ -1,0 +1,34 @@
+{
+  "state": "running",
+  "stage": "components",
+  "title": "Speech model",
+  "bytesDone": 412000000,
+  "bytesTotal": 626000000,
+  "lastDataAt": "2026-11-26T09:41:56Z",
+  "error": null,
+  "overallDone": 624000000,
+  "overallTotal": 1006000000,
+  "components": [
+    {
+      "id": "runtime",
+      "title": "MyNotes and Recorder",
+      "state": "done",
+      "bytesDone": 80000000,
+      "bytesTotal": 80000000
+    },
+    {
+      "id": "speech",
+      "title": "Speech model",
+      "state": "running",
+      "bytesDone": 412000000,
+      "bytesTotal": 626000000
+    },
+    {
+      "id": "libreoffice",
+      "title": "LibreOffice",
+      "state": "waiting",
+      "bytesDone": 0,
+      "bytesTotal": 300000000
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { FileAudio } from "lucide-react";
+import { FileAudio, type LucideIcon } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import { cx } from "../../design/cx";
@@ -15,10 +15,14 @@ export interface DropZoneProps {
   multiple?: boolean;
   onFiles: (files: File[]) => void;
   buttonLabel?: string;
+  /** Glyph above the title; defaults to an audio file. */
+  icon?: LucideIcon;
+  /** Replaces the hidden file input, e.g. a native folder picker. */
+  onChoose?: () => void;
 }
 
 /** Drag-and-drop target whose keyboard path is the "Choose files" button. */
-export function DropZone({ title, body, accept, multiple = true, onFiles, buttonLabel }: DropZoneProps) {
+export function DropZone({ title, body, accept, multiple = true, onFiles, buttonLabel, icon = FileAudio, onChoose }: DropZoneProps) {
   const t = useT();
   const [active, setActive] = useState(false);
   const input = useRef<HTMLInputElement>(null);
@@ -46,13 +50,13 @@ export function DropZone({ title, body, accept, multiple = true, onFiles, button
       }}
       onDrop={onDrop}
     >
-      <Icon icon={FileAudio} size={24} className={styles.icon} />
+      <Icon icon={icon} size={24} className={styles.icon} />
       <p className={styles.title} id={titleId}>
         {active ? t.common.dropRelease : title}
       </p>
       {body && <p className={styles.body}>{body}</p>}
       <div className={styles.actions}>
-        <Button variant="outline" size="sm" onClick={() => input.current?.click()}>
+        <Button variant="outline" size="sm" onClick={() => (onChoose ? onChoose() : input.current?.click())}>
           {buttonLabel ?? t.common.chooseFiles}
         </Button>
       </div>

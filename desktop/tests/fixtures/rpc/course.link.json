@@ -1,0 +1,30 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "READY",
+    "course": "STAT",
+    "saved": false,
+    "connections": {
+      "materials": "~/Documents/University/Statistics"
+    },
+    "note_files": {
+      "personal_notes": "~/Documents/University/Statistics/Appunti personali.docx",
+      "handout": "~/Documents/MyNotes/Statistics/STAT_COURSE_NOTES.docx"
+    },
+    "inventory": {
+      "resolved_folder": "~/Documents/University/Statistics",
+      "file_counts": {
+        "materials": 14,
+        "recordings": 2,
+        "personal_notes": 0,
+        "transcripts": 0
+      },
+      "files": {
+        "materials": [],
+        "recordings": [],
+        "personal_notes": [],
+        "transcripts": []
+      }
+    }
+  }
+}

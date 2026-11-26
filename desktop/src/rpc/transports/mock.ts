@@ -12,6 +12,8 @@
 import { RpcCode, RpcError } from "../errors";
 import type { Transport } from "../transport";
 import { dayOffset, resolveFixtures, shiftDates, type Json } from "./fixtures";
+// onboarding (feat/desktop-onboarding)
+import { onboardingMockHandlers } from "./onboardingMock";
 
 export interface MockOptions {
   scenario: string;
@@ -77,6 +79,9 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
   };
 
   const handlers: Record<string, (params: unknown) => Json> = {
+    // onboarding (feat/desktop-onboarding): setup, sign-in, course, calendar, microphone.
+    ...onboardingMockHandlers({ state, simulate: options.simulate, now: options.now, stageMs: options.stageMs, later, emit }),
+
     "watch.subscribe": () => {
       const snapshot: JsonObject = {};
       const topics: Array<[string, string]> = [

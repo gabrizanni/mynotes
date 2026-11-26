@@ -1,0 +1,12 @@
+{
+  "data": {
+    "enabled": true,
+    "paused": true,
+    "runtime": {
+      "microphonePermission": "DENIED",
+      "recording": false,
+      "exporting": false,
+      "currentSession": null
+    }
+  }
+}

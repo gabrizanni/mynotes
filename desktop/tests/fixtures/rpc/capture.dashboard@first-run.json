@@ -1,0 +1,18 @@
+{
+  "data": {
+    "configured": false,
+    "enabled": false,
+    "paused": true,
+    "running": false,
+    "runtime": {
+      "recording": false,
+      "exporting": false,
+      "microphonePermission": "NOT_DETERMINED",
+      "currentSession": null,
+      "sessions": []
+    },
+    "sources": [],
+    "events": [],
+    "courses": []
+  }
+}

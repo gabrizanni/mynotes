@@ -1,0 +1,25 @@
+{
+  "data": {
+    "enabled": true,
+    "paused": true,
+    "runtime": {
+      "microphonePermission": "AUTHORIZED",
+      "recording": true,
+      "exporting": false,
+      "currentSession": {
+        "id": "session-mic-test",
+        "event": {
+          "id": "test:mic",
+          "courseCode": null,
+          "lessonNumber": null,
+          "title": "Microphone test"
+        },
+        "status": "RECORDING",
+        "isTest": true,
+        "actualStart": "2026-11-26T09:41:42Z",
+        "outputPath": null
+      },
+      "sessions": []
+    }
+  }
+}

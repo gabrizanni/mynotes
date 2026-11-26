@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useLayoutEffect } from "react";
 
 import { routeForSection, SECTIONS } from "../state/routes";
 import { useActions } from "../state";
@@ -7,7 +7,9 @@ import { isMac } from "./platform";
 /** ⌘/Ctrl 1–5 sections, ⌘/Ctrl J assistant, ⌘/Ctrl , settings (UX-SPEC §1 and §3 Keyboard). */
 export function useShortcuts(): void {
   const { ui } = useActions();
-  useEffect(() => {
+  // Layout effect: the listener is in place before the first paint, so a key pressed as soon
+  // as the page shows is never lost (a passive effect left a gap under load).
+  useLayoutEffect(() => {
     const mac = isMac();
     const onKey = (event: KeyboardEvent) => {
       const mod = mac ? event.metaKey : event.ctrlKey;

@@ -7,6 +7,8 @@ import {
   Banner,
   Button,
   Card,
+  ChoiceCards,
+  ChoiceChips,
   Dialog,
   DropZone,
   EmptyState,
@@ -114,6 +116,9 @@ export function GalleryPage() {
   const [topics, setTopics] = useState<string[]>(["Hypothesis testing", "Bayes"]);
   const [review, setReview] = useState(true);
   const [auto, setAuto] = useState(false);
+  // onboarding (feat/desktop-onboarding): ChoiceCards and ChoiceChips specimens.
+  const [assistantChoice, setAssistantChoice] = useState<"claude" | "codex" | "agy" | null>("claude");
+  const [goals, setGoals] = useState<Array<"exam" | "understanding" | "exercises" | "work" | "personal">>(["exam"]);
   const [selected, setSelected] = useState<Set<string>>(new Set(["STAT-L07"]));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -247,6 +252,28 @@ export function GalleryPage() {
           <Specimen label="DropZone" wide>
             <DropZone title={s.dropTitle} body={s.dropBody} accept="audio/*,.txt" onFiles={() => undefined} />
           </Specimen>
+          {/* >>> onboarding (feat/desktop-onboarding) >>> */}
+          <Specimen label="ChoiceCards" wide>
+            <ChoiceCards
+              label={t.onboarding.assistant.groupLabel}
+              options={(["claude", "codex", "agy"] as const).map((id) => ({
+                value: id,
+                title: t.onboarding.assistant.providers[id].name,
+                description: t.onboarding.assistant.providers[id].account,
+              }))}
+              value={assistantChoice}
+              onChange={setAssistantChoice}
+            />
+          </Specimen>
+          <Specimen label="ChoiceChips">
+            <ChoiceChips
+              label={t.onboarding.studies.goalsLabel}
+              chips={(["exam", "understanding", "exercises", "work", "personal"] as const).map((goal) => ({ value: goal, label: t.onboarding.studies.goals[goal] }))}
+              selected={goals}
+              onChange={setGoals}
+            />
+          </Specimen>
+          {/* <<< onboarding (feat/desktop-onboarding) <<< */}
         </div>
       </Section>
 

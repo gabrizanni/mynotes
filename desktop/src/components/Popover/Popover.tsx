@@ -32,6 +32,8 @@ export function Popover({ label, triggerProps, title, align = "start", defaultOp
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        // Handled here: page-level Esc shortcuts (onboarding Back) must not also fire.
+        event.preventDefault();
         setOpen(false);
         trigger.current?.focus();
       }

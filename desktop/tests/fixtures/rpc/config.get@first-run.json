@@ -1,0 +1,17 @@
+{
+  "data": {
+    "onboarding": {
+      "status": "in_progress",
+      "completed_groups": [],
+      "next_group": "personal"
+    },
+    "personal": {
+      "interface_language": "en",
+      "background": ""
+    },
+    "courses": [],
+    "providers": {
+      "default": null
+    }
+  }
+}
