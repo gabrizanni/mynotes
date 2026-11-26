@@ -21,7 +21,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["tests/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}", "tests/unit/**/*.test.{ts,tsx}"],
-    css: { modules: { classNameStrategy: "non-scoped" } },
+    // Stylesheets stay blank in tests, except `?raw` imports (the token contrast test reads them).
+    css: { include: [/\.css\?raw$/], modules: { classNameStrategy: "non-scoped" } },
     restoreMocks: true,
   },
 });
