@@ -6,7 +6,10 @@ Stages, reported through `progress(stage, detail)`:
    reuses a transcript already on disk (never starting transcription itself).
 2. TRANSCRIBING: only when no usable transcript exists, or `audio` is given.
    A side thread reports the persisted transcription phase every second.
-3. PREPARING: the source pack, from the new transcript.
+   A given `transcript` skips this stage: it is imported exactly as
+   `prepare --transcript` imports it (`audio` and `transcript` exclude each
+   other).
+3. PREPARING: the source pack, from the new or imported transcript.
 4. The `notes` stages (GENERATING, BUILDING_WORD, UPDATING_WORD, ...).
 
 Exit codes follow `transcribe` and `notes`: 0 completed (or awaiting
@@ -71,20 +74,45 @@ def _transcribe(workspace: Workspace, lecture_id: str, audio: Path | None, emit:
     return 0, result
 
 
-def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None = None, provider: str | None = None,
-                   quality: str | None = None, instructions: str | None = None, progress: Progress | None = None,
-                   engines=None, provider_adapter=None) -> tuple[int, dict[str, Any]]:
+def _import_transcript(workspace: Workspace, lecture_id: str, transcript: Path, emit: Progress) -> tuple[int, dict]:
+    """Build the source pack from `transcript` as `prepare --transcript` does; returns (exit code, result)."""
+    from .ingestion import IngestionError
+    from .sourcepack import SourcePackError, build_source_pack
+    emit("PREPARING", {"lecture_id": lecture_id, "transcript": "imported"})
+    try:
+        build_source_pack(workspace, lecture_id, audio=None, transcript_path=transcript)
+    except (SourcePackError, IngestionError, OSError, ValueError) as error:
+        return 2, {"status": "FAILED", "lecture_id": lecture_id, "message": str(error)}
+    return 0, {"status": "IMPORTED", "lecture_id": lecture_id, "path": str(transcript),
+               "source_pack": str(workspace.runs_dir / lecture_id / "source_pack.json")}
+
+
+def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None = None, transcript: Path | None = None,
+                   provider: str | None = None, quality: str | None = None, instructions: str | None = None,
+                   progress: Progress | None = None, engines=None, provider_adapter=None) -> tuple[int, dict[str, Any]]:
     """Run the four stages for one lesson; returns (exit code, result)."""
     from .cli import _notes_preparation
-    from .notes_run import run_notes
     from .workflow import WorkflowError, parse_lecture_id
     emit = progress or (lambda *_: None)
     lecture = lecture_id.upper()
     course, number = parse_lecture_id(lecture)
+    if audio is not None and transcript is not None:
+        raise WorkflowError("Give an audio file or a transcript, not both")
     emit("CHECKING", {"lecture_id": lecture})
     if not any(item["code"] == course for item in workspace.configuration_store().load()["courses"]):
         raise WorkflowError(f"Course not found: {course}")
     result: dict[str, Any] = {"lecture_id": lecture, "provider_invoked": False}
+    if transcript is not None:
+        code, imported = _import_transcript(workspace, lecture, transcript, emit)
+        result["transcription"] = imported
+        if code:
+            return code, {**result, "status": imported["status"], "stage": "PREPARING"}
+        pending = _notes_preparation(workspace, [lecture])
+        if pending:
+            return 2, {**result, "status": "NEEDS_TRANSCRIPT", "stage": "PREPARING",
+                       "lessons_needing_preparation": pending, "asr_started": False}
+        return _write_notes(workspace, course, number, result, provider=provider, quality=quality,
+                            instructions=instructions, emit=emit, provider_adapter=provider_adapter)
     pending = [] if audio is not None else _notes_preparation(workspace, [lecture])
     transcribed = audio is not None or (pending and all(item["reason"] in TRANSCRIPT_REASONS for item in pending))
     if transcribed:
@@ -100,6 +128,13 @@ def process_lesson(workspace: Workspace, lecture_id: str, *, audio: Path | None 
     if pending:
         return 2, {**result, "status": "NEEDS_TRANSCRIPT", "stage": "PREPARING", "lessons_needing_preparation": pending,
                    "asr_started": bool(transcribed)}
+    return _write_notes(workspace, course, number, result, provider=provider, quality=quality,
+                        instructions=instructions, emit=emit, provider_adapter=provider_adapter)
+
+
+def _write_notes(workspace: Workspace, course: str, number: int, result: dict[str, Any], *, provider, quality,
+                 instructions, emit: Progress, provider_adapter) -> tuple[int, dict[str, Any]]:
+    from .notes_run import run_notes
     notes = run_notes(workspace, course, [number], provider=provider, quality=quality, instructions=instructions,
                       progress=emit, **({"provider_adapter": provider_adapter} if provider_adapter is not None else {}))
     result.update(status=notes["status"], notes=notes, provider_invoked=notes.get("provider_invoked"))

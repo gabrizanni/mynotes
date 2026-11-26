@@ -536,7 +536,9 @@ def build_parser() -> argparse.ArgumentParser:
     lesson_process = lesson_commands.add_parser("process", help="check, transcribe only if needed, prepare and write notes")
     lesson_process.add_argument("lecture_id", help="COURSE-LNN")
     lesson_process.add_argument("--workspace", help="private workspace path")
-    lesson_process.add_argument("--audio", help="specific recording; otherwise reuse a transcript or resolve this lesson's audio")
+    lesson_source = lesson_process.add_mutually_exclusive_group()
+    lesson_source.add_argument("--audio", help="specific recording; otherwise reuse a transcript or resolve this lesson's audio")
+    lesson_source.add_argument("--transcript", help="existing transcript (TXT or normalized JSON) to import without ASR, as prepare --transcript")
     lesson_process.add_argument("--provider", choices=("codex", "agy", "claude"))
     lesson_process.add_argument("--quality", help="saved quality or standard")
     lesson_process.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
@@ -1074,6 +1076,7 @@ def _lesson(arguments: argparse.Namespace) -> int:
         print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
     code, result = process_lesson(Workspace.from_value(arguments.workspace), arguments.lecture_id,
                                   audio=Path(arguments.audio).expanduser() if arguments.audio else None,
+                                  transcript=Path(arguments.transcript).expanduser() if arguments.transcript else None,
                                   provider=arguments.provider, quality=arguments.quality,
                                   instructions=arguments.instructions, progress=progress)
     print(json.dumps(result, ensure_ascii=False, indent=2))

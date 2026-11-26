@@ -152,3 +152,63 @@ def test_whole_lesson_with_synthetic_provider_and_renderer(ops, monkeypatch):
     assert stages[:2] == ["CHECKING", "PREPARING"]
     assert stages.index("GENERATING") < stages.index("BUILDING_WORD") < stages.index("UPDATING_WORD")
     assert Path(result["notes"]["publication"]["output"]).is_file()
+
+
+def _pack_sources(workspace, lecture):
+    pack = json.loads((workspace.runs_dir / lecture / "source_pack.json").read_text())
+    return [{key: source[key] for key in ("path", "role", "sha256")} for source in pack["sources"]], pack["availability"]
+
+
+def test_a_transcript_is_imported_like_prepare_and_never_transcribed(ops, monkeypatch, tmp_path, capsys):
+    text = tmp_path / "lesson one.txt"
+    text.write_text("Today: the supply chain, from the order to the delivery.\n", encoding="utf-8")
+    assert main(["prepare", "OPS-L01", "--transcript", str(text), "--workspace", str(ops.root)]) == 0
+    capsys.readouterr()
+    prepared = _pack_sources(ops, "OPS-L01")
+    (ops.runs_dir / "OPS-L01" / "source_pack.json").unlink()
+    monkeypatch.setattr("mynotes.transcription.run_transcription", lambda *a, **k: pytest.fail("a transcript needs no ASR"))
+    notes = []
+    monkeypatch.setattr("mynotes.notes_run.run_notes", lambda workspace, course, numbers, **kwargs: notes.append(
+        (course, numbers)) or {"status": "AWAITING_APPROVAL", "provider_invoked": True})
+    events = []
+    code, result = process_lesson(ops, "ops-l01", transcript=text, progress=record(events))
+    assert code == 0 and result["status"] == "AWAITING_APPROVAL" and notes == [("OPS", [1])]
+    assert result["transcription"] == {"status": "IMPORTED", "lecture_id": "OPS-L01", "path": str(text),
+                                       "source_pack": str(ops.runs_dir / "OPS-L01" / "source_pack.json")}
+    assert events[:2] == [("CHECKING", {"lecture_id": "OPS-L01"}),
+                          ("PREPARING", {"lecture_id": "OPS-L01", "transcript": "imported"})]
+    assert _pack_sources(ops, "OPS-L01") == prepared  # The same source pack as `prepare --transcript`.
+    assert any(source["role"] == "imported_transcript" and source["path"] == str(text) for source in prepared[0])
+
+
+def test_an_unusable_transcript_stops_before_notes(ops, monkeypatch, tmp_path, capsys):
+    calls = fake_steps(monkeypatch, pending_before=[])
+    empty = tmp_path / "empty.txt"
+    empty.write_text("   \n", encoding="utf-8")
+    assert main(["lesson", "process", "OPS-L01", "--transcript", str(empty), "--workspace", str(ops.root), "--json"]) == 2
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["status"] == "FAILED" and result["stage"] == "PREPARING" and not result["provider_invoked"]
+    assert result["transcription"]["message"] == "Transcript text is empty"
+    assert [json.loads(line)["stage"] for line in captured.err.splitlines()] == ["CHECKING", "PREPARING"]
+    assert calls["asr"] == [] and calls["notes"] == []
+
+
+def test_audio_and_transcript_exclude_each_other(ops, tmp_path, capsys):
+    with pytest.raises(SystemExit) as stopped:
+        main(["lesson", "process", "OPS-L01", "--audio", "a.wav", "--transcript", "a.txt", "--workspace", str(ops.root)])
+    assert stopped.value.code == 2 and "not allowed with argument" in capsys.readouterr().err
+    from mynotes.workflow import WorkflowError
+    with pytest.raises(WorkflowError, match="not both"):
+        process_lesson(ops, "OPS-L01", audio=tmp_path / "a.wav", transcript=tmp_path / "a.txt")
+
+
+def test_lesson_process_rpc_passes_the_transcript(tmp_path):
+    from mynotes.serve_methods import BY_NAME, RpcError, build_argv, validate
+    method = BY_NAME["lesson.process"]
+    params = validate(method, {"lectureId": "OPS-L01", "transcript": str(tmp_path / "t.txt")})
+    assert build_argv(method, params, str(tmp_path))[0] == [
+        "lesson", "process", "OPS-L01", "--transcript", str(tmp_path / "t.txt"), "--workspace", str(tmp_path), "--json"]
+    with pytest.raises(RpcError) as refused:
+        validate(method, {"lectureId": "OPS-L01", "audio": "a.wav", "transcript": "a.txt"})
+    assert refused.value.code == -32602 and refused.value.message == "Give at most one of: audio, transcript"
