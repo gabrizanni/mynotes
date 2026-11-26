@@ -33,7 +33,8 @@ CALLS = {
 
 
 def test_every_fast_method_is_covered():
-    assert set(CALLS) == {method.name for method in METHODS if method.lane == "fast"}
+    # Methods without a command (library.transcript) have no CLI to compare with; their own tests cover them.
+    assert set(CALLS) == {method.name for method in METHODS if method.lane == "fast" and method.command}
 
 
 @pytest.fixture(scope="module")

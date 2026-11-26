@@ -228,8 +228,12 @@ class Server:
         if spec.direct is not None and not (spec.slow_if and params.get(spec.slow_if)):
             try:
                 return {"exitCode": 0, "data": json.loads(json.dumps(spec.direct(self.workspace, params), ensure_ascii=False))}
+            except RpcError:
+                raise
             except Exception:
-                pass  # The command reports this failure exactly as the CLI does.
+                if not spec.command:
+                    raise  # No command to fall back on: an internal error.
+                # Otherwise the command reports this failure exactly as the CLI does.
         result = self.run_command(spec, params)
         if method in CAPTURE_REQUESTS and isinstance(result.get("data"), dict):
             data = result["data"]

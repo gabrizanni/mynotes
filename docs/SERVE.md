@@ -88,6 +88,7 @@ passed by path and deleted when the command ends.
 | -32006 | The server is shutting down | — |
 | -32007 | Unknown assistant session | — |
 | -32008 | A reply is still running in this conversation, or 3 replies already run | — |
+| -32009 | `library.transcript`: unknown recording, or no transcript yet | `{lectureId}` or `{recordingId}` |
 | -32800 | Request cancelled before it started | — |
 
 ## Lanes
@@ -159,6 +160,28 @@ that died without an exit file `INTERRUPTED`. `INTERRUPTED` and `CANCELLED`
 jobs carry `resumeHint {method, params}`: `notes.run` with `resume` set to
 the saved batch for notes and lesson jobs, otherwise the same call again.
 Records are kept; nothing is deleted.
+
+## Transcript text
+
+`library.transcript {lectureId | recordingId, maxBytes?}` answers
+`{exitCode: 0, data: {path, text, truncated, encoding, size}}`, computed in the
+server (fast lane, read-only). The caller names a lesson or a recording, never
+a file: the path comes from MyNotes' records. For a lesson, in order: the
+transcripts the lesson registry links to it, the text of its recordings, the
+library transcripts assigned to it or named after it (the rule `notes` uses),
+the transcript imported into its source pack (`prepare --transcript`,
+`lesson process --transcript`), then `runs/<lesson>/asr/transcript.txt`. For a
+recording: its exported text, its transcript text, then the library
+transcripts linked to it. A normalized `.json` transcript is read through its
+`.txt` sibling.
+
+- At most `maxBytes` bytes are read: 2 MiB by default, from 1 byte to 8 MiB.
+  `truncated` says whether the file is longer, `size` is its length in bytes,
+  and a truncated read never ends inside a UTF-8 character.
+- `encoding` is `utf-8`, `utf-8-sig` (the byte-order mark is removed) or
+  `latin-1` for a file that is not valid UTF-8.
+- A lesson id that is not `COURSE-LNN` gets `-32602`; an unknown recording,
+  or a lesson or recording without a transcript, gets `-32009`.
 
 ## Watching instead of polling
 
@@ -316,7 +339,7 @@ most 80 characters. `message` is 1 to 20 000 characters.
 | `job.get` | server | `jobId`?: string | Job | — | -32602, -32004 |
 | `job.list` | server | `limit`?: integer | `{jobs: [Job]}` | — | -32602 |
 | `job.wait` | server | `jobId`?: string<br>`timeoutSeconds`?: number | Job, when it ends or at the timeout | — | -32602, -32004 |
-| `lesson.process` | job | `lectureId`: string<br>`audio`?: string<br>`provider`?: string (codex \| agy \| claude)<br>`quality`?: string<br>`instructions`?: string | `{jobId, job}`; then `job.finished.result` = `{exitCode, data}` of `mynotes lesson process` | `job.started`, `job.progress`, `job.output`, `job.finished` | -32602; the command's error in `job.finished.error` (-32001, -32002, -32003) |
+| `lesson.process` | job | `lectureId`: string<br>`audio`?: string<br>`transcript`?: string<br>`provider`?: string (codex \| agy \| claude)<br>`quality`?: string<br>`instructions`?: string<br>at most one of `audio`, `transcript` | `{jobId, job}`; then `job.finished.result` = `{exitCode, data}` of `mynotes lesson process`; `transcript` skips transcription and imports the file as `prepare --transcript` does | `job.started`, `job.progress`, `job.output`, `job.finished` | -32602; the command's error in `job.finished.error` (-32001, -32002, -32003) |
 | `library.associate` | slow | `recordingId`: string<br>`course`: string<br>`lesson`?: integer | `{exitCode, data}` of `mynotes transcription-queue associate` | — | -32602, -32001 |
 | `library.associateAudio` | slow | `recordingId`: string<br>`eventId`?: json<br>`course`?: json<br>`lesson`?: json | `{exitCode, data}` of `mynotes transcription-queue associate-audio` | — | -32602, -32001 |
 | `library.courseProfile` | fast | `course`: string | `{exitCode, data}` of `mynotes transcription-queue course-profile` | — | -32602, -32001 |
@@ -335,6 +358,7 @@ most 80 characters. `message` is 1 to 20 000 characters.
 | `library.rename` | slow | `recordingId`: string<br>`title`: string | `{exitCode, data}` of `mynotes transcription-queue rename` | — | -32602, -32001 |
 | `library.renameTranscript` | slow | `transcript`: string<br>`name`: string | `{exitCode, data}` of `mynotes transcription-queue rename-transcript` | — | -32602, -32001 |
 | `library.restoreAudio` | slow | `recordingId`: string | `{exitCode, data}` of `mynotes transcription-queue restore-audio` | — | -32602, -32001 |
+| `library.transcript` | fast | `recordingId`?: string<br>`lectureId`?: string<br>`maxBytes`?: integer<br>exactly one of `recordingId`, `lectureId` | `{exitCode: 0, data: {path, text, truncated, encoding, size}}`, computed in-process (see Transcript text) | — | -32602, -32009 |
 | `library.transcripts` | fast; slow with `sync` | `query`?: string<br>`date`?: string<br>`course`?: string<br>`sync`?: boolean | `{exitCode, data}` of `mynotes transcription-queue transcripts` | — | -32602, -32001 |
 | `library.verify` | slow | — | `{exitCode, data}` of `mynotes transcription-queue verify-library` | — | -32602, -32001 |
 | `memory.reset` | slow | `scope`: string (global \| course)<br>`area`: string (notes \| dialogue)<br>`course`?: string<br>`expectedRevision`: string | `{exitCode, data}` of `mynotes memory reset` | — | -32602, -32001 |
@@ -345,6 +369,7 @@ most 80 characters. `message` is 1 to 20 000 characters.
 | `notes.batchStatus` | fast | `batchId`: string | `{exitCode, data}` of `mynotes batch-status` | — | -32602, -32001 |
 | `notes.history` | fast | `course`?: string | `{exitCode, data}` of `mynotes history` | — | -32602, -32001 |
 | `notes.plan` | slow | `course`: string<br>`lessons`?: string<br>`resume`?: string<br>`regenerate`?: boolean<br>`provider`?: string (codex \| agy \| claude)<br>`quality`?: string<br>`instructions`?: string<br>`imageLimit`?: integer<br>`selection`?: json<br>`budgets`?: json<br>`speakerFocus`?: string (lecture \| professor)<br>`contextLessons`?: string<br>`contiguousTranscripts`?: boolean | `{exitCode, data}` of `mynotes notes --plan-only` | — | -32602, -32001 |
+| `notes.publish` | job | `lecture`: string<br>`candidate`?: string | `{jobId, job}`; then `job.finished.result` = `{exitCode, data}` of `mynotes publish` | `job.started`, `job.progress`, `job.output`, `job.finished` | -32602; the command's error in `job.finished.error` (-32001) |
 | `notes.restore` | slow | `backupId`: string | `{exitCode, data}` of `mynotes restore` | — | -32602, -32001 |
 | `notes.run` | job | `course`: string<br>`lessons`?: string<br>`resume`?: string<br>`regenerate`?: boolean<br>`provider`?: string (codex \| agy \| claude)<br>`quality`?: string<br>`instructions`?: string<br>`imageLimit`?: integer<br>`selection`?: json<br>`budgets`?: json<br>`speakerFocus`?: string (lecture \| professor)<br>`contextLessons`?: string<br>`contiguousTranscripts`?: boolean | `{jobId, job}`; then `job.finished.result` = `{exitCode, data}` of `mynotes notes` | `job.started`, `job.progress`, `job.output`, `job.finished` | -32602; the command's error in `job.finished.error` (-32001) |
 | `notes.undo` | slow | `course`: string | `{exitCode, data}` of `mynotes undo` | — | -32602, -32001 |

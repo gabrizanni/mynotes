@@ -29,6 +29,7 @@ PROTOCOL = 1
 # JSON-RPC 2.0 reserved codes and the server's own.
 PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR = -32700, -32600, -32601, -32602, -32603
 COMMAND_FAILED, BUSY, NEEDS_REVIEW, JOB_NOT_FOUND, PROTOCOL_MISMATCH, SHUTTING_DOWN = -32001, -32002, -32003, -32004, -32005, -32006
+NOT_FOUND = -32009  # library.transcript: unknown recording, or no transcript yet
 REQUEST_CANCELLED = -32800
 
 
@@ -123,6 +124,11 @@ def _direct_library(workspace: str, params: dict) -> Any:
     from .transcription_queue import library_view
     return library_view(_queue_workspace(workspace), query=params.get("query"), date=params.get("date"),
                         course=params.get("course"))
+
+
+def _direct_transcript(workspace: str, params: dict) -> Any:
+    from .serve_transcript import transcript
+    return transcript(workspace, params)
 
 
 METHODS: tuple[Method, ...] = (
@@ -223,6 +229,9 @@ METHODS: tuple[Method, ...] = (
            P("sync", "--sync", "bool")), slow_if="sync", direct=_direct_library, summary="Recordings, lessons and transcripts."),
     Method("library.transcripts", "fast", (*QUEUE, "transcripts"), (P("query", "--query"), P("date", "--date"),
            P("course", "--course"), P("sync", "--sync", "bool")), slow_if="sync", summary="Transcript library."),
+    Method("library.transcript", "fast", params=(P("recordingId", server=True), P("lectureId", server=True),
+           P("maxBytes", kind="int", server=True)), one_of=("recordingId", "lectureId"), direct=_direct_transcript,
+           summary="Text of one lesson's or recording's transcript; the path comes from the library."),
     Method("library.lessons", "fast", (*QUEUE, "lessons"), summary="Lesson registry."),
     Method("library.courseProfile", "fast", (*QUEUE, "course-profile"), (P("course", "--course", required=True),),
            summary="One course's lesson profile."),
@@ -266,9 +275,12 @@ METHODS: tuple[Method, ...] = (
     Method("notes.history", "fast", ("history",), (P("course"),), summary="Restorable cumulative-Word backups."),
     Method("notes.undo", "slow", ("undo",), (P("course", required=True),), summary="Undo the last course update."),
     Method("notes.restore", "slow", ("restore",), (P("backupId", required=True),), summary="Restore one backup."),
-    Method("lesson.process", "job", ("lesson", "process"), (P("lectureId", required=True), P("audio", "--audio"), PROVIDER,
-           P("quality", "--quality"), P("instructions", "--instructions")), json_flag=True,
-           summary="Check, transcribe only if needed, prepare and write notes for one lesson."),
+    Method("notes.publish", "job", ("publish",), (P("lecture", required=True), P("candidate", "--candidate")),
+           summary="Publish a validated Word candidate into the course handout (renders with LibreOffice)."),
+    Method("lesson.process", "job", ("lesson", "process"), (P("lectureId", required=True), P("audio", "--audio"),
+           P("transcript", "--transcript"), PROVIDER, P("quality", "--quality"), P("instructions", "--instructions")),
+           json_flag=True, exclusive=("audio", "transcript"),
+           summary="Check, transcribe only if needed (or import a transcript), prepare and write notes for one lesson."),
     Method("usage.get", "fast", ("usage",), (LESSON, P("batchId", "--batch")), json_flag=True,
            one_of=("lectureId", "batchId"), summary="Local provider attempt counters."),
     # Local components
@@ -306,6 +318,8 @@ def validate(method: Method, params: Any) -> dict:
     given = [name for name in method.one_of if params.get(name) not in (None, False, [], "")]
     if method.one_of and len(given) != 1:
         raise RpcError(INVALID_PARAMS, f"Give exactly one of: {', '.join(method.one_of)}")
+    if len([name for name in method.exclusive if params.get(name) not in (None, False, [], "")]) > 1:
+        raise RpcError(INVALID_PARAMS, f"Give at most one of: {', '.join(method.exclusive)}")
     return {key: value for key, value in params.items() if value is not None}
 
 
