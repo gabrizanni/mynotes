@@ -101,6 +101,8 @@ pub const METHODS: &[(&str, Lane)] = &[
     ("library.rename", Lane::Slow),
     ("library.renameTranscript", Lane::Slow),
     ("library.restoreAudio", Lane::Slow),
+    // The text of one lesson's or recording's transcript; the server picks the file.
+    ("library.transcript", Lane::Fast),
     ("library.transcripts", Lane::Fast),
     ("library.verify", Lane::Slow),
     ("memory.reset", Lane::Slow),
@@ -111,6 +113,8 @@ pub const METHODS: &[(&str, Lane)] = &[
     ("notes.batchStatus", Lane::Fast),
     ("notes.history", Lane::Fast),
     ("notes.plan", Lane::Slow),
+    // `mynotes publish`: renders with LibreOffice, so a job.
+    ("notes.publish", Lane::Job),
     ("notes.restore", Lane::Slow),
     ("notes.run", Lane::Job),
     ("notes.undo", Lane::Slow),

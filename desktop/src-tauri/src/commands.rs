@@ -182,9 +182,18 @@ mod tests {
 
     #[test]
     fn allowlist_accepts_every_protocol_method_but_shutdown() {
-        for method in
-            ["system.hello", "notes.run", "capture.dashboard", "queue.status", "library.importAudio", "job.wait"]
-        {
+        for method in [
+            "system.hello",
+            "notes.run",
+            "notes.publish",
+            "capture.dashboard",
+            "capture.connect",
+            "queue.status",
+            "library.importAudio",
+            "library.transcript",
+            "lesson.process",
+            "job.wait",
+        ] {
             assert!(is_allowed(method), "{method} should be allowed");
         }
         assert!(!is_allowed("system.shutdown"), "only Rust stops the backend");
