@@ -652,9 +652,30 @@ def runner_active(workspace):
     return False
 
 
+# The only runner-written wait reason that status() reports; a runner must refresh it.
+_RUNNER_HOLD = 'In attesa di memoria disponibile'
+
+
+def runner_needed(workspace):
+    """True when a runner would do something: start, reconcile or re-check a hold.
+
+    With nothing queued, running or cancelling, a runner only rewrites
+    wait.json and exits; status() reads back only the memory hold from it.
+    """
+    if queue_has_work(workspace):
+        return True
+    return _read(root(workspace) / 'wait.json', {}).get('reason') == _RUNNER_HOLD
+
+
 def launch_runner(workspace):
-    """Start the queue runner unless one is already running; returns the process or None."""
+    """Start the queue runner when it has work and none is running; returns the process or None."""
     if runner_active(workspace):
+        return None
+    try:
+        needed = runner_needed(workspace)
+    except (OSError, ValueError, sqlite3.Error):
+        needed = True  # Unknown: launch as before; an idle runner exits at once.
+    if not needed:
         return None
     root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
     with (root(workspace) / "runner.log").open("ab") as log:

@@ -16,8 +16,8 @@ signature is unchanged and it is younger than the topic's refresh interval.
 One thread computes a topic at a time; the others wait for its result.
 
 Lease: while a session is open, `ui_lease` runs every 5 s, the same 15 s
-lease the native apps renew with `transcription-queue heartbeat`. A queue
-runner is started only when the queue has work and no runner holds its lock.
+lease the native apps renew with `transcription-queue heartbeat`, followed by
+`launch_runner`, which starts a runner only when it has work and none runs.
 """
 from __future__ import annotations
 
@@ -364,11 +364,10 @@ class Lease:
                 if workspace.is_initialized():
                     if queue.ui_lease(workspace, session, opened=True).get("status") == "CLOSED":
                         return
-                    if queue.queue_has_work(workspace):
-                        runner = queue.launch_runner(workspace)
-                        if runner is not None:
-                            self.runners.append(runner)
-                            self.on_spawn()
+                    runner = queue.launch_runner(workspace)  # None when idle or already running.
+                    if runner is not None:
+                        self.runners.append(runner)
+                        self.on_spawn()
                 self.runners = [runner for runner in self.runners if runner.poll() is None]  # Reap.
             except Exception as error:
                 print(f"mynotes serve: lease: {error}", file=sys.stderr)
