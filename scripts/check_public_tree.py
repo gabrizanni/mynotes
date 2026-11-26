@@ -105,6 +105,8 @@ PUBLIC_FILES = (
     "scripts/check_public_tree.py",
     "scripts/install-mynotes.sh",
     "scripts/validate_word_pipeline.py",
+    "scripts/bench_backend.py",
+    "scripts/cli_snapshot.py",
     "THIRD_PARTY_NOTICES.md",
 )
 PUBLIC_DIRECTORIES = ("src", "tests")
