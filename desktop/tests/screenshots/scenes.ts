@@ -30,3 +30,9 @@ export const LANGS = [
 ] as const;
 
 export const THEMES = ["light", "dark"] as const;
+
+// >>> onboarding (feat/desktop-onboarding) >>>
+// Rendered by onboarding.shots.ts as tests/shots/onboarding-<step>-<state>-<lang>-<theme>.png.
+// `seed` writes the app's onboarding.json (local storage) before load; `act` drives the page.
+export { ONBOARDING_SCENES, type OnboardingScene } from "./onboarding.scenes";
+// <<< onboarding (feat/desktop-onboarding) <<<
