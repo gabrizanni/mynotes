@@ -11,12 +11,12 @@
  * - `notes.plan` and `library.transcript` answer for the lessons actually asked.
  */
 import type { Json } from "./fixtures";
-
-type JsonObject = { [key: string]: Json };
+import type { JsonObject, MockJobs } from "./mockJobs";
 
 export interface NotesMockContext {
   state: Map<string, Json>;
   emit: (method: string, params: Json) => void;
+  jobs: MockJobs;
   simulate: boolean;
   stageMs: number;
   latencyMs: number;
@@ -57,16 +57,6 @@ export function createNotesMock(ctx: NotesMockContext) {
     for (const timer of timersByJob.get(jobId) ?? []) clearTimeout(timer);
     timersByJob.delete(jobId);
   };
-  const jobs = (): Json[] => {
-    const list = ctx.state.get("job.list");
-    return isObject(list) && Array.isArray(list.jobs) ? list.jobs : [];
-  };
-  const findJob = (jobId: string): JsonObject | undefined => jobs().find((job): job is JsonObject => isObject(job) && job.jobId === jobId);
-  const addJob = (job: JsonObject) => {
-    const list = ctx.state.get("job.list");
-    if (isObject(list) && Array.isArray(list.jobs)) list.jobs.unshift(job);
-    else ctx.state.set("job.list", { jobs: [job] });
-  };
   const simulation = (): { outcome: string; stopAt: string | null; warnings: Json[]; weights: number[] } => {
     const fixture = ctx.state.get("notes.run");
     const value = isObject(fixture) && isObject(fixture.simulation) ? fixture.simulation : {};
@@ -77,90 +67,59 @@ export function createNotesMock(ctx: NotesMockContext) {
       weights: Array.isArray(value.weights) ? value.weights.map((weight) => (typeof weight === "number" && weight > 0 ? weight : 1)) : [],
     };
   };
-  const finish = (job: JsonObject, state: string, exitCode: number, result: JsonObject | null) => {
-    const at = iso(ctx.now());
-    const jobId = typeof job.jobId === "string" ? job.jobId : "";
-    job.state = state;
-    job.finishedAt = at;
-    job.exitCode = exitCode;
-    job.result = result;
-    if (state === "succeeded") job.stage = "DONE";
-    ctx.emit("job.finished", { jobId, state, exitCode, result, at });
-  };
-
   const runNotes = (params: unknown): Json => {
-    const request = asParams(params);
+    const request = asParams(params) as JsonObject;
     counter += 1;
     const jobId = `mock-notes-${counter}`;
-    const course = str(request.course) ?? "";
-    const resume = str(request.resume);
-    const previous = resume ? jobs().find((job): job is JsonObject => isObject(job) && job.batchId === resume) : undefined;
-    const lectureIds = previous && Array.isArray(previous.lectureIds)
-      ? previous.lectureIds
-      : (str(request.lessons) ?? "")
-          .split(",")
-          .filter(Boolean)
-          .map((n) => `${course}-L${n.padStart(2, "0")}`);
-    const startedAt = iso(ctx.now());
-    const job: JsonObject = {
-      jobId,
-      kind: "notes",
-      state: "running",
-      stage: STAGES[0],
-      stageStartedAt: startedAt,
-      startedAt,
-      courseCode: course,
-      lectureIds,
-      batchId: resume ?? `b-mock-${counter}`,
-      result: null,
-    };
-    addJob(job);
-    later(jobId, ctx.latencyMs, () => ctx.emit("job.started", structuredClone(job)));
+    const batch = str(request.resume) ?? `b-mock-${counter}`;
+    const ref = ctx.jobs.start(jobId, "notes.run", structuredClone(request), (run) => later(jobId, ctx.latencyMs, run));
+    const job = ctx.jobs.find(jobId);
+    if (!job) return ref;
+    // The first progress line is already in the record; the notification follows `job.started`.
+    job.lastProgress = { jobId, stage: STAGES[0], at: iso(ctx.now()), batch_id: batch };
+    later(jobId, ctx.latencyMs + 1, () => ctx.jobs.progress(job, STAGES[0], { batch_id: batch }));
     const fixture = simulation();
-    const plan = resume ? { ...fixture, outcome: "COMPLETED", stopAt: null, warnings: [] } : fixture;
+    const plan = str(request.resume) ? { ...fixture, outcome: "COMPLETED", stopAt: null, warnings: [] } : fixture;
     const stopIndex = plan.stopAt ? STAGES.findIndex((stage) => stage === plan.stopAt) : -1;
     const lastStage = stopIndex >= 0 ? stopIndex : STAGES.length - 1;
     // `weights` stretch stages relative to each other (writing takes longest), times stageMs.
     const startOf = (index: number) => STAGES.slice(0, index).reduce((sum, _stage, i) => sum + ctx.stageMs * (plan.weights[i] ?? 1), 0);
     for (let index = 1; index <= lastStage; index += 1) {
       const stage = STAGES[index] ?? "UPDATING_WORD";
-      later(jobId, startOf(index), () => {
-        const at = iso(ctx.now());
-        job.stage = stage;
-        job.stageStartedAt = at;
-        ctx.emit("job.progress", { jobId, stage, detail: null, at });
-      });
+      later(jobId, startOf(index), () => ctx.jobs.progress(job, stage, { batch_id: batch }));
     }
     later(jobId, startOf(lastStage + 1), () => {
       timersByJob.delete(jobId);
       const outcome = plan.outcome;
       const succeeded = ["COMPLETED", "COMPLETED_WITH_WARNINGS", "AWAITING_APPROVAL"].includes(outcome);
-      const paused = outcome.startsWith("PAUSED_");
-      const result: JsonObject = plan.warnings.length ? { status: outcome, warnings: plan.warnings } : { status: outcome };
-      finish(job, succeeded ? "succeeded" : paused ? "interrupted" : "failed", succeeded ? 0 : 2, result);
+      const data: JsonObject = { status: outcome, batch_id: batch, ...(plan.warnings.length ? { warnings: plan.warnings } : {}) };
+      // serve_jobs: exit 0 is COMPLETED; a paused or failed run exits non-zero and is FAILED.
+      ctx.jobs.finish(job, succeeded ? "COMPLETED" : "FAILED", succeeded ? 0 : 2, data);
     });
-    return { jobId };
+    return ref;
   };
 
   const cancel = (params: unknown): Json => {
     const jobId = str(asParams(params).jobId) ?? "";
-    const job = findJob(jobId);
-    if (job && job.state === "running") {
+    const job = ctx.jobs.find(jobId);
+    if (!job) return null;
+    if (job.state === "RUNNING") {
       stop(jobId);
-      if (ctx.simulate) setTimeout(() => finish(job, "cancelled", 130, null), ctx.latencyMs);
-      else finish(job, "cancelled", 130, null);
+      job.cancelRequested = true;
+      if (ctx.simulate) setTimeout(() => ctx.jobs.finish(job, "CANCELLED", 130, null), ctx.latencyMs);
+      else ctx.jobs.finish(job, "CANCELLED", 130, null);
     }
-    return { ok: true };
+    return structuredClone(job);
   };
 
   const transcribe = (params: unknown): Json => {
     const lectureId = str(asParams(params).lectureId) ?? "";
     counter += 1;
     const jobId = `mock-transcription-${counter}`;
-    const startedAt = iso(ctx.now());
-    const job: JsonObject = { jobId, kind: "transcription", state: "running", stage: "TRANSCRIBING", stageStartedAt: startedAt, startedAt, lectureIds: [lectureId], result: null };
-    addJob(job);
-    later(jobId, ctx.latencyMs, () => ctx.emit("job.started", structuredClone(job)));
+    const ref = ctx.jobs.start(jobId, "transcription.run", { lectureId }, (run) => later(jobId, ctx.latencyMs, run));
+    const job = ctx.jobs.find(jobId);
+    if (!job) return ref;
+    job.lastProgress = { jobId, stage: "TRANSCRIBING", at: iso(ctx.now()) };
     later(jobId, ctx.stageMs * 2, () => {
       timersByJob.delete(jobId);
       const library = ctx.state.get("library.list");
@@ -175,9 +134,9 @@ export function createNotesMock(ctx: NotesMockContext) {
         data.transcripts = transcripts;
         ctx.emit("library.changed", data);
       }
-      finish(job, "succeeded", 0, { status: "COMPLETED" });
+      ctx.jobs.finish(job, "COMPLETED", 0, { status: "COMPLETED" });
     });
-    return { jobId };
+    return ref;
   };
 
   const plan = (params: unknown): Json => {

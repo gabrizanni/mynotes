@@ -31,12 +31,22 @@ pub mod codes {
     pub const BUSY: i64 = -32002;
     /// The command finished but needs the student's review.
     pub const NEEDS_REVIEW: i64 = -32003;
+    /// `job.*` with an unknown job id.
+    pub const UNKNOWN_JOB: i64 = -32004;
+    /// `system.hello` with a protocol the server does not speak (`data.supported`).
+    pub const UNSUPPORTED_PROTOCOL: i64 = -32005;
+    /// The server is shutting down.
+    pub const SHUTTING_DOWN: i64 = -32006;
+    /// The request was cancelled before it started (`$/cancelRequest`, or end of stdin).
+    pub const REQUEST_CANCELLED: i64 = -32800;
     /// App-side: the backend restarted while the call was pending.
     pub const BACKEND_RESTARTED: i64 = -32010;
     /// App-side: no backend process is connected.
     pub const BACKEND_UNAVAILABLE: i64 = -32011;
     /// App-side: the webview asked for a method outside the allowlist.
     pub const METHOD_NOT_ALLOWED: i64 = -32012;
+    /// App-side: no answer within the method's time limit (the server may still finish it).
+    pub const TIMEOUT: i64 = -32013;
 }
 
 const JSONRPC: &str = "2.0";

@@ -1,0 +1,20 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "files": [
+      {
+        "path": "/tmp/mynotes-contract/recordings/DEMO-L01.wav",
+        "name": "DEMO-L01.wav",
+        "duration": 1,
+        "recorded_at": null,
+        "size": 32044,
+        "mtime_ns": 1795690522104000000,
+        "device": 57,
+        "inode": 246827,
+        "duplicate": true,
+        "name_collision": true
+      }
+    ]
+  }
+}

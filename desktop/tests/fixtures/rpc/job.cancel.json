@@ -1,3 +1,14 @@
 {
-  "ok": true
+  "id": "j-stat-07",
+  "method": "notes.run",
+  "params": {
+    "course": "STAT",
+    "lessons": "7"
+  },
+  "state": "RUNNING",
+  "pid": null,
+  "startedAt": 1795685400.0,
+  "finishedAt": null,
+  "exitCode": null,
+  "cancelRequested": true
 }

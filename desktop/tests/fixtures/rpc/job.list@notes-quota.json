@@ -1,61 +1,67 @@
 {
   "jobs": [
     {
-      "jobId": "j-corpfin-03",
-      "kind": "notes",
-      "state": "interrupted",
-      "stage": null,
-      "detail": null,
-      "startedAt": "2026-11-25T16:31:10Z",
-      "finishedAt": "2026-11-25T16:44:52Z",
-      "stageStartedAt": "2026-11-25T16:31:10Z",
-      "courseCode": "CORPFIN",
-      "lectureIds": [
-        "CORPFIN-L03"
-      ],
-      "batchId": "b-corpfin-03",
+      "id": "j-corpfin-03",
+      "method": "notes.run",
+      "params": {
+        "course": "CORPFIN",
+        "lessons": "3"
+      },
+      "state": "FAILED",
+      "pid": null,
+      "startedAt": 1795624270.0,
+      "finishedAt": 1795625092.0,
       "exitCode": 2,
       "result": {
-        "status": "PAUSED_QUOTA"
-      }
+        "exitCode": 2,
+        "data": {
+          "status": "PAUSED_QUOTA",
+          "batch_id": "b-corpfin-03"
+        }
+      },
+      "cancelRequested": false
     },
     {
-      "jobId": "j-micro-04",
-      "kind": "notes",
-      "state": "succeeded",
-      "stage": null,
-      "detail": null,
-      "startedAt": "2026-11-25T13:20:00Z",
-      "finishedAt": "2026-11-25T13:29:41Z",
-      "stageStartedAt": "2026-11-25T13:20:00Z",
-      "courseCode": "MICRO",
-      "lectureIds": [
-        "MICRO-L04"
-      ],
-      "batchId": "b-micro-04",
+      "id": "j-micro-04",
+      "method": "notes.run",
+      "params": {
+        "course": "MICRO",
+        "lessons": "4"
+      },
+      "state": "COMPLETED",
+      "pid": null,
+      "startedAt": 1795612800.0,
+      "finishedAt": 1795613381.0,
       "exitCode": 0,
       "result": {
-        "status": "COMPLETED"
-      }
+        "exitCode": 0,
+        "data": {
+          "status": "COMPLETED",
+          "batch_id": "b-micro-04"
+        }
+      },
+      "cancelRequested": false
     },
     {
-      "jobId": "j-stat-06",
-      "kind": "notes",
-      "state": "interrupted",
-      "stage": null,
-      "detail": null,
-      "startedAt": "2026-11-24T10:50:00Z",
-      "finishedAt": "2026-11-24T10:58:12Z",
-      "stageStartedAt": "2026-11-24T10:50:00Z",
-      "courseCode": "STAT",
-      "lectureIds": [
-        "STAT-L06"
-      ],
-      "batchId": "b-stat-06",
+      "id": "j-stat-06",
+      "method": "notes.run",
+      "params": {
+        "course": "STAT",
+        "lessons": "6"
+      },
+      "state": "FAILED",
+      "pid": null,
+      "startedAt": 1795517400.0,
+      "finishedAt": 1795517892.0,
       "exitCode": 2,
       "result": {
-        "status": "PAUSED_QUOTA"
-      }
+        "exitCode": 2,
+        "data": {
+          "status": "PAUSED_QUOTA",
+          "batch_id": "b-stat-06"
+        }
+      },
+      "cancelRequested": false
     }
   ]
 }

@@ -5,6 +5,7 @@
  */
 import type { Messages } from "../../../i18n";
 import type { RpcClient } from "../../../rpc";
+import { finishedFields, jobState } from "../../../rpc/jobs";
 import type { AppActions } from "../../../state";
 import { outcomeOf } from "./model";
 
@@ -43,7 +44,7 @@ export function watchNotesJob(jobId: string, ctx: WatchContext): () => void {
   const off = ctx.rpc.on("job.finished", (event) => {
     if (event.jobId !== jobId) return;
     off();
-    const outcome = outcomeOf({ jobId, kind: "notes", state: event.state, startedAt: "", result: event.result ?? null });
+    const outcome = outcomeOf({ jobId, kind: "notes", startedAt: "", ...finishedFields(event, new Date().toISOString()) });
     if (!outcome) return;
     const open = () => ctx.actions.ui.navigate({ name: "lesson", id: ctx.lectureId });
     const o = ctx.t.lesson.outcome;
@@ -77,7 +78,7 @@ export function afterTranscriptions(rpc: RpcClient, jobIds: readonly string[], s
   const pending = new Set(jobIds);
   const off = rpc.on("job.finished", (event) => {
     if (!pending.has(event.jobId)) return;
-    if (event.state !== "succeeded") {
+    if (jobState(event.state) !== "succeeded") {
       off();
       onFail();
       return;

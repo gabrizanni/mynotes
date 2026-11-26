@@ -31,13 +31,19 @@ const empty = { load: idle, value: null } as const;
 export const settingsInitial: SettingsState = { preferences: empty, catalogs: {}, doctor: empty, providers: {} };
 
 export interface ModelChoices {
-  readonly default: ModelSelection;
+  /** `null`: no shared assistant chosen yet (a language-only save on a fresh workspace). */
+  readonly default: ModelSelection | null;
   /** `null`: notes use the same assistant as everything else. */
   readonly notes: ModelSelection | null;
   readonly language: "en" | "it";
 }
 
 const pick = ({ provider, model, effort }: ModelSelection) => ({ provider, model, effort });
+
+/** The shared model choice, or null while no provider is chosen (`default.provider` is null). */
+export function chosenModel(selection: ModelPreferences["default"]): ModelSelection | null {
+  return selection.provider ? { ...selection, provider: selection.provider } : null;
+}
 
 export function settingsActions(ctx: SliceContext<"settings">) {
   const loadPreferences = async () => {
@@ -84,7 +90,7 @@ export function settingsActions(ctx: SliceContext<"settings">) {
   const checkProvider = async (provider: string): Promise<ActionResult<ProviderState>> => {
     const result = await attempt(async () => ctx.rpc.call("provider.status", { provider }));
     if (!result.ok) return result;
-    const value: ProviderState = { status: result.value.status, version: result.value.version ?? null };
+    const value: ProviderState = { status: result.value.data.status, version: result.value.data.version ?? null };
     ctx.set((state) => ({ providers: { ...state.providers, [provider]: value } }));
     return { ok: true, value };
   };
@@ -95,7 +101,7 @@ export function settingsActions(ctx: SliceContext<"settings">) {
       const current = ctx.get().preferences.value;
       if (!current) throw new Error("Preferences are not loaded yet");
       const modelsJson = {
-        default: pick(choices.default),
+        default: choices.default ? pick(choices.default) : null,
         overrides: { chat: current.overrides.chat ? pick(current.overrides.chat) : null, notes: choices.notes ? pick(choices.notes) : null },
         language: choices.language,
       };
@@ -103,7 +109,7 @@ export function settingsActions(ctx: SliceContext<"settings">) {
       ctx.set({
         preferences: {
           load: ready,
-          value: { ...current, default: modelsJson.default, overrides: { ...current.overrides, notes: modelsJson.overrides.notes }, language: choices.language },
+          value: { ...current, default: modelsJson.default ?? current.default, overrides: { ...current.overrides, notes: modelsJson.overrides.notes }, language: choices.language },
         },
       });
       return data;
@@ -118,7 +124,7 @@ export function settingsActions(ctx: SliceContext<"settings">) {
     saveLanguage: (language: "en" | "it") => {
       const current = ctx.get().preferences.value;
       if (!current) return Promise.resolve<ActionResult<undefined>>({ ok: true, value: undefined });
-      return saveModels({ default: current.default, notes: current.overrides.notes ?? null, language }).then((result) =>
+      return saveModels({ default: chosenModel(current.default), notes: current.overrides.notes ?? null, language }).then((result) =>
         result.ok ? { ok: true as const, value: undefined } : result,
       );
     },

@@ -1,8 +1,10 @@
 /**
  * Long jobs (notes, transcription, setup) tracked by the server's job registry.
- * Fed by `job.list` and the `job.started` / `job.progress` / `job.finished` notifications.
+ * Fed by `job.list` and the `job.started` / `job.progress` / `job.finished` notifications, each
+ * turned into the app's Job by rpc/jobs.ts.
  */
 import type { Job, MethodParams, NotificationParams } from "../../rpc";
+import { finishedFields, isoTime, startedJob, toJob } from "../../rpc/jobs";
 import { failed, idle, loading, ready, type Load } from "../load";
 import { attempt } from "../result";
 import type { SliceContext } from "../types";
@@ -43,20 +45,22 @@ export function jobsActions(ctx: SliceContext<"jobs">) {
       ctx.set({ load: ctx.get().order.length ? ctx.get().load : loading });
       try {
         const { jobs } = await ctx.rpc.call("job.list");
-        for (const job of jobs) upsert(job);
+        for (const record of jobs) upsert(toJob(record));
         ctx.set({ load: ready });
       } catch (error) {
         ctx.set({ load: failed(error) });
       }
     },
-    started: (job: NotificationParams<"job.started">) => {
-      upsert(job);
+    started: (event: NotificationParams<"job.started">) => {
+      // A job the list already holds (fetched after it started) keeps what the list said.
+      if (ctx.get().byId[event.jobId]) return;
+      upsert(startedJob(event, new Date()));
     },
     progress: (event: NotificationParams<"job.progress">) => {
       ctx.set((state) => {
         const job = state.byId[event.jobId];
         if (!job) return {};
-        const at = event.at ?? new Date().toISOString();
+        const at = isoTime(event.at) ?? new Date().toISOString();
         const history = state.stages[event.jobId] ?? [];
         const last = history[history.length - 1];
         const timings = last?.stage === event.stage ? history : [...closeLast(history, at), { stage: event.stage, startedAt: at, finishedAt: null }];
@@ -70,12 +74,9 @@ export function jobsActions(ctx: SliceContext<"jobs">) {
       ctx.set((state) => {
         const job = state.byId[event.jobId];
         if (!job) return {};
-        const at = event.at ?? new Date().toISOString();
+        const at = new Date().toISOString();
         return {
-          byId: {
-            ...state.byId,
-            [job.jobId]: { ...job, state: event.state, exitCode: event.exitCode ?? null, result: event.result ?? null, finishedAt: at },
-          },
+          byId: { ...state.byId, [job.jobId]: { ...job, ...finishedFields(event, at) } },
           stages: { ...state.stages, [job.jobId]: closeLast(state.stages[job.jobId] ?? [], at) },
         };
       });

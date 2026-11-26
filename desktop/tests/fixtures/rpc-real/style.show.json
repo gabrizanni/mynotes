@@ -1,0 +1,110 @@
+{
+  "exitCode": 0,
+  "data": {
+    "effective": {
+      "accent_color": "ED7D31",
+      "body_after_pt": 3,
+      "body_font": "Aptos",
+      "body_line_spacing": 1.15,
+      "body_pt": 11,
+      "caption_color": "595959",
+      "heading_after_pt": 4,
+      "heading_before_pt": 8,
+      "heading_color": "0F4761",
+      "heading_font": "Aptos Display",
+      "image_limit": null,
+      "image_policy": "essential",
+      "lesson_heading_pt": 16,
+      "list_density": "balanced",
+      "margin_cm": 1.5,
+      "page_number_position": "center",
+      "page_numbers": true,
+      "page_size": "A4",
+      "question_color": "4F81BD",
+      "question_count": 5,
+      "recap": true,
+      "recap_language": "it",
+      "section_heading_pt": 14,
+      "slide_scope": "lecture",
+      "subsection_heading_pt": 12,
+      "writing_style": "clear_study"
+    },
+    "memory": {
+      "area": "notes",
+      "course": "SYNTHETICSYS",
+      "effective": {
+        "legacy-global": "Word design: margins 1.5 cm on every side; built-in Heading 1 for lesson titles, Heading 2 for sections and Heading 3 for subsections; orange key terms use the character style Termine tecnico."
+      },
+      "inherited": {
+        "legacy-global": "Word design: margins 1.5 cm on every side; built-in Heading 1 for lesson titles, Heading 2 for sections and Heading 3 for subsections; orange key terms use the character style Termine tecnico."
+      },
+      "languages": {
+        "lesson": "en",
+        "notes": "en"
+      },
+      "own": {},
+      "revision": "4c99e1a68b79416871651b5fb49cfc8fb1f841969cab6d650902c1bab73ffa08",
+      "scope": "course",
+      "style": {
+        "effective": {
+          "accent_color": "ED7D31",
+          "body_after_pt": 3,
+          "body_font": "Aptos",
+          "body_line_spacing": 1.15,
+          "body_pt": 11,
+          "caption_color": "595959",
+          "heading_after_pt": 4,
+          "heading_before_pt": 8,
+          "heading_color": "0F4761",
+          "heading_font": "Aptos Display",
+          "image_limit": null,
+          "image_policy": "essential",
+          "lesson_heading_pt": 16,
+          "list_density": "balanced",
+          "margin_cm": 1.5,
+          "page_number_position": "center",
+          "page_numbers": true,
+          "page_size": "A4",
+          "question_color": "4F81BD",
+          "question_count": 5,
+          "recap": true,
+          "recap_language": "it",
+          "section_heading_pt": 14,
+          "slide_scope": "lecture",
+          "subsection_heading_pt": 12,
+          "writing_style": "clear_study"
+        },
+        "inherited": {
+          "accent_color": "ED7D31",
+          "body_after_pt": 3,
+          "body_font": "Aptos",
+          "body_line_spacing": 1.15,
+          "body_pt": 11,
+          "caption_color": "595959",
+          "heading_after_pt": 4,
+          "heading_before_pt": 8,
+          "heading_color": "0F4761",
+          "heading_font": "Aptos Display",
+          "image_limit": null,
+          "image_policy": "essential",
+          "lesson_heading_pt": 16,
+          "list_density": "balanced",
+          "margin_cm": 1.5,
+          "page_number_position": "center",
+          "page_numbers": true,
+          "page_size": "A4",
+          "question_color": "4F81BD",
+          "question_count": 5,
+          "recap": true,
+          "recap_language": "it",
+          "section_heading_pt": 14,
+          "slide_scope": "lecture",
+          "subsection_heading_pt": 12,
+          "writing_style": "clear_study"
+        },
+        "own": {}
+      }
+    },
+    "scope": "SYNTHETICSYS"
+  }
+}

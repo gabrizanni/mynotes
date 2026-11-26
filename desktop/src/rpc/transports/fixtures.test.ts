@@ -18,6 +18,8 @@ describe("fixture helpers", () => {
   it("moves dates by whole days and leaves other strings alone", () => {
     const shifted = shiftDates({ at: "2026-11-26T08:00:00Z", day: "2026-11-26", title: "2026" }, 2);
     expect(shifted).toEqual({ at: "2026-11-28T08:00:00Z", day: "2026-11-28", title: "2026" });
+    // Job records carry epoch seconds under startedAt/finishedAt; other numbers stay.
+    expect(shiftDates({ startedAt: 1_795_600_000, finishedAt: null, exitCode: 2, size: 1_795_600_000 }, 1)).toEqual({ startedAt: 1_795_686_400, finishedAt: null, exitCode: 2, size: 1_795_600_000 });
     expect(dayOffset("2026-11-26", new Date(2026, 10, 26, 23, 0))).toBe(0);
   });
 });

@@ -1,0 +1,39 @@
+{
+  "exitCode": 0,
+  "data": {
+    "schema_version": 2,
+    "provider": "claude",
+    "choices": [
+      {
+        "id": "",
+        "model": "",
+        "provider": "claude",
+        "label": "Modello predefinito della CLI",
+        "default_effort": "",
+        "supported_efforts": [],
+        "availability": "provider_default",
+        "selectable": true,
+        "source": "provider_default",
+        "effort_scope": "agent"
+      }
+    ],
+    "presets": [],
+    "default_preset": "",
+    "status": "no_catalog",
+    "message": "Elenco salvato. I modelli si aggiornano soltanto quando premi Aggiorna modelli.",
+    "cache_warning": "",
+    "account": {
+      "status": "unknown",
+      "label": "",
+      "kind": "",
+      "plan": ""
+    },
+    "source": "bundled_presets",
+    "source_freshness": "cache",
+    "fetched_at": "",
+    "provider_updated_at": "",
+    "cli_version": "",
+    "quota": [],
+    "access_verified": false
+  }
+}

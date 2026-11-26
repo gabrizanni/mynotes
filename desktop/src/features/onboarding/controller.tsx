@@ -8,6 +8,7 @@ import { useNow } from "../../app/useNow";
 import { useT } from "../../i18n";
 import { setupDetailSchema, type Config, type RpcClient } from "../../rpc";
 import { shallowEqual, useActions, useAppState, useRpc, type AppActions } from "../../state";
+import { chosenModel } from "../../state/slices/settings";
 import {
   applySaved,
   markStep,
@@ -99,7 +100,7 @@ async function runOp(rpc: RpcClient, op: SaveOp, provider: Provider | null): Pro
   switch (op.id) {
     case "language": {
       const { data } = await rpc.call("preferences.get");
-      const shared = data.default ?? (provider ? { provider, model: "", effort: "" } : null);
+      const shared = chosenModel(data.default) ?? (provider ? { provider, model: "", effort: "" } : null);
       const { exitCode } = await rpc.call("preferences.saveModels", {
         models: {
           default: shared,

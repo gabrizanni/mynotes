@@ -5,17 +5,19 @@ grow one Word handout per course, without a terminal. Tauri 2 shell, React 19 + 
 (strict) UI, plain CSS with design tokens. English and Italian.
 
 > Status: foundation. The shell, design system, component library, RPC client, store, i18n and
-> the **Today** screen are done and run against a fixture mock. The other screens are
-> placeholders, and the Rust supervisor that starts `mynotes serve --stdio` is a documented stub.
-> The app identifier `io.github.gabrizanni.mynotes.desktop` is a placeholder awaiting the
-> maintainer's approval.
+> the **Today** screen are done and run against a fixture mock; the other screens are
+> placeholders. The Rust shell supervises the real `mynotes serve --stdio` (proved on Linux by
+> `--self-check` and the contract tests). The app identifier `io.github.gabrizanni.mynotes.desktop`
+> is a placeholder awaiting the maintainer's approval.
 
 Product and UX spec: [`docs/UX-SPEC.md`](docs/UX-SPEC.md).
 
 ## Run it
 
 Requirements: Node 22.12 or newer, Rust stable (for `src-tauri`), and the Tauri Linux system
-libraries (`webkit2gtk-4.1`, `libsoup3`, GTK 3) when building the shell on Linux.
+libraries (`webkit2gtk-4.1`, `libsoup3`, GTK 3, `libayatana-appindicator3` for the tray) when
+building the shell on Linux. The contract tests and the self-check also need `uv` and a checkout
+that contains `mynotes serve` (this repository once the serve work is merged).
 
 ```sh
 npm ci
@@ -23,17 +25,89 @@ npm run dev            # Vite on http://localhost:1420 with the mock backend (fi
 npm run typecheck      # tsc, strict + noUncheckedIndexedAccess, app and tooling
 npm run lint           # typescript-eslint, no-explicit-any is an error
 npm test               # Vitest + Testing Library (jsdom)
+npm run test:contract  # the app's zod schemas against the real `mynotes serve` (see below)
 npm run test:e2e       # Playwright, mocked end-to-end flows (headless Chromium)
 npm run shots          # Playwright screenshots → tests/shots/<name>-<lang>-<theme>.png
-(cd src-tauri && cargo check && cargo test)
+(cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test)
 ```
 
 Useful URL parameters in the browser: `?lang=it`, `?theme=dark`, `?scenario=recording`
 (fixture scenario), `?simulate=0` (freeze mock timers). The component gallery lives at
 `/__gallery`.
 
-`npm run tauri dev` opens the real window; it needs the backend from the `serve` work
-(ARCHITECTURE section A) before it shows live data.
+### Which backend the app starts
+
+The shell starts `mynotes serve --stdio` itself, with the `PATH` of your login shell (so agent
+CLIs and `uv` are found when the app is launched from a dock or launcher). It looks, in order:
+
+| Variable | Effect |
+| --- | --- |
+| `MYNOTES_DESKTOP_PYTHON` | this interpreter: `<python> -I -X utf8 -m mynotes serve --stdio` |
+| `MYNOTES_DESKTOP_REPO` | a source checkout: `uv run --project <repo> mynotes serve --stdio` |
+| (none) | the installed runtime: `~/.local/share/mynotes/app/current/venv/bin/python` on Linux, `~/Library/Application Support/MyNotes/…` on macOS, `<install dir>\runtime\python.exe` on Windows; `MYNOTES_HOME` overrides the runtime home |
+
+A variable that points nowhere is an error, never a silent fallback. The backend resolves its
+workspace as the CLI does (`MYNOTES_WORKSPACE`, then the default). Without a runtime the supervisor
+reports `failed` with code `NOT_INSTALLED` (`backend://status`, `src/rpc/native.ts`): the cue for
+the onboarding to run setup (`src/rpc/setup.ts`).
+
+`npm run tauri dev` opens the real window against `MYNOTES_DESKTOP_REPO=/path/to/checkout`.
+
+### Headless self-check
+
+`mynotes-desktop --self-check` (or `MYNOTES_DESKTOP_SELF_CHECK=1`) opens no window and loads no
+webview: it locates Python, starts the supervisor, waits for `system.hello`, calls
+`capture.dashboard`, shuts down and checks that no backend process is left, then prints one JSON
+line and exits 0 or 1.
+
+```sh
+(cd src-tauri && cargo build)
+MYNOTES_DESKTOP_REPO=/path/to/checkout MYNOTES_WORKSPACE=/tmp/ws src-tauri/target/debug/mynotes-desktop --self-check
+```
+
+### Contract tests
+
+`npm run test:contract` starts the real server from `MYNOTES_SERVE_REPO` (default: this
+repository) on a temporary workspace with a private `HOME` and no agent CLIs on `PATH`, builds a
+course, a schedule, a recordings folder and one finished job through the API, then calls every
+method of `src/rpc/schema.ts` that needs no agent, recorder or network through the app's own
+`RpcClient` (Node stdio transport, `tests/contract/stdioTransport.ts`). The `EXPECTED` table in
+`tests/contract/serve.contract.test.ts` pins which answers the schemas accept today; a `drift`
+entry fails the suite once the schema is fixed, so the entry goes away with the fix.
+
+`MYNOTES_CONTRACT_RECORD=1 npm run test:contract` writes every real answer, temporary paths
+replaced by `/tmp/mynotes-contract`, to `tests/fixtures/rpc-real/`. They do not overwrite
+`tests/fixtures/rpc/`: those fixtures carry the screens' scenarios (a lesson recording, a notes
+run), which an empty fixture workspace cannot produce.
+
+### Build the installers
+
+```sh
+npm run tauri build -- --bundles deb        # or appimage; Linux
+npm run tauri build -- --bundles dmg        # macOS (APPLE_SIGNING_IDENTITY=- for an ad-hoc signature)
+npm run tauri build -- --bundles msi,nsis   # Windows
+```
+
+CI (`.github/workflows/desktop.yml`) builds all three unsigned, with SHA-256 files, and runs a
+real-app smoke test on Linux (Xvfb, `webkit2gtk-driver`, `tauri-driver`, `tests/wdio/smoke.ts`).
+
+### Desktop integration
+
+- **Single instance.** A second launch focuses the window; `--action record-dialog` is
+  forwarded to it as the `app://action` event (`src/rpc/native.ts`).
+- **Global shortcut.** `Ctrl+Alt+Shift+R` (`⌘⌥⇧R` on macOS) asks for the record dialog on
+  macOS, Windows and X11. Wayland gives apps no global shortcuts: bind the action in the
+  compositor instead, for example on Hyprland
+  `bind = SUPER SHIFT, R, exec, mynotes-desktop --action record-dialog`.
+- **Tray.** On by default on Linux and Windows (red dot and "Stop recording" while a lesson
+  records), off on macOS where Capture owns the menu bar; `MYNOTES_DESKTOP_TRAY=1` or `0`
+  overrides. Linux needs a StatusNotifierItem host (waybar's `tray` module on Hyprland).
+- **Recording capsule.** A small always-on-top window (`capsule.html`) appears only while a
+  lesson records or is saved.
+- **Window size** is restored; Wayland does not allow restoring the position. If the window
+  stays blank on some Wayland GPUs, start with `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+- A system notification says "Notes ready" when a notes job completes while the window is not
+  focused.
 
 ## Architecture
 
@@ -67,11 +141,16 @@ with `useAppState(selector)` and act through `useActions()`.
 
 **Rust.** `backend/protocol.rs` implements JSON-RPC 2.0 line framing (one message per line,
 16 MiB cap, CRLF tolerated, UTF-8 split across reads, oversize lines skipped) and the
-`system.hello` version check, with unit tests. `locate.rs` finds Python
-(`MYNOTES_DESKTOP_PYTHON`, then `uv run` in development, then the installed runtime).
-`supervisor.rs` and `installer.rs` describe their remaining work as TODO lists. The webview
-gets no opener, shell or filesystem permission; `open_path`/`reveal_path` validate paths in
-Rust first (`paths.rs`).
+`system.hello` version check. `backend/methods.rs` is the protocol-1 method table with lanes,
+tested against `mynotes serve --list-methods --json`. `backend/locate.rs` finds Python and the
+login-shell `PATH`. `backend/supervisor.rs` runs the child in its own process group (Unix) or
+Job Object (Windows), pings it every 15 s, restarts it with backoff from 0.5 s to 30 s, stops
+after 5 crashes in 2 minutes with the last stderr lines, fails pending calls with
+`BACKEND_RESTARTED`, and on exit closes stdin before signalling the group. `events.rs` turns
+notifications into Tauri events, tray and capsule state, course folders and the notes-ready
+notification. `installer.rs` runs `setup_runtime.py` and streams its progress. The webview gets
+no opener, shell or filesystem permission; `open_path`/`reveal_path` validate paths in Rust
+first (`paths.rs`), and `capabilities/` grants each window only its commands.
 
 ## Add a screen
 

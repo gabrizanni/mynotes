@@ -1,4 +1,6 @@
 {
-  "status": "unverified",
-  "version": null
+  "data": {
+    "status": "unverified",
+    "version": null
+  }
 }

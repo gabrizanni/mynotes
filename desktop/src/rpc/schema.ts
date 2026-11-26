@@ -25,6 +25,11 @@ export function cli<T extends z.ZodType>(data: T) {
   return z.object({ exitCode: z.number().int(), data });
 }
 
+/** A watch topic's snapshot (`watch.subscribe`, `<topic>.changed`); `data` is null with `error`. */
+export function snapshot<T extends z.ZodType>(data: T) {
+  return z.looseObject({ topic: str, hash: str, data: data.nullable(), error: z.unknown().optional() });
+}
+
 // ---------------------------------------------------------------------------------------------
 // system, session, watch
 // ---------------------------------------------------------------------------------------------
@@ -283,15 +288,43 @@ export const notesPlanSchema = z.looseObject({
   lessons: z.array(z.looseObject({ lecture_id: str, transcript: optBool, slides: z.array(str).optional(), notebook_section: optStr })).optional(),
 });
 
-export const jobRefSchema = z.looseObject({ jobId: str });
+/** `{exitCode, data}` of the command a job ran (`job.finished.result`, `Job.result`). */
+export const jobResultSchema = z.looseObject({ exitCode: z.number().int().nullable().optional(), data: z.unknown().optional() });
 
 /**
- * App-side job record (`job.list`, `job.get`, `job.started`). Notes outcomes travel in
- * `result.status` (COMPLETED, AWAITING_APPROVAL, PAUSED_QUOTA, …).
+ * Job record as the server sends it (`job.get`, `job.list`, `job.wait`, `job.cancel`,
+ * serve_jobs.Job.public). Times are epoch seconds; `lastProgress` is the last `job.progress`.
+ */
+export const jobRecordSchema = z.looseObject({
+  id: str,
+  method: str,
+  params: z.record(str, z.unknown()).nullable().optional(),
+  /** RUNNING · COMPLETED · FAILED · CANCELLED · INTERRUPTED */
+  state: str,
+  pid: optNum,
+  startedAt: z.number(),
+  finishedAt: optNum,
+  exitCode: optNum,
+  result: jobResultSchema.nullable().optional(),
+  error: z.unknown().optional(),
+  lastProgress: z.looseObject({ stage: str }).nullable().optional(),
+  cancelRequested: optBool,
+  resumeHint: z.looseObject({ method: str, params: z.record(str, z.unknown()).optional() }).nullable().optional(),
+});
+
+/** What a job method answers at once: `{jobId, job}`. */
+export const jobRefSchema = z.looseObject({ jobId: str, job: jobRecordSchema.optional() });
+
+export const jobListSchema = z.looseObject({ jobs: z.array(jobRecordSchema) });
+
+/**
+ * The app's view of a job, built from a record or the notifications by `toJob` (rpc/jobs.ts):
+ * features read `kind`, lower-case `state`, ISO times, the course and lessons it covers, and
+ * the command's outcome (`result.status`: COMPLETED, AWAITING_APPROVAL, PAUSED_QUOTA, …).
  */
 export const jobSchema = z.looseObject({
   jobId: str,
-  /** notes · transcription · lesson · setup · login */
+  /** notes · transcription · lesson · setup · login · … (from the method) */
   kind: str,
   /** running · succeeded · failed · cancelled · interrupted */
   state: str,
@@ -306,8 +339,6 @@ export const jobSchema = z.looseObject({
   exitCode: optNum,
   result: z.looseObject({ status: str }).nullable().optional(),
 });
-
-export const jobListSchema = z.looseObject({ jobs: z.array(jobSchema) });
 
 // ---------------------------------------------------------------------------------------------
 // onboarding, courses, style, preferences
@@ -328,7 +359,8 @@ export const modelSelectionSchema = z.looseObject({ provider: str, model: str, e
 
 /** `preferences --show` (preferences._model_preferences_snapshot). */
 export const modelPreferencesSchema = z.looseObject({
-  default: modelSelectionSchema,
+  /** `provider` is null until one is chosen (a fresh workspace). */
+  default: modelSelectionSchema.extend({ provider: str.nullable() }),
   overrides: z.looseObject({ chat: modelSelectionSchema.nullable().optional(), notes: modelSelectionSchema.nullable().optional() }),
   effective: z.looseObject({}).optional(),
   language: str,
@@ -581,18 +613,22 @@ export const methods = {
   "watch.subscribe": {
     params: z.object({ topics: z.array(z.enum(["capture", "queue", "library", "config"])) }),
     result: z.looseObject({
-      capture: captureDashboardSchema.optional(),
-      queue: queueStatusSchema.optional(),
-      library: librarySchema.optional(),
-      config: configSchema.optional(),
+      topics: z.array(str),
+      snapshots: z.looseObject({
+        capture: snapshot(captureDashboardSchema).optional(),
+        queue: snapshot(queueStatusSchema).optional(),
+        library: snapshot(librarySchema).optional(),
+        config: snapshot(configSchema).optional(),
+      }),
     }),
   },
 
   // setup (desktop installer), doctor, providers, configuration
   "setup.status": { params: none, result: setupStatusSchema },
-  "setup.run": { params: z.object({ provider: providerIdSchema }), result: jobRefSchema },
+  /** The shell's `setup_run` (src/rpc/setup.ts): answers the first status, then `setup://progress`. */
+  "setup.run": { params: z.object({ provider: providerIdSchema, workspace: str.min(1).optional() }), result: setupStatusSchema },
   "doctor.get": { params: z.object({ provider: providerIdSchema.optional(), refresh: z.boolean().optional() }).optional(), result: cli(doctorSchema) },
-  "provider.status": { params: z.object({ provider: str }), result: providerStatusSchema },
+  "provider.status": { params: z.object({ provider: str }), result: cli(providerStatusSchema) },
   "provider.login": { params: z.object({ provider: providerIdSchema }), result: jobRefSchema },
   "config.get": { params: none, result: cli(configSchema) },
   "profile.save": { params: z.union([z.object({ background: str }), z.object({ skip: z.literal(true) })]), result: cli(anyObject) },
@@ -724,9 +760,10 @@ export const methods = {
   "notes.restore": { params: z.object({ backupId: str }), result: cli(notesRestoreSchema) },
   /** Not in SERVE.md yet: `publish CODE-LNN --candidate PATH` (Approve & update Word). */
   "notes.publish": { params: z.object({ lectureId: str, candidate: str.optional() }), result: cli(notesPublishSchema) },
-  "job.list": { params: none, result: jobListSchema },
-  "job.get": { params: z.object({ jobId: str }), result: jobSchema },
-  "job.cancel": { params: z.object({ jobId: str, force: z.boolean().optional() }), result: z.unknown() },
+  "job.list": { params: z.object({ limit: z.number().int().optional() }).optional(), result: jobListSchema },
+  "job.get": { params: z.object({ jobId: str }), result: jobRecordSchema },
+  "job.wait": { params: z.object({ jobId: str, timeoutSeconds: z.number().optional() }), result: jobRecordSchema },
+  "job.cancel": { params: z.object({ jobId: str, force: z.boolean().optional() }), result: jobRecordSchema },
 
   // checks
   "word.verifyRenderer": { params: none, result: jobRefSchema },
@@ -743,16 +780,26 @@ export type MethodResult<M extends MethodName> = z.output<(typeof methods)[M]["r
 // ---------------------------------------------------------------------------------------------
 
 export const notifications = {
-  "capture.changed": captureDashboardSchema,
-  "queue.changed": queueStatusSchema,
-  "library.changed": librarySchema,
-  "config.changed": configSchema,
+  "capture.changed": snapshot(captureDashboardSchema),
+  "queue.changed": snapshot(queueStatusSchema),
+  "library.changed": snapshot(librarySchema),
+  "config.changed": snapshot(configSchema),
   "capture.requestCompleted": z.looseObject({ requestID: str, status: str, message: optStr }),
-  "provider.authChanged": providerStatusSchema,
-  "job.started": jobSchema,
+  /** serve._watch_login: `status` is the whole provider check (`provider.status` data). */
+  "provider.authChanged": z.looseObject({ provider: str, jobId: optStr, status: providerStatusSchema }),
+  "job.started": z.looseObject({ jobId: str, method: str, params: z.record(str, z.unknown()).nullable().optional(), pid: optNum }),
+  /** One stderr JSON line with a `stage` (notes, lesson process), or the ASR status for transcription. */
   "job.progress": z.looseObject({ jobId: str, stage: str, detail: optStr, phase: optStr, elapsedSeconds: optNum, at: optStr }),
-  "job.output": z.looseObject({ jobId: str, line: str }),
-  "job.finished": z.looseObject({ jobId: str, state: str, exitCode: optNum, result: z.looseObject({ status: str }).nullable().optional(), at: optStr }),
+  "job.output": z.looseObject({ jobId: str, stream: str, text: str }),
+  "job.finished": z.looseObject({
+    jobId: str,
+    /** COMPLETED · FAILED · CANCELLED · INTERRUPTED */
+    state: str,
+    exitCode: optNum,
+    result: jobResultSchema.nullable().optional(),
+    error: z.unknown().optional(),
+    resumeHint: z.looseObject({ method: str, params: z.record(str, z.unknown()).optional() }).nullable().optional(),
+  }),
 } as const;
 
 export type NotificationName = keyof typeof notifications;
@@ -772,6 +819,7 @@ export type LibraryRecording = z.output<typeof libraryRecordingSchema>;
 export type LibraryTranscript = z.output<typeof libraryTranscriptSchema>;
 export type Config = z.output<typeof configSchema>;
 export type Job = z.output<typeof jobSchema>;
+export type JobRecord = z.output<typeof jobRecordSchema>;
 export type SetupStatus = z.output<typeof setupStatusSchema>;
 export type NotesQuality = z.output<typeof qualitySchema>;
 export type LessonPatch = z.input<typeof lessonPatchSchema>;

@@ -1,0 +1,88 @@
+{
+  "exitCode": 0,
+  "data": {
+    "schemaVersion": 1,
+    "configured": true,
+    "enabled": false,
+    "paused": false,
+    "running": false,
+    "processCheck": "CHECKED",
+    "runtime": {},
+    "sources": [],
+    "events": [
+      {
+        "courseCode": "SYNTHETICSYS",
+        "eligibility": "SCHEDULED",
+        "endsAt": "2030-03-01T10:30:00Z",
+        "id": "static:SYNTHETICSYS-L01",
+        "lessonNumber": 1,
+        "reason": "",
+        "recordAt": "2030-03-01T09:00:00Z",
+        "sourceID": "static",
+        "startsAt": "2030-03-01T09:00:00Z",
+        "stopAt": "2030-03-01T10:32:00Z",
+        "timezone": "UTC",
+        "title": "Lesson 1",
+        "localChanges": false,
+        "recordingEnabled": true,
+        "sourceEligibility": "SCHEDULED",
+        "special": false
+      },
+      {
+        "courseCode": "SYNTHETICSYS",
+        "eligibility": "SCHEDULED",
+        "endsAt": "2030-03-02T10:30:00Z",
+        "id": "static:SYNTHETICSYS-L02",
+        "lessonNumber": 2,
+        "reason": "",
+        "recordAt": "2030-03-02T09:00:00Z",
+        "sourceID": "static",
+        "startsAt": "2030-03-02T09:00:00Z",
+        "stopAt": "2030-03-02T10:32:00Z",
+        "timezone": "UTC",
+        "title": "Lesson 2",
+        "localChanges": false,
+        "recordingEnabled": true,
+        "sourceEligibility": "SCHEDULED",
+        "special": false
+      },
+      {
+        "courseCode": "SYNTHETICSYS",
+        "eligibility": "SCHEDULED",
+        "endsAt": "2030-03-03T10:30:00Z",
+        "id": "static:SYNTHETICSYS-L03",
+        "lessonNumber": 3,
+        "reason": "",
+        "recordAt": "2030-03-03T09:00:00Z",
+        "sourceID": "static",
+        "startsAt": "2030-03-03T09:00:00Z",
+        "stopAt": "2030-03-03T10:32:00Z",
+        "timezone": "UTC",
+        "title": "Lesson 3",
+        "localChanges": false,
+        "recordingEnabled": true,
+        "sourceEligibility": "SCHEDULED",
+        "special": false
+      }
+    ],
+    "courses": [
+      {
+        "code": "SYNTHETICSYS",
+        "name": "Synthetic Systems II",
+        "contextPending": true
+      },
+      {
+        "code": "SECONDSYNTHE",
+        "name": "Second Synthetic Course",
+        "contextPending": true
+      }
+    ],
+    "responses": [],
+    "refreshHours": 6,
+    "recordBeforeSeconds": 0,
+    "recordAfterSeconds": 120,
+    "outputDirectory": "/tmp/mynotes-contract/recordings",
+    "standaloneSupported": false,
+    "calendarRecordingsSupported": false
+  }
+}

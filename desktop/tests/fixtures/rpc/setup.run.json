@@ -1,3 +1,9 @@
 {
-  "jobId": "mock-setup-1"
+  "state": "running",
+  "stage": "starting",
+  "title": null,
+  "bytesDone": null,
+  "bytesTotal": null,
+  "lastDataAt": null,
+  "error": null
 }

@@ -12,6 +12,7 @@
 import { RpcCode, RpcError } from "../errors";
 import type { Transport } from "../transport";
 import { dayOffset, resolveFixtures, shiftDates, type Json } from "./fixtures";
+import { mockJobs, type JsonObject } from "./mockJobs";
 import { createNotesMock } from "./mockNotes";
 import { onboardingMockHandlers } from "./onboardingMock";
 
@@ -29,10 +30,14 @@ export interface MockOptions {
 
 const bundled = import.meta.glob("../../../tests/fixtures/rpc/*.json", { eager: true, import: "default" });
 
-const NOTES_STAGES = ["CHECKING", "GENERATING", "BUILDING_WORD", "UPDATING_WORD"] as const;
+const WATCH_TOPICS = new Map([
+  ["capture", "capture.dashboard"],
+  ["queue", "queue.status"],
+  ["library", "library.list"],
+  ["config", "config.get"],
+]);
 
 type Listener = (method: string, params: unknown) => void;
-type JsonObject = { [key: string]: Json };
 
 function isObject(value: Json | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,8 +65,13 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
   const timers = new Set<ReturnType<typeof setTimeout>>();
   let jobCounter = 0;
 
+  // `<topic>.changed` travels as a watch snapshot, like the server's (serve_watch.py).
+  let revision = 0;
   const emit = (method: string, params: Json) => {
-    for (const listener of listeners) listener(method, structuredClone(params));
+    const topic = method.endsWith(".changed") ? method.slice(0, -".changed".length) : null;
+    revision += 1;
+    const payload: Json = topic && WATCH_TOPICS.has(topic) ? { topic, hash: `mock-${revision}`, data: params } : params;
+    for (const listener of listeners) listener(method, structuredClone(payload));
   };
   const later = (ms: number, run: () => void) => {
     if (!options.simulate) return;
@@ -78,23 +88,21 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
     return isObject(data) ? data : null;
   };
 
+  const jobs = mockJobs({ state, emit, now: options.now });
+
   const handlers: Record<string, (params: unknown) => Json> = {
     // Onboarding: setup, sign-in, course, calendar, microphone.
-    ...onboardingMockHandlers({ state, simulate: options.simulate, now: options.now, stageMs: options.stageMs, later, emit }),
+    ...onboardingMockHandlers({ state, simulate: options.simulate, now: options.now, stageMs: options.stageMs, later, emit, jobs }),
 
-    "watch.subscribe": () => {
-      const snapshot: JsonObject = {};
-      const topics: Array<[string, string]> = [
-        ["capture", "capture.dashboard"],
-        ["queue", "queue.status"],
-        ["library", "library.list"],
-        ["config", "config.get"],
-      ];
-      for (const [topic, method] of topics) {
-        const data = envelopeData(method);
-        if (data) snapshot[topic] = data;
+    "watch.subscribe": (params) => {
+      const asked = (params as { topics?: string[] } | undefined)?.topics ?? [...WATCH_TOPICS.keys()];
+      const snapshots: JsonObject = {};
+      for (const topic of asked) {
+        const method = WATCH_TOPICS.get(topic);
+        const data = method ? envelopeData(method) : null;
+        if (method) snapshots[topic] = data ? { topic, hash: `mock-${revision}`, data } : { topic, hash: "", data: null, error: { message: "No snapshot" } };
       }
-      return snapshot;
+      return { topics: [...asked].sort(), snapshots };
     },
 
     "capture.start": () => {
@@ -137,73 +145,37 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
       return { exitCode: 0, data: { status: "PENDING", requestID, message: null } };
     },
 
-    "notes.run": (params) => {
-      const request = (params ?? {}) as { course?: string; lessons?: string };
-      jobCounter += 1;
-      const jobId = `mock-notes-${jobCounter}`;
-      const course = request.course ?? "";
-      const lectureIds = (request.lessons ?? "")
-        .split(",")
-        .filter(Boolean)
-        .map((n) => `${course}-L${n.padStart(2, "0")}`);
-      const startedAt = iso(options.now());
-      const job: JsonObject = {
-        jobId,
-        kind: "notes",
-        state: "running",
-        stage: NOTES_STAGES[0],
-        stageStartedAt: startedAt,
-        startedAt,
-        courseCode: course,
-        lectureIds,
-        result: null,
-      };
-      const list = state.get("job.list");
-      if (isObject(list) && Array.isArray(list.jobs)) list.jobs.unshift(job);
-      later(options.latencyMs, () => emit("job.started", job));
-      NOTES_STAGES.slice(1).forEach((stage, index) => {
-        later(options.stageMs * (index + 1), () => {
-          const at = iso(options.now());
-          job.stage = stage;
-          job.stageStartedAt = at;
-          emit("job.progress", { jobId, stage, detail: null, at });
-        });
-      });
-      later(options.stageMs * NOTES_STAGES.length, () => {
-        const at = iso(options.now());
-        job.state = "succeeded";
-        job.stage = "DONE";
-        job.finishedAt = at;
-        job.exitCode = 0;
-        job.result = { status: "COMPLETED" };
-        emit("job.finished", { jobId, state: "succeeded", exitCode: 0, result: { status: "COMPLETED" }, at });
-      });
-      return { jobId };
-    },
-
     // A short job; the cached catalog fixture stays what `models.catalog` answers afterwards.
-    "models.refresh": () => {
+    "models.refresh": (params) => {
       jobCounter += 1;
-      const jobId = `mock-models-${jobCounter}`;
+      const ref = jobs.start(`mock-models-${jobCounter}`, "models.refresh", (params ?? {}) as JsonObject, (run) => run());
       const timer = setTimeout(() => {
         timers.delete(timer);
-        emit("job.finished", { jobId, state: "succeeded", exitCode: 0, result: { status: "COMPLETED" }, at: iso(options.now()) });
+        const job = jobs.find(ref.jobId);
+        if (job) jobs.finish(job, "COMPLETED", 0, envelopeData("models.catalog"));
       }, options.latencyMs);
       timers.add(timer);
-      return { jobId };
+      return ref;
     },
 
     "job.get": (params) => {
-      const jobId = (params as { jobId?: string } | undefined)?.jobId;
-      const list = state.get("job.list");
-      const found = isObject(list) && Array.isArray(list.jobs) ? list.jobs.find((job) => isObject(job) && job.jobId === jobId) : undefined;
-      if (!found) throw new RpcError("job.get", RpcCode.InvalidParams, `Unknown job ${String(jobId)}`);
+      const jobId = (params as { jobId?: string } | undefined)?.jobId ?? "";
+      const found = jobs.find(jobId);
+      if (!found) throw new RpcError("job.get", RpcCode.UnknownJob, `Unknown job ${jobId}`);
+      return found;
+    },
+
+    // The mock never blocks: it answers the record as it is now.
+    "job.wait": (params) => {
+      const jobId = (params as { jobId?: string } | undefined)?.jobId ?? "";
+      const found = jobs.find(jobId);
+      if (!found) throw new RpcError("job.wait", RpcCode.UnknownJob, `Unknown job ${jobId}`);
       return found;
     },
   };
 
   // Generate notes flow, transcription and the lesson transcript.
-  const notesMock = createNotesMock({ state, emit, simulate: options.simulate, stageMs: options.stageMs, latencyMs: options.latencyMs, now: options.now });
+  const notesMock = createNotesMock({ state, emit, jobs, simulate: options.simulate, stageMs: options.stageMs, latencyMs: options.latencyMs, now: options.now });
   Object.assign(handlers, notesMock.handlers);
 
   return {

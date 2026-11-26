@@ -65,8 +65,15 @@ export function dayOffset(anchorDate: string, now: Date): number {
 }
 
 /** Move every ISO timestamp and date by whole days so "today" in the fixtures is today. */
-export function shiftDates(value: Json, days: number): Json {
+/** Job records keep epoch seconds (serve_jobs.py); only these keys hold such numbers. */
+const EPOCH_KEYS = new Set(["startedAt", "finishedAt"]);
+const EPOCH_RANGE = [1e9, 1e10] as const;
+
+export function shiftDates(value: Json, days: number, key?: string): Json {
   if (days === 0) return value;
+  if (typeof value === "number") {
+    return key && EPOCH_KEYS.has(key) && value > EPOCH_RANGE[0] && value < EPOCH_RANGE[1] ? value + (days * DAY_MS) / 1000 : value;
+  }
   if (typeof value === "string") {
     if (DATE_TIME.test(value)) {
       const shifted = new Date(Date.parse(value) + days * DAY_MS).toISOString();
@@ -80,7 +87,7 @@ export function shiftDates(value: Json, days: number): Json {
   if (Array.isArray(value)) return value.map((item) => shiftDates(item, days));
   if (isObject(value)) {
     const out: { [key: string]: Json } = {};
-    for (const [key, item] of Object.entries(value)) out[key] = shiftDates(item, days);
+    for (const [name, item] of Object.entries(value)) out[name] = shiftDates(item, days, name);
     return out;
   }
   return value;

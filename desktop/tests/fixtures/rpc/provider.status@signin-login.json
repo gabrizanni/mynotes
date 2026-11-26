@@ -1,4 +1,6 @@
 {
-  "status": "login_required",
-  "version": null
+  "data": {
+    "status": "login_required",
+    "version": null
+  }
 }

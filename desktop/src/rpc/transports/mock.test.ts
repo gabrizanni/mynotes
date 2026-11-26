@@ -29,7 +29,8 @@ describe("mock transport", () => {
     const client = createRpcClient(createMockTransport({ simulate: true, latencyMs: 1, stageMs: 100, now: () => new Date() }));
     const stages: string[] = [];
     const finished = vi.fn();
-    client.on("job.started", (job) => stages.push(job.stage ?? ""));
+    const started = vi.fn();
+    client.on("job.started", started);
     client.on("job.progress", (event) => stages.push(event.stage));
     client.on("job.finished", finished);
     const call = client.call("notes.run", { course: "STAT", lessons: "7" });
@@ -37,6 +38,9 @@ describe("mock transport", () => {
     const { jobId } = await call;
     await vi.advanceTimersByTimeAsync(1000);
     expect(stages).toEqual(["CHECKING", "GENERATING", "BUILDING_WORD", "UPDATING_WORD"]);
-    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ jobId, state: "succeeded", result: { status: "COMPLETED" } }));
+    // The server's shapes: started carries method and params; the outcome is in result.data.
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ jobId, method: "notes.run", params: { course: "STAT", lessons: "7" } }));
+    expect(finished).toHaveBeenCalledWith(expect.objectContaining({ jobId, state: "COMPLETED", exitCode: 0 }));
+    expect(finished.mock.lastCall?.[0]).toMatchObject({ result: { exitCode: 0, data: { status: "COMPLETED" } } });
   });
 });

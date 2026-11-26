@@ -1,4 +1,6 @@
 {
-  "status": "incompatible",
-  "version": "1.0.2"
+  "data": {
+    "status": "incompatible",
+    "version": "1.0.2"
+  }
 }

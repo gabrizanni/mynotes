@@ -1,0 +1,10 @@
+{
+  "exitCode": 0,
+  "data": {
+    "status": "OK",
+    "removed": 0,
+    "running": 0,
+    "paused": false,
+    "message": "0 lavori rimossi; 0 già avviati continuano. Audio conservato."
+  }
+}

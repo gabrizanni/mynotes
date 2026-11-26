@@ -11,6 +11,7 @@
  * - `lesson.process` runs the stage sequence of a notes job.
  */
 import type { Json } from "./fixtures";
+import type { MockJobs } from "./mockJobs";
 
 type JsonObject = { [key: string]: Json };
 
@@ -21,6 +22,7 @@ export interface OnboardingMockContext {
   stageMs: number;
   later: (ms: number, run: () => void) => void;
   emit: (method: string, params: Json) => void;
+  jobs: MockJobs;
 }
 
 /** Component sizes close to the real payload (about 1 GB, UX-SPEC §2). */
@@ -69,7 +71,7 @@ export function mockCourseCode(name: string, taken: readonly string[]): string {
 }
 
 export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<string, (params: unknown) => Json> {
-  const { state, simulate, now, later, emit } = ctx;
+  const { state, simulate, now, later, emit, jobs } = ctx;
   let setupStartedAt: number | null = null;
   let setupOffset = 0;
   let jobCounter = 0;
@@ -139,38 +141,18 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
     return { state: "complete", stage: "ready", title: null, bytesDone: null, bytesTotal: null, lastDataAt, error: null, overallDone: TOTAL_BYTES, overallTotal: TOTAL_BYTES, components };
   };
 
-  const startLessonJob = (lectureId: string): Json => {
+  const startLessonJob = (lectureId: string, audio: string | null): Json => {
     jobCounter += 1;
     const jobId = `mock-lesson-${jobCounter}`;
-    const startedAt = iso(now());
-    const job: JsonObject = {
-      jobId,
-      kind: "lesson",
-      state: "running",
-      stage: LESSON_STAGES[0],
-      stageStartedAt: startedAt,
-      startedAt,
-      courseCode: lectureId.split("-")[0] ?? null,
-      lectureIds: [lectureId],
-      result: null,
-    };
-    const list = state.get("job.list");
-    if (isObject(list) && Array.isArray(list.jobs)) list.jobs.unshift(job);
-    later(10, () => emit("job.started", job));
+    const ref = jobs.start(jobId, "lesson.process", audio ? { lectureId, audio } : { lectureId }, (run) => later(10, run));
+    const job = jobs.find(jobId);
+    if (!job) return ref;
+    job.lastProgress = { jobId, stage: LESSON_STAGES[0], at: iso(now()) };
     LESSON_STAGES.slice(1).forEach((stage, index) => {
-      later(ctx.stageMs * (index + 1), () => {
-        const at = iso(now());
-        job.stage = stage;
-        job.stageStartedAt = at;
-        emit("job.progress", { jobId, stage, detail: null, at });
-      });
+      later(ctx.stageMs * (index + 1), () => jobs.progress(job, stage));
     });
-    later(ctx.stageMs * LESSON_STAGES.length, () => {
-      const at = iso(now());
-      Object.assign(job, { state: "succeeded", stage: "DONE", finishedAt: at, exitCode: 0, result: { status: "COMPLETED" } });
-      emit("job.finished", { jobId, state: "succeeded", exitCode: 0, result: { status: "COMPLETED" }, at });
-    });
-    return { jobId };
+    later(ctx.stageMs * LESSON_STAGES.length, () => jobs.finish(job, "COMPLETED", 0, { status: "COMPLETED" }));
+    return ref;
   };
 
   return {
@@ -179,28 +161,32 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
       const resumable = isObject(base) && (base.state === "failed" || base.state === "paused") && typeof base.overallDone === "number";
       setupOffset = resumable && typeof base.overallDone === "number" ? base.overallDone : 0;
       if (simulate) setupStartedAt = now().getTime();
-      return { jobId: "mock-setup-1" };
+      // The shell's `setup_run` answers the first status (src/rpc/setup.ts).
+      return setupSnapshot();
     },
 
     "setup.status": () => setupSnapshot(),
 
     "provider.login": (raw) => {
       const provider = text(params(raw).provider) ?? "claude";
+      jobCounter += 1;
+      const ref = jobs.start(`mock-login-${jobCounter}`, "provider.login", { provider }, (run) => later(10, run));
       later(4000, () => {
         const next: JsonObject = { provider, status: "ready", version: "2.3.1" };
-        state.set("provider.status", next);
-        emit("provider.authChanged", next);
+        state.set("provider.status", { exitCode: 0, data: next });
+        // serve._watch_login: `status` is the whole provider check.
+        emit("provider.authChanged", { provider, jobId: ref.jobId, status: next });
+        const job = jobs.find(ref.jobId);
+        if (job) jobs.finish(job, "COMPLETED", 0, { status: "ready", provider });
       });
-      return { jobId: "mock-login-1" };
+      return ref;
     },
 
     "provider.status": (raw): Json => {
       const current = state.get("provider.status");
       const provider = text(params(raw).provider) ?? "claude";
-      if (!isObject(current)) return { provider, status: "login_required", version: null };
-      const answer: JsonObject = structuredClone(current);
-      answer.provider = provider;
-      return answer;
+      const data = isObject(current) && isObject(current.data) ? structuredClone(current.data) : { status: "login_required", version: null };
+      return { exitCode: 0, data: { ...data, provider } };
     },
 
     "preferences.saveModels": (raw) => {
@@ -371,6 +357,6 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
       return ok({ status: "PENDING", requestID, message: null });
     },
 
-    "lesson.process": (raw) => startLessonJob(text(params(raw).lectureId) ?? "COURSE-L01"),
+    "lesson.process": (raw) => startLessonJob(text(params(raw).lectureId) ?? "COURSE-L01", text(params(raw).audio)),
   };
 }

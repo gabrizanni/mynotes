@@ -121,7 +121,7 @@ export function SignInStep() {
     setChecking(true);
     try {
       const answer = await rpc.call("provider.status", { provider });
-      setStatus(answer.status);
+      setStatus(answer.data.status);
       setFailed(false);
     } catch {
       setFailed(true);
@@ -133,7 +133,7 @@ export function SignInStep() {
   useEffect(() => {
     void check();
     return rpc.on("provider.authChanged", (event) => {
-      if (event.provider === provider) setStatus(event.status);
+      if (event.provider === provider) setStatus(event.status.status);
     });
   }, [check, rpc, provider]);
 

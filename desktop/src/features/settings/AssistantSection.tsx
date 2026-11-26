@@ -5,6 +5,7 @@ import { Banner, Button, Card, Segmented, Select, StatusChip, Toggle } from "../
 import { useT } from "../../i18n";
 import type { ModelCatalog, ModelSelection } from "../../rpc";
 import { useActions, useAppState } from "../../state";
+import { chosenModel } from "../../state/slices/settings";
 import styles from "./Settings.module.css";
 
 export const PROVIDERS = ["claude", "codex", "agy"] as const;
@@ -97,7 +98,7 @@ export function AssistantSection() {
   const saved = useMemo<Draft | null>(() => {
     const value = preferences.value;
     if (!value) return null;
-    const main = pick(value.default, { provider: "claude", model: "", effort: "" });
+    const main = pick(chosenModel(value.default), { provider: "claude", model: "", effort: "" });
     return { main, separate: Boolean(value.overrides.notes), notes: pick(value.overrides.notes, main) };
   }, [preferences.value]);
 
