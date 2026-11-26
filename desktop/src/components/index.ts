@@ -6,6 +6,8 @@ export * from "./AssistantDock";
 export * from "./Banner";
 export * from "./Button";
 export * from "./Card";
+export * from "./ChoiceCards";
+export * from "./ChoiceChips";
 export * from "./Dialog";
 export * from "./DropZone";
 export * from "./EmptyState";
