@@ -20,7 +20,8 @@ describe("mock transport", () => {
 
   it("fails like the server for a method without fixture", async () => {
     const transport = createMockTransport({ simulate: false, latencyMs: 0 });
-    await expect(transport.request("notes.history", {})).rejects.toMatchObject({ code: RpcCode.MethodNotFound });
+    // `memory.show` is a real server method the app does not use yet: no fixture.
+    await expect(transport.request("memory.show", {})).rejects.toMatchObject({ code: RpcCode.MethodNotFound });
   });
 
   it("simulates a notes job through every stage with notifications", async () => {

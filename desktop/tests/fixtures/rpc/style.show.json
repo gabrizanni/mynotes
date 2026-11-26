@@ -1,0 +1,21 @@
+{
+  "exitCode": 0,
+  "data": {
+    "scope": "STAT",
+    "effective": {
+      "writing_style": "clear_study",
+      "slide_scope": "lecture",
+      "list_density": "balanced",
+      "image_policy": "essential",
+      "image_limit": 4,
+      "question_count": 4,
+      "recap": true,
+      "recap_language": "same_as_notes",
+      "page_size": "A4",
+      "body_font": "Aptos"
+    },
+    "memory": {
+      "revision": 3
+    }
+  }
+}

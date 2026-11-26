@@ -1,0 +1,472 @@
+/* Lesson detail. Tokens only; times use the time token (tabular figures). */
+
+.subtitle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.courseLink {
+  border-radius: var(--radius-inner);
+  color: var(--color-link);
+  font: var(--text-body-strong);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.courseLink:hover {
+  text-decoration: underline;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: calc(var(--space-2) * -1) 0 var(--space-8);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-8);
+  align-items: start;
+}
+
+.main {
+  display: grid;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.muted {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.cardTitle {
+  font: var(--text-heading);
+  color: var(--color-text-primary);
+}
+
+/* ---------- Player ---------- */
+
+.player {
+  display: grid;
+}
+
+.playerMain {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6) var(--space-3);
+}
+
+.playerTrack {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.playerTimes {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.time,
+.timeMuted {
+  font: var(--text-time);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.timeMuted {
+  color: var(--color-text-muted);
+}
+
+.playerControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  padding: 0 var(--space-6) var(--space-5);
+}
+
+.skips {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.playerHint {
+  flex: 1 1 100%;
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.alternatives {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-6) var(--space-5);
+  border-top: 1px solid var(--color-border-hairline);
+}
+
+.alternativesTitle {
+  font: var(--text-label);
+  color: var(--color-text-primary);
+}
+
+.alternativeList {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.alternative {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 40px;
+}
+
+.alternativeText {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.alternativeName {
+  font: var(--text-body);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Transcript ---------- */
+
+.transcript {
+  display: grid;
+  overflow: hidden;
+}
+
+.transcriptHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-6) var(--space-3);
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-6) var(--space-4);
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.searchField {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  margin-right: var(--space-2);
+}
+
+.searchIcon {
+  position: absolute;
+  left: var(--space-3);
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.searchField > :last-child:not(input) {
+  position: absolute;
+  right: var(--space-1);
+}
+
+.searchInput {
+  padding-left: calc(var(--space-3) + 16px + var(--space-2));
+  padding-right: calc(var(--control-height-sm) + var(--space-1));
+}
+
+/* The field carries its own clear button. */
+.searchInput::-webkit-search-cancel-button {
+  display: none;
+}
+
+.matchCount {
+  min-width: 72px;
+  font: var(--text-time);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.transcriptState {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-6);
+}
+
+.segments {
+  display: grid;
+  max-height: 520px;
+  margin: 0;
+  padding: var(--space-3) 0;
+  list-style: none;
+  overflow-y: auto;
+  scroll-padding-block: var(--space-8);
+}
+
+.segment {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-6);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+/* The playing line: deep cream plus aria-current (not color alone). */
+.segmentPlaying {
+  background: var(--color-bg-emphasis);
+}
+
+.stamp {
+  align-self: start;
+  justify-self: start;
+  min-height: 28px;
+  padding: 2px var(--space-2);
+  margin-left: calc(var(--space-2) * -1);
+  border: 0;
+  border-radius: var(--radius-inner);
+  background: transparent;
+  color: var(--color-link);
+  font: var(--text-time);
+  font-variant-numeric: tabular-nums;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.stamp:hover {
+  background: var(--color-bg-hover);
+  text-decoration: underline;
+}
+
+.segmentText {
+  max-width: 68ch;
+  font: var(--text-body);
+  line-height: 24px;
+  color: var(--color-text-primary);
+  text-wrap: pretty;
+}
+
+/* Matches: soft fill; the current one also gets an underline bar (shape, not only color). */
+.mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: var(--color-action-soft);
+  color: var(--color-action-soft-label);
+}
+
+.markCurrent {
+  background: var(--color-action-primary);
+  color: var(--color-action-primary-label);
+  box-shadow: inset 0 -2px 0 var(--color-control-strong);
+}
+
+.skeletonLine,
+.skeletonBlock {
+  height: 14px;
+  border-radius: var(--radius-inner);
+  background: var(--color-bg-emphasis);
+}
+
+.short {
+  width: 60%;
+}
+
+.skeleton {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.skeletonBlock {
+  height: 240px;
+  border-radius: var(--radius-card);
+}
+
+/* ---------- States of the main column ---------- */
+
+.stateCard {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.stateIcon,
+.stateIconWarning {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-info-bg);
+  color: var(--color-info);
+}
+
+.stateIconWarning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.stateText {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stateTitle {
+  font: var(--text-heading);
+  color: var(--color-text-primary);
+}
+
+.stateTimer {
+  display: grid;
+  justify-items: end;
+}
+
+.timerValue {
+  font: var(--text-title);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-primary);
+}
+
+.timerLabel {
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.chooseCard {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.stateActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dialogFields {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* ---------- Rail ---------- */
+
+.rail {
+  position: sticky;
+  top: var(--space-6);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.railCard {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.railHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.railBody {
+  font: var(--text-body);
+  color: var(--color-text-primary);
+}
+
+.railActions {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.facts {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.fact {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+}
+
+.factIcon {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+}
+
+.factText {
+  font: var(--text-small);
+  color: var(--color-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.meta > div {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.meta dt {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.meta dd {
+  margin: 0;
+  font: var(--text-small);
+  color: var(--color-text-primary);
+}
+
+.fileName {
+  overflow-wrap: anywhere;
+}
+
+/* Narrow windows: the rail moves under the main column. */
+@media (max-width: 1080px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rail {
+    position: static;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segment,
+  .stamp {
+    transition: none;
+  }
+}

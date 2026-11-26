@@ -17,7 +17,7 @@ export interface AppState {
   readonly jobs: JobsState;
   readonly assistant: AssistantState;
   readonly ui: UiState;
-  /** Settings screen data read on demand (workspace screens). */
+  /** Settings screen data read on demand */
   readonly settings: SettingsState;
 }
 

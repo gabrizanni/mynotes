@@ -15,7 +15,8 @@ export const gallery: Messages["gallery"] = {
     overlays: "Finestre",
     capsule: "Capsula del registratore",
     shell: "Struttura",
-    workspace: "Schermate di lavoro", // workspace screens
+    workspace: "Schermate di lavoro",
+    lessons: "Corsi e lezioni",
   },
   sample: {
     courseName: "Nome del corso",

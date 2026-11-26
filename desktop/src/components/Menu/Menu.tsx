@@ -22,18 +22,24 @@ export interface MenuProps {
   /** Trigger label; also the accessible name of an icon-only trigger. */
   label: string;
   items: readonly MenuItem[];
-  /** `icon`: a 40 px ⋯ button (row actions). */
+  /** `button`: labelled button with a chevron. `icon`: a ⋯ button (row and lesson actions). */
   trigger?: "button" | "icon";
   variant?: Extract<ButtonVariant, "ghost" | "soft" | "outline">;
   size?: ButtonSize;
   icon?: LucideIcon;
+  /** Edge the menu lines up with; icon triggers sit at the end of a row, so they default to `end`. */
   align?: "start" | "end";
   /** Start open (gallery). */
   defaultOpen?: boolean;
 }
 
-/** Menu button (WAI-ARIA APG): arrows move, Home/End jump, Esc and Tab close, focus returns. */
-export function Menu({ label, items, trigger = "button", variant = "outline", size = "md", icon, align = "start", defaultOpen = false }: MenuProps) {
+/**
+ * Menu button (WAI-ARIA APG): opening moves focus to the first item (ArrowUp: the last), arrows
+ * move, Home/End jump, Esc and Tab close, focus returns to the trigger. One component serves the
+ * labelled "Add" menus and the ⋯ action menus.
+ */
+export function Menu({ label, items, trigger = "button", variant = "outline", size = "md", icon, align, defaultOpen = false }: MenuProps) {
+  const edge = align ?? (trigger === "icon" ? "end" : "start");
   const [open, setOpen] = useState(defaultOpen);
   const anchor = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -99,7 +105,10 @@ export function Menu({ label, items, trigger = "button", variant = "outline", si
     "aria-haspopup": "menu" as const,
     "aria-expanded": open,
     "aria-controls": open ? menuId : undefined,
-    onClick: () => setOpen((value) => !value),
+    onClick: () => {
+      if (open) setOpen(false);
+      else openWith("first");
+    },
     onKeyDown: onTriggerKey,
   };
 
@@ -113,7 +122,7 @@ export function Menu({ label, items, trigger = "button", variant = "outline", si
         </Button>
       )}
       {open && (
-        <div id={menuId} role="menu" aria-label={label} className={cx(styles.menu, align === "end" && styles.end)} onKeyDown={onMenuKey}>
+        <div id={menuId} role="menu" aria-label={label} className={cx(styles.menu, edge === "end" && styles.end)} onKeyDown={onMenuKey}>
           {items.map((item, index) => (
             <button
               key={item.id}

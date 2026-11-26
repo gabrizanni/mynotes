@@ -2,7 +2,6 @@ import { useEffect } from "react";
 
 import { applyTheme, storeTheme } from "../design/theme";
 import { GalleryPage } from "../features/gallery";
-// onboarding (feat/desktop-onboarding)
 import { OnboardingWindow, useOnboardingLaunch } from "../features/onboarding";
 import { I18nProvider } from "../i18n";
 import { StoreProvider, useAppState, type AppStore } from "../state";
@@ -12,7 +11,7 @@ function Themed() {
   const theme = useAppState((state) => state.ui.theme);
   const lang = useAppState((state) => state.ui.lang);
   const gallery = useAppState((state) => state.ui.route.name === "gallery");
-  // onboarding (feat/desktop-onboarding): full window without sidebar; first launch resumes it.
+  // onboarding: full window without sidebar; first launch resumes it.
   const route = useAppState((state) => state.ui.route);
   useOnboardingLaunch();
   useEffect(() => {

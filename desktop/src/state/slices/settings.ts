@@ -3,7 +3,8 @@
  * catalogs (`models --json`), the setup check (`doctor --json`) and assistant sign-in status.
  * Read on demand when a settings section opens; every write goes through `attempt`.
  */
-import { doctorReportSchema, type DoctorReport, type ModelCatalog, type ModelPreferences, type ModelSelection } from "../../rpc";
+import { doctorReportSchema, providerIdSchema, type DoctorReport, type ModelCatalog, type ModelPreferences, type ModelSelection } from "../../rpc";
+import { untilJobFinished } from "../../rpc/jobs";
 import { failed, idle, loading, ready, type Load } from "../load";
 import { attempt, type ActionResult } from "../result";
 import type { SliceContext } from "../types";
@@ -56,7 +57,9 @@ export function settingsActions(ctx: SliceContext<"settings">) {
     });
     try {
       const saved = ctx.get().preferences.value?.default;
-      const params = saved && saved.provider === provider ? { provider, saved: saved.model, savedEffort: saved.effort, refresh } : { provider, refresh };
+      const params = saved && saved.provider === provider ? { provider, saved: saved.model, savedEffort: saved.effort } : { provider };
+      // `models.refresh` is a job that rewrites the cached list; `models.catalog` then reads it.
+      if (refresh) await untilJobFinished(ctx.rpc, () => ctx.rpc.call("models.refresh", params), 60_000);
       const { data } = await ctx.rpc.call("models.catalog", params);
       ctx.set((state) => ({ catalogs: { ...state.catalogs, [provider]: { load: ready, value: data } } }));
     } catch (error) {
@@ -119,7 +122,8 @@ export function settingsActions(ctx: SliceContext<"settings">) {
         result.ok ? { ok: true as const, value: undefined } : result,
       );
     },
-    signIn: (provider: string) => attempt(async () => (await ctx.rpc.call("provider.login", { provider })).jobId),
+    // The provider comes from saved preferences (a string): unknown ids fail here, not on the server.
+    signIn: (provider: string) => attempt(async () => (await ctx.rpc.call("provider.login", { provider: providerIdSchema.parse(provider) })).jobId),
     saveProfile: (background: string) => attempt(async () => (await ctx.rpc.call("profile.save", { background })).data),
     verifyWord: () => attempt(async () => (await ctx.rpc.call("word.verifyRenderer")).jobId),
     installSpeechModel: () => attempt(async () => (await ctx.rpc.call("speech.installModel")).jobId),

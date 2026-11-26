@@ -56,6 +56,8 @@ const notes: Record<string, ChipSpec> = {
   NEEDS_REVIEW: { tone: "danger", icon: Hand, label: (t) => t.notes.needsYou },
   STOPPED: { tone: "danger", icon: Hand, label: (t) => t.notes.needsYou },
   NONE: { tone: "neutral", icon: CircleDashed, label: (t) => t.notes.none },
+  // a notes job the student stopped (progress kept, Resume continues it).
+  CANCELLED: { tone: "warning", icon: CirclePause, label: (t) => t.notes.paused },
 };
 
 const transcription: Record<string, ChipSpec> = {

@@ -310,12 +310,10 @@ export const jobSchema = z.looseObject({
 export const jobListSchema = z.looseObject({ jobs: z.array(jobSchema) });
 
 // ---------------------------------------------------------------------------------------------
-// >>> onboarding (feat/desktop-onboarding) >>>
-// Setup, sign-in, profile, course, folders, calendar, microphone and first notes (UX-SPEC §2).
-// Spread into `methods` below with `...onboardingMethods`.
+// onboarding, courses, style, preferences
 // ---------------------------------------------------------------------------------------------
 
-const providerId = z.enum(["claude", "codex", "agy"]);
+export const providerIdSchema = z.enum(["claude", "codex", "agy"]);
 
 /** `setup.status` plus the fields the onboarding header and checklist read (installer.rs). */
 export const setupDetailSchema = setupStatusSchema.extend({
@@ -326,27 +324,62 @@ export const setupDetailSchema = setupStatusSchema.extend({
     .optional(),
 });
 
-const modelChoice = z.looseObject({ provider: str, model: str, effort: str });
-/** `preferences --show` (preferences.model_preferences). */
-export const preferencesSchema = z.looseObject({
-  default: modelChoice.nullable(),
-  overrides: z.looseObject({ chat: modelChoice.nullable().optional(), notes: modelChoice.nullable().optional() }),
+export const modelSelectionSchema = z.looseObject({ provider: str, model: str, effort: str });
+
+/** `preferences --show` (preferences._model_preferences_snapshot). */
+export const modelPreferencesSchema = z.looseObject({
+  default: modelSelectionSchema,
+  overrides: z.looseObject({ chat: modelSelectionSchema.nullable().optional(), notes: modelSelectionSchema.nullable().optional() }),
+  effective: z.looseObject({}).optional(),
   language: str,
   revision: str,
 });
 
+export const modelChoiceSchema = z.looseObject({
+  id: str,
+  model: str,
+  provider: str,
+  label: str,
+  default_effort: optStr,
+  supported_efforts: z.array(str),
+  /** listed · cached · provider_default · assumed · saved_unavailable */
+  availability: str,
+  selectable: z.boolean(),
+});
+
+/** `models --provider X --json [--refresh]` (models.catalog). */
+export const modelCatalogSchema = z.looseObject({
+  provider: str,
+  choices: z.array(modelChoiceSchema),
+  /** ready · stale · no_catalog · error · … */
+  status: str,
+  message: optStr,
+  fetched_at: optStr,
+});
+
+/** `doctor --json` checks carry an `action` (onboarding.doctor). */
+export const doctorCheckSchema = z.looseObject({ status: str, action: optStr, message: optStr });
+export const doctorReportSchema = z.looseObject({ ready: optBool, status: optStr, checks: z.record(str, doctorCheckSchema) });
+
 export const courseAddSchema = z.looseObject({ status: str.optional(), code: optStr, course: z.looseObject({ code: str }).nullable().optional() });
 
-/** `course link --json` (course_links.link_course_folder): READY · LINKED · NEEDS_SELECTION. */
+/** `course edit` prints a sentence, not JSON: the server answers `{exitCode: 0, data: null, text}`. */
+export const textResultSchema = z.object({ exitCode: z.number().int(), data: z.null(), text: str.optional() });
+
+const notePair = z.looseObject({ personal_notes: optStr, handout: optStr });
+
+/** `course link CODE PATH [--dry-run] --json` (course_links.link_course_folder): READY · LINKED · NEEDS_SELECTION. */
 export const courseLinkSchema = z.looseObject({
   status: str,
   course: optStr,
   saved: optBool,
-  proposed_files: z.looseObject({ personal_notes: optStr, handout: optStr }).nullable().optional(),
-  note_files: z.looseObject({ personal_notes: optStr, handout: optStr }).nullable().optional(),
+  connections: z.record(str, str).nullable().optional(),
+  proposed_connections: z.record(str, str).nullable().optional(),
+  note_files: notePair.nullable().optional(),
+  proposed_files: notePair.nullable().optional(),
   ambiguities: z.record(str, z.array(str)).nullable().optional(),
   inventory: z
-    .looseObject({ file_counts: z.record(str, z.number()).optional(), files: z.record(str, z.array(str)).optional() })
+    .looseObject({ resolved_folder: optStr, file_counts: z.record(str, z.number()).optional(), files: z.record(str, z.array(str)).optional() })
     .nullable()
     .optional(),
   publication_mode: optStr,
@@ -363,80 +396,25 @@ export const captureConnectSchema = z.looseObject({
   suggestedAction: optStr,
 });
 
-const anyObject = z.looseObject({});
-const noParams = z.object({}).optional();
-const courseSettingsParams = z.looseObject({});
-
-const onboardingMethods = {
-  "setup.run": { params: z.object({ provider: providerId }), result: jobRefSchema },
-  "provider.login": { params: z.object({ provider: providerId }), result: jobRefSchema },
-  "preferences.get": { params: noParams, result: cli(preferencesSchema) },
-  "preferences.saveModels": {
-    params: z.object({
-      models: z.object({ default: modelChoice.nullable(), overrides: z.object({ chat: modelChoice.nullable(), notes: modelChoice.nullable() }), language: z.enum(["en", "it"]) }),
-      expectedRevision: str,
-    }),
-    result: cli(preferencesSchema),
-  },
-  "profile.save": { params: z.union([z.object({ background: str }), z.object({ skip: z.literal(true) })]), result: cli(anyObject) },
-  "course.add": {
-    params: z.object({ name: str, notesLanguage: z.enum(["en", "it"]), settingsJson: courseSettingsParams, contextAnswer: str.optional() }),
-    result: cli(courseAddSchema),
-  },
-  "course.edit": { params: z.object({ code: str, file: anyObject }), result: cli(anyObject) },
-  "course.link": {
-    params: z.object({
-      code: str,
-      path: str,
-      dryRun: z.boolean().optional(),
-      notes: str.optional(),
-      recordings: str.optional(),
-      notesFile: str.optional(),
-      publicationMode: z.enum(["automatic", "review"]).optional(),
-    }),
-    result: cli(courseLinkSchema),
-  },
-  "style.preview": { params: z.object({ course: str }), result: cli(z.looseObject({ path: optStr, output: optStr })) },
-  "capture.configure": { params: z.object({ file: anyObject }).optional(), result: cli(anyObject) },
-  "capture.connect": { params: z.object({ file: anyObject }), result: cli(captureConnectSchema) },
-  "capture.unsubscribe": { params: z.object({ source: str }), result: cli(anyObject) },
-  "capture.enable": { params: noParams, result: cli(anyObject) },
-  "capture.pause": { params: noParams, result: cli(anyObject) },
-  "capture.resume": { params: noParams, result: cli(anyObject) },
-  "capture.test": { params: z.object({ waitSeconds: z.number().optional() }).optional(), result: cli(captureActionSchema) },
-  "capture.confirmTest": { params: z.object({ audio: str, audibleConfirmed: z.literal(true) }), result: cli(anyObject) },
-  /** A4 `lesson process`; `transcript` is a requested addition (the CLI has `prepare --transcript`). */
-  "lesson.process": { params: z.object({ lectureId: str, audio: str.optional(), transcript: str.optional() }), result: jobRefSchema },
-} as const;
-
-export type SetupDetailResult = z.output<typeof setupDetailSchema>;
-export type CourseLinkResult = z.output<typeof courseLinkSchema>;
-export type PreferencesResult = z.output<typeof preferencesSchema>;
-
-// <<< onboarding (feat/desktop-onboarding) <<<
-
-// ---------------------------------------------------------------------------------------------
-// Method table
-// ---------------------------------------------------------------------------------------------
-
-const none = z.object({}).optional();
-const qualitySchema = z.enum(["standard", "approfondito", "revisione"]);
-const notesParams = z.object({
-  course: str,
-  lessons: str,
-  quality: qualitySchema.optional(),
-  instructions: str.optional(),
-  imageLimit: z.number().int().optional(),
-  speakerFocus: z.literal("professor").optional(),
+/** Editable style fields (configuration.EDITABLE_STYLE_FIELDS plus counts). */
+export const styleProfileSchema = z.looseObject({
+  writing_style: str,
+  list_density: str,
+  image_policy: str,
+  image_limit: z.number().int().nullable().optional(),
+  question_count: z.number().int(),
+  recap: z.boolean(),
+  recap_language: str,
+  slide_scope: optStr,
 });
 
+/** `style show` and `style edit` (cli._style). */
+export const styleShowSchema = z.looseObject({ scope: str, effective: styleProfileSchema });
+/** `style preview`: `preview` is the path of the generated sample document. */
+export const stylePreviewSchema = z.looseObject({ scope: str, preview: str });
+
 // ---------------------------------------------------------------------------------------------
-// BEGIN workspace screens (Calendar, Library, Activity, Settings, palette)
-//
-// Naming rule for CLI-backed methods: the subcommand in camelCase, its flags in camelCase, and
-// `file` for the JSON object the server writes to `state/desktop-requests/` and passes as
-// `--file` (capture_dashboard.py, transcription_queue.py, preferences.py, models.py).
-// Names still to confirm against `mynotes serve --list-methods`.
+// calendar and recording (capture_dashboard.py)
 // ---------------------------------------------------------------------------------------------
 
 export const lessonInputSchema = z.object({
@@ -477,6 +455,10 @@ export const calendarSourceInputSchema = z.object({
   importMode: z.enum(["mapped", "all_timed"]).optional(),
 });
 
+// ---------------------------------------------------------------------------------------------
+// queue and library (transcription_queue.py)
+// ---------------------------------------------------------------------------------------------
+
 /** `transcription-queue pause|resume|configure|clear|retry|…` answers. */
 export const queueChangeSchema = z.looseObject({
   status: str,
@@ -516,90 +498,82 @@ export const audioImportSchema = z.looseObject({
   message: optStr,
 });
 
-export const modelSelectionSchema = z.looseObject({ provider: str, model: str, effort: str });
+/** `transcription-queue lesson-edit` request: rename or re-date a lesson, or hide it. */
+export const lessonEditSchema = z.object({ action: z.enum(["update", "hide"]), id: str, title: str.optional(), date: str.optional() });
 
-/** `preferences --show` (preferences._model_preferences_snapshot). */
-export const modelPreferencesSchema = z.looseObject({
-  default: modelSelectionSchema,
-  overrides: z.looseObject({ chat: modelSelectionSchema.nullable().optional(), notes: modelSelectionSchema.nullable().optional() }),
-  effective: z.looseObject({}).optional(),
-  language: str,
-  revision: str,
+export const transcriptSegmentSchema = z.looseObject({
+  start_seconds: z.number(),
+  end_seconds: optNum,
+  text: str,
+  speaker: optStr,
 });
 
-export const modelChoiceSchema = z.looseObject({
-  id: str,
-  model: str,
-  provider: str,
-  label: str,
-  default_effort: optStr,
-  supported_efforts: z.array(str),
-  /** listed · cached · provider_default · assumed · saved_unavailable */
-  availability: str,
-  selectable: z.boolean(),
+/** Timestamped transcript of one lesson (asr.py segments). */
+export const lessonTranscriptSchema = z.looseObject({
+  lecture_id: str,
+  path: optStr,
+  language: optStr,
+  segments: z.array(transcriptSegmentSchema),
 });
 
-/** `models --provider X --json [--refresh]` (models.catalog). */
-export const modelCatalogSchema = z.looseObject({
-  provider: str,
-  choices: z.array(modelChoiceSchema),
-  /** ready · stale · no_catalog · error · … */
-  status: str,
-  message: optStr,
-  fetched_at: optStr,
-});
-
-/** `doctor --json` checks carry an `action` (onboarding.doctor). */
-export const doctorCheckSchema = z.looseObject({ status: str, action: optStr, message: optStr });
-export const doctorReportSchema = z.looseObject({ ready: optBool, status: optStr, checks: z.record(str, doctorCheckSchema) });
-
-const okSchema = z.looseObject({ status: str.optional(), message: optStr });
-
-export const workspaceMethods = {
-  "capture.addLesson": { params: z.object({ file: lessonInputSchema }), result: cli(lessonChangeSchema) },
-  "capture.editLesson": { params: z.object({ event: str, file: lessonPatchSchema }), result: cli(lessonChangeSchema) },
-  "capture.resetLesson": { params: z.object({ event: str }), result: cli(lessonChangeSchema) },
-  "capture.sync": { params: z.object({ ifDue: z.boolean().optional(), source: str.optional() }).optional(), result: cli(okSchema) },
-  "capture.unsubscribe": { params: z.object({ source: str }), result: cli(okSchema) },
-  "capture.setImportMode": { params: z.object({ source: str, mode: z.enum(["mapped", "all_timed"]) }), result: cli(okSchema) },
-  "capture.configure": { params: z.object({ file: captureSettingsPatchSchema }), result: cli(okSchema) },
-  "capture.enable": { params: none, result: cli(okSchema) },
-  "capture.disable": { params: none, result: cli(okSchema) },
-  "capture.pause": { params: none, result: cli(okSchema) },
-  "capture.resume": { params: none, result: cli(okSchema) },
-  "capture.test": { params: z.object({ waitSeconds: z.number().optional() }).optional(), result: cli(captureActionSchema) },
-  "capture.recover": { params: z.object({ session: str.optional(), waitSeconds: z.number().optional() }).optional(), result: cli(captureActionSchema) },
-  "queue.pause": { params: none, result: cli(queueChangeSchema) },
-  "queue.resume": { params: none, result: cli(queueChangeSchema) },
-  "queue.clear": { params: none, result: cli(queueChangeSchema) },
-  "queue.configure": { params: z.object({ parallel: z.number().int().min(1).max(4) }), result: cli(queueChangeSchema) },
-  "queue.enqueue": {
-    params: z.object({ allUntranscribed: z.boolean().optional(), recording: str.optional(), readyRecording: z.array(str).optional(), parallel: z.number().int().optional() }),
-    result: cli(okSchema),
-  },
-  "queue.job": { params: z.object({ jobId: str, action: queueJobActionSchema }), result: cli(queueChangeSchema) },
-  "queue.finish": { params: z.object({ recording: str }), result: cli(okSchema) },
-  "library.inspectAudio": { params: z.object({ file: z.object({ paths: z.array(str).min(1).max(100) }) }), result: cli(z.looseObject({ status: str, files: z.array(audioInspectionSchema) })) },
-  "library.importAudio": { params: z.object({ file: z.object({ items: z.array(audioImportItemSchema).min(1).max(100) }) }), result: cli(audioImportSchema) },
-  "library.verifyLibrary": { params: none, result: cli(okSchema) },
-  "library.associate": { params: z.object({ recording: str, course: str, lesson: z.number().int().optional() }), result: cli(okSchema) },
-  "preferences.get": { params: none, result: cli(modelPreferencesSchema) },
-  "models.catalog": {
-    params: z.object({ provider: str, saved: str.optional(), savedEffort: str.optional(), refresh: z.boolean().optional() }),
-    result: cli(modelCatalogSchema),
-  },
-  "provider.login": { params: z.object({ provider: str }), result: jobRefSchema },
-  /** `undo CODE`: restores the course notes before the last update; a safety copy is kept. */
-  "notes.undo": { params: z.object({ course: str }), result: cli(okSchema) },
-  "word.verifyRenderer": { params: none, result: jobRefSchema },
-  "speech.installModel": { params: none, result: jobRefSchema },
-  "speech.verify": { params: z.object({ language: z.enum(["en", "it"]).optional() }).optional(), result: jobRefSchema },
-} as const;
-
-// END workspace screens
+// ---------------------------------------------------------------------------------------------
+// notes history (publication.py: `history`, `undo`, `restore`, `publish`)
 // ---------------------------------------------------------------------------------------------
 
+/** One cumulative-Word backup (`mynotes history CODE`). `reason`: "before STAT-L06 publication". */
+export const notesBackupSchema = z.looseObject({
+  backup_id: str,
+  course: str,
+  path: optStr,
+  source: optStr,
+  reason: optStr,
+  /** Compact UTC stamp, e.g. 20261124T105812123456Z (utils.now_compact_utc). */
+  created_at: str,
+  publication_state: z.looseObject({ lessons: z.array(z.looseObject({ lecture_id: str })).optional() }).nullable().optional(),
+});
+
+export const notesUndoSchema = z.looseObject({
+  status: str,
+  course: optStr,
+  lecture_id: optStr,
+  output: optStr,
+  message: optStr,
+  pre_restore_backup: z.unknown().optional(),
+});
+
+export const notesRestoreSchema = z.looseObject({ status: str, backup_id: optStr, output: optStr, pre_restore_backup: z.unknown().optional() });
+
+export const notesPublishSchema = z.looseObject({ status: str, lecture_id: optStr, output: optStr });
+
+// ---------------------------------------------------------------------------------------------
+// Method table: one entry per method. Names, params and lanes follow docs/SERVE.md in the serve
+// repository (params are the command's flags in camelCase; a `json` param is written to a private
+// request file by the server). `setup.*` is answered by the desktop shell's installer, not by
+// `mynotes serve`. Methods marked "Not in SERVE.md yet" are requested additions: the app handles
+// their "unknown method" error.
+// ---------------------------------------------------------------------------------------------
+
+const none = z.object({}).optional();
+const qualitySchema = z.enum(["standard", "approfondito", "revisione"]);
+const notesParams = z.object({
+  course: str,
+  lessons: str.optional(),
+  resume: str.optional(),
+  regenerate: z.boolean().optional(),
+  provider: providerIdSchema.optional(),
+  quality: qualitySchema.optional(),
+  instructions: str.optional(),
+  imageLimit: z.number().int().optional(),
+  speakerFocus: z.enum(["lecture", "professor"]).optional(),
+  contextLessons: str.optional(),
+  contiguousTranscripts: z.boolean().optional(),
+});
+const libraryQuery = z.object({ query: str.optional(), date: str.optional(), course: str.optional(), sync: z.boolean().optional() }).optional();
+const okSchema = z.looseObject({ status: str.optional(), message: optStr });
+const anyObject = z.looseObject({});
+
 export const methods = {
+  // system, session, watch
   "system.hello": { params: z.object({ protocol: z.literal(1) }), result: helloSchema },
   "system.ping": { params: none, result: z.unknown() },
   "session.open": { params: z.object({ visible: z.boolean() }), result: sessionSchema },
@@ -613,35 +587,151 @@ export const methods = {
       config: configSchema.optional(),
     }),
   },
-  "doctor.get": { params: z.object({ provider: str.optional(), refresh: z.boolean().optional() }).optional(), result: cli(doctorSchema) },
-  "provider.status": { params: z.object({ provider: str }), result: providerStatusSchema },
-  "config.get": { params: none, result: cli(configSchema) },
+
+  // setup (desktop installer), doctor, providers, configuration
   "setup.status": { params: none, result: setupStatusSchema },
+  "setup.run": { params: z.object({ provider: providerIdSchema }), result: jobRefSchema },
+  "doctor.get": { params: z.object({ provider: providerIdSchema.optional(), refresh: z.boolean().optional() }).optional(), result: cli(doctorSchema) },
+  "provider.status": { params: z.object({ provider: str }), result: providerStatusSchema },
+  "provider.login": { params: z.object({ provider: providerIdSchema }), result: jobRefSchema },
+  "config.get": { params: none, result: cli(configSchema) },
+  "profile.save": { params: z.union([z.object({ background: str }), z.object({ skip: z.literal(true) })]), result: cli(anyObject) },
+  "preferences.get": { params: none, result: cli(modelPreferencesSchema) },
+  "preferences.saveModels": {
+    params: z.object({
+      models: z.object({
+        default: modelSelectionSchema.nullable(),
+        overrides: z.object({ chat: modelSelectionSchema.nullable(), notes: modelSelectionSchema.nullable() }),
+        language: z.enum(["en", "it"]),
+      }),
+      expectedRevision: str,
+    }),
+    result: cli(modelPreferencesSchema),
+  },
+  "models.catalog": { params: z.object({ provider: str, saved: str.optional(), savedEffort: str.optional() }), result: cli(modelCatalogSchema) },
+  /** `models --refresh`: a job; read the refreshed list with `models.catalog` once it ends. */
+  "models.refresh": { params: z.object({ provider: str, saved: str.optional(), savedEffort: str.optional() }), result: jobRefSchema },
+
+  // courses and style
+  "course.add": {
+    params: z.object({
+      name: str,
+      notesLanguage: z.enum(["en", "it"]).optional(),
+      materials: str.optional(),
+      recordings: str.optional(),
+      contextAnswer: str.optional(),
+      settings: anyObject.optional(),
+      deferContext: z.boolean().optional(),
+    }),
+    result: cli(courseAddSchema),
+  },
+  /** `course edit CODE --file`: the course record to save (merged into the saved one). */
+  "course.edit": { params: z.object({ code: str, course: z.record(str, z.unknown()) }), result: textResultSchema },
+  "course.link": {
+    params: z.object({
+      code: str,
+      path: str,
+      notes: str.optional(),
+      notesFile: str.optional(),
+      handoutFile: str.optional(),
+      publicationMode: z.enum(["automatic", "review"]).optional(),
+      recordings: str.optional(),
+      dryRun: z.boolean().optional(),
+    }),
+    result: cli(courseLinkSchema),
+  },
+  "style.show": { params: z.object({ course: str.optional() }), result: cli(styleShowSchema) },
+  "style.edit": {
+    params: z.union([z.object({ course: str.optional(), style: z.record(str, z.unknown()) }), z.object({ course: str.optional(), reset: z.literal(true) })]),
+    result: cli(styleShowSchema),
+  },
+  "style.preview": { params: z.object({ course: str.optional(), output: str.optional() }), result: cli(stylePreviewSchema) },
+
+  // calendar and recording
   "capture.dashboard": { params: none, result: cli(captureDashboardSchema) },
   "capture.start": {
     params: z.object({
-      courseCode: str.optional(),
-      lessonNumber: z.number().int().optional(),
+      course: str.optional(),
+      lesson: z.number().int().optional(),
       unassigned: z.boolean().optional(),
       title: str.optional(),
-      durationMinutes: z.number().int().optional(),
+      language: str.optional(),
+      durationMinutes: z.number().int(),
     }),
     result: cli(captureActionSchema),
   },
-  "capture.stop": { params: z.object({ waitSeconds: z.number().optional() }).optional(), result: cli(captureActionSchema) },
+  "capture.stop": { params: none, result: cli(captureActionSchema) },
+  "capture.test": { params: none, result: cli(captureActionSchema) },
+  "capture.confirmTest": { params: z.object({ audio: str, audibleConfirmed: z.boolean() }), result: cli(anyObject) },
+  "capture.recover": { params: z.object({ session: str.optional() }).optional(), result: cli(captureActionSchema) },
+  "capture.configure": { params: z.object({ config: captureSettingsPatchSchema.optional() }).optional(), result: cli(okSchema) },
+  "capture.connect": { params: z.object({ source: anyObject }), result: cli(captureConnectSchema) },
+  "capture.unsubscribe": { params: z.object({ source: str }), result: cli(okSchema) },
+  "capture.setImportMode": { params: z.object({ source: str, mode: z.enum(["mapped", "all_timed"]) }), result: cli(okSchema) },
+  "capture.sync": { params: z.object({ ifDue: z.boolean().optional(), source: str.optional() }).optional(), result: cli(okSchema) },
+  "capture.enable": { params: none, result: cli(okSchema) },
+  "capture.disable": { params: none, result: cli(okSchema) },
+  "capture.pause": { params: none, result: cli(okSchema) },
+  "capture.resume": { params: none, result: cli(okSchema) },
+  "capture.addLesson": { params: z.object({ lesson: lessonInputSchema }), result: cli(lessonChangeSchema) },
+  "capture.editLesson": { params: z.object({ event: str, patch: lessonPatchSchema }), result: cli(lessonChangeSchema) },
+  "capture.resetLesson": { params: z.object({ event: str }), result: cli(lessonChangeSchema) },
+
+  // transcription queue
   "queue.status": { params: none, result: cli(queueStatusSchema) },
-  /** `transcription-queue library` (name to confirm against `mynotes serve --list-methods`). */
-  "library.list": { params: none, result: cli(librarySchema) },
+  "queue.pause": { params: none, result: cli(queueChangeSchema) },
+  "queue.resume": { params: none, result: cli(queueChangeSchema) },
+  "queue.clear": { params: none, result: cli(queueChangeSchema) },
+  "queue.configure": { params: z.object({ parallel: z.number().int().min(1).max(4) }), result: cli(queueChangeSchema) },
+  "queue.enqueue": {
+    params: z.union([
+      z.object({ allUntranscribed: z.literal(true), parallel: z.number().int().optional() }),
+      z.object({ recordingId: str, parallel: z.number().int().optional() }),
+      z.object({ readyRecordings: z.array(str).min(1), parallel: z.number().int().optional() }),
+    ]),
+    result: cli(okSchema),
+  },
+  "queue.job": { params: z.object({ action: queueJobActionSchema, jobId: str }), result: cli(queueChangeSchema) },
+
+  // library
+  "library.list": { params: libraryQuery, result: cli(librarySchema) },
+  "library.inspectAudio": { params: z.object({ paths: z.array(str).min(1).max(100) }), result: cli(z.looseObject({ status: str, files: z.array(audioInspectionSchema) })) },
+  "library.importAudio": { params: z.object({ items: z.array(audioImportItemSchema).min(1).max(100) }), result: cli(audioImportSchema) },
+  "library.verify": { params: none, result: cli(okSchema) },
+  "library.associate": { params: z.object({ recordingId: str, course: str, lesson: z.number().int().optional() }), result: cli(okSchema) },
+  "library.finish": { params: z.object({ recordingId: str }), result: cli(okSchema) },
+  /** `prefer-audio`: use this recording for the lesson's transcription. */
+  "library.preferAudio": { params: z.object({ recordingId: str }), result: cli(okSchema) },
+  "library.editLesson": { params: z.object({ edit: lessonEditSchema }), result: cli(okSchema) },
+  /** Not in SERVE.md yet: the timestamped transcript of one lesson. */
+  "library.transcript": { params: z.object({ lectureId: str }), result: cli(lessonTranscriptSchema) },
+
+  // transcription, notes, lessons, jobs
+  "transcription.run": {
+    params: z.union([z.object({ lectureId: str, audio: str.optional() }), z.object({ recordingId: str, audio: str.optional() })]),
+    result: jobRefSchema,
+  },
+  "lesson.process": {
+    params: z.object({ lectureId: str, audio: str.optional(), provider: providerIdSchema.optional(), quality: str.optional(), instructions: str.optional() }),
+    result: jobRefSchema,
+  },
   "notes.plan": { params: notesParams, result: cli(notesPlanSchema) },
   "notes.run": { params: notesParams, result: jobRefSchema },
   "notes.batchStatus": { params: z.object({ batchId: str }), result: cli(batchStatusSchema) },
+  "notes.history": { params: z.object({ course: str.optional() }), result: cli(z.array(notesBackupSchema)) },
+  /** `undo CODE`: restores the course notes before the last update; a safety copy is kept. */
+  "notes.undo": { params: z.object({ course: str }), result: cli(notesUndoSchema) },
+  "notes.restore": { params: z.object({ backupId: str }), result: cli(notesRestoreSchema) },
+  /** Not in SERVE.md yet: `publish CODE-LNN --candidate PATH` (Approve & update Word). */
+  "notes.publish": { params: z.object({ lectureId: str, candidate: str.optional() }), result: cli(notesPublishSchema) },
   "job.list": { params: none, result: jobListSchema },
   "job.get": { params: z.object({ jobId: str }), result: jobSchema },
   "job.cancel": { params: z.object({ jobId: str, force: z.boolean().optional() }), result: z.unknown() },
-  // onboarding (feat/desktop-onboarding)
-  ...onboardingMethods,
-  // workspace screens (see the block above)
-  ...workspaceMethods,
+
+  // checks
+  "word.verifyRenderer": { params: none, result: jobRefSchema },
+  "speech.installModel": { params: none, result: jobRefSchema },
+  "speech.verify": { params: z.object({ audio: str.optional(), language: z.enum(["en", "it"]).optional() }).optional(), result: jobRefSchema },
 } as const;
 
 export type MethodName = keyof typeof methods;
@@ -672,27 +762,30 @@ export type NotificationParams<N extends NotificationName> = z.output<(typeof no
 export type CaptureDashboard = z.output<typeof captureDashboardSchema>;
 export type CaptureEvent = z.output<typeof captureEventSchema>;
 export type CaptureSession = z.output<typeof captureSessionSchema>;
+export type CaptureSource = z.output<typeof captureSourceSchema>;
 export type QueueStatus = z.output<typeof queueStatusSchema>;
 export type QueueJob = z.output<typeof queueJobSchema>;
+export type QueueJobAction = z.output<typeof queueJobActionSchema>;
 export type Library = z.output<typeof librarySchema>;
 export type LibraryLesson = z.output<typeof libraryLessonSchema>;
 export type LibraryRecording = z.output<typeof libraryRecordingSchema>;
+export type LibraryTranscript = z.output<typeof libraryTranscriptSchema>;
 export type Config = z.output<typeof configSchema>;
 export type Job = z.output<typeof jobSchema>;
 export type SetupStatus = z.output<typeof setupStatusSchema>;
 export type NotesQuality = z.output<typeof qualitySchema>;
-
-// BEGIN workspace screens: convenience types
-export type CaptureSource = z.output<typeof captureSourceSchema>;
 export type LessonPatch = z.input<typeof lessonPatchSchema>;
 export type LessonInput = z.input<typeof lessonInputSchema>;
+export type CaptureSettingsPatch = z.input<typeof captureSettingsPatchSchema>;
 export type AudioInspection = z.output<typeof audioInspectionSchema>;
 export type AudioImportItem = z.input<typeof audioImportItemSchema>;
-export type QueueJobAction = z.output<typeof queueJobActionSchema>;
 export type ModelPreferences = z.output<typeof modelPreferencesSchema>;
 export type ModelSelection = z.output<typeof modelSelectionSchema>;
 export type ModelCatalog = z.output<typeof modelCatalogSchema>;
 export type ModelChoice = z.output<typeof modelChoiceSchema>;
 export type DoctorReport = z.output<typeof doctorReportSchema>;
-export type LibraryTranscript = z.output<typeof libraryTranscriptSchema>;
-// END workspace screens: convenience types
+export type NotesBackup = z.output<typeof notesBackupSchema>;
+export type StyleProfile = z.output<typeof styleProfileSchema>;
+export type CourseLink = z.output<typeof courseLinkSchema>;
+export type LessonTranscript = z.output<typeof lessonTranscriptSchema>;
+export type TranscriptSegment = z.output<typeof transcriptSegmentSchema>;

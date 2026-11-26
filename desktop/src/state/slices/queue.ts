@@ -25,7 +25,6 @@ export function queueActions(ctx: SliceContext<"queue">) {
         ctx.set({ load: failed(error) });
       }
     },
-    // BEGIN workspace screens: Activity controls. `queue.changed` follows each call; the local
     // patch only makes the controls answer at once.
     setPaused: (paused: boolean) =>
       attempt(async () => {
@@ -43,7 +42,7 @@ export function queueActions(ctx: SliceContext<"queue">) {
       }),
     /** Transcribe every ready recording, or only the given ones. */
     enqueue: (recordingIds?: readonly string[]) =>
-      attempt(async () => (await ctx.rpc.call("queue.enqueue", recordingIds ? { readyRecording: [...recordingIds] } : { allUntranscribed: true })).data),
+      attempt(async () => (await ctx.rpc.call("queue.enqueue", recordingIds ? { readyRecordings: [...recordingIds] } : { allUntranscribed: true })).data),
     clearWaiting: () =>
       attempt(async () => {
         const { data } = await ctx.rpc.call("queue.clear");
@@ -59,7 +58,6 @@ export function queueActions(ctx: SliceContext<"queue">) {
         if (status && action === "cancel") ctx.set({ status: { ...status, jobs: status.jobs.map((job) => (job.id === jobId ? { ...job, status: "CANCELLING" } : job)) } });
         return data;
       }),
-    finishSaving: (recording: string) => attempt(async () => (await ctx.rpc.call("queue.finish", { recording })).data),
-    // END workspace screens
+    finishSaving: (recording: string) => attempt(async () => (await ctx.rpc.call("library.finish", { recordingId: recording })).data),
   };
 }

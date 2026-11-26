@@ -1,4 +1,4 @@
-import { CalendarPlus, FileAudio, Plus, Search } from "lucide-react";
+import { CalendarPlus, FileAudio, FileText, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { AnchoredPopover, FilterChip, Icon, List, ListRow, Menu, StatusChip, TextField } from "../../components";
@@ -14,7 +14,7 @@ export function WorkspaceSpecimens() {
   return (
     <div className={styles.grid}>
       <figure className={styles.specimen}>
-        <figcaption className={styles.caption}>Menu (open) · Menu icon trigger</figcaption>
+        <figcaption className={styles.caption}>Menu · labelled trigger (open) and ⋯ trigger</figcaption>
         <div className={`${styles.stage} ${styles.menuStage}`}>
           <div className={styles.row}>
             <Menu
@@ -29,9 +29,13 @@ export function WorkspaceSpecimens() {
             />
             <Menu
               trigger="icon"
-              size="sm"
-              label={t.activity.actions.more("Statistics · 7")}
-              items={[{ id: "remove", label: t.activity.actions.remove, tone: "danger", onSelect: () => undefined }]}
+              label={t.lesson.menu.label}
+              items={[
+                { id: "edit", label: t.lesson.menu.edit, icon: Pencil, onSelect: () => undefined },
+                { id: "recording", label: t.lesson.menu.linkRecording, icon: FileAudio, onSelect: () => undefined },
+                { id: "transcript", label: t.lesson.menu.linkTranscript, icon: FileText, onSelect: () => undefined },
+                { id: "remove", label: t.lesson.menu.remove, icon: Trash2, tone: "danger", onSelect: () => undefined },
+              ]}
             />
           </div>
         </div>

@@ -1,7 +1,7 @@
 {
   "exitCode": 0,
   "data": {
-    "status": "PREVIEW",
-    "path": "~/Documents/MyNotes/previews/Style sample.docx"
+    "scope": "STAT",
+    "preview": "~/Documents/MyNotes/workspace/previews/STAT-style-preview.docx"
   }
 }

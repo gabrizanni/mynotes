@@ -1,4 +1,4 @@
-import { CalendarClock, CircleCheck, Clock, FileAudio, FileText, Info, Keyboard, X } from "lucide-react";
+import { CalendarClock, CircleCheck, Clock, FileAudio, Info, Keyboard, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Banner, Card, ChoiceCards, DropZone, Icon, IconButton, List, ListRow, StatusChip } from "../../../components";
@@ -119,20 +119,20 @@ export function FirstNotesStep() {
   const { complete, skip, courseCode, providerName } = useOnboarding();
   const f = t.onboarding.firstNotes;
   const [choice, setChoice] = useState<Choice | null>(null);
-  const [file, setFile] = useState<{ name: string; path: string; kind: "audio" | "transcript" } | null>(null);
+  const [file, setFile] = useState<{ name: string; path: string } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const onFiles = (files: File[]) => {
     const first = files[0];
     if (!first) return;
-    const kind = classifyImport(first.name);
-    if (!kind) {
+    // `lesson.process` takes an audio file (docs/SERVE.md); a TXT transcript has no server path yet.
+    if (classifyImport(first.name) !== "audio") {
       setProblem(f.unsupported);
       return;
     }
     setProblem(null);
-    setFile({ name: first.name, path: droppedPath(first), kind });
+    setFile({ name: first.name, path: droppedPath(first) });
   };
 
   const generate = async () => {
@@ -143,7 +143,7 @@ export function FirstNotesStep() {
     if (!courseCode) return;
     setBusy(true);
     try {
-      await rpc.call("lesson.process", { lectureId: lectureIdFor(courseCode), ...(file.kind === "audio" ? { audio: file.path } : { transcript: file.path }) });
+      await rpc.call("lesson.process", { lectureId: lectureIdFor(courseCode), audio: file.path });
       complete("first-notes");
     } catch {
       setProblem(f.failed);
@@ -167,10 +167,10 @@ export function FirstNotesStep() {
         value={choice}
         onChange={setChoice}
       />
-      {choice === "have" && !file && <DropZone title={f.dropTitle} body={f.dropBody} accept="audio/*,.txt" multiple={false} onFiles={onFiles} />}
+      {choice === "have" && !file && <DropZone title={f.dropTitle} body={f.dropBody} accept="audio/*" multiple={false} onFiles={onFiles} />}
       {choice === "have" && file && (
         <div className={styles.folderRow}>
-          <Icon icon={file.kind === "audio" ? FileAudio : FileText} size={20} />
+          <Icon icon={FileAudio} size={20} />
           <span className={styles.folderPath}>{file.name}</span>
           <span className={`${styles.tag} ${styles.tagSuccess}`}>
             <Icon icon={CircleCheck} size={14} />

@@ -37,8 +37,9 @@ import {
   type ChipKind,
 } from "../../components";
 import { useT } from "../../i18n";
-import { WorkspaceSpecimens } from "./WorkspaceSpecimens"; // workspace screens
+import { WorkspaceSpecimens } from "./WorkspaceSpecimens";
 import styles from "./Gallery.module.css";
+import { LessonSpecimens } from "./LessonSpecimens";
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
@@ -117,7 +118,7 @@ export function GalleryPage() {
   const [topics, setTopics] = useState<string[]>(["Hypothesis testing", "Bayes"]);
   const [review, setReview] = useState(true);
   const [auto, setAuto] = useState(false);
-  // onboarding (feat/desktop-onboarding): ChoiceCards and ChoiceChips specimens.
+  // onboarding: ChoiceCards and ChoiceChips specimens.
   const [assistantChoice, setAssistantChoice] = useState<"claude" | "codex" | "agy" | null>("claude");
   const [goals, setGoals] = useState<Array<"exam" | "understanding" | "exercises" | "work" | "personal">>(["exam"]);
   const [selected, setSelected] = useState<Set<string>>(new Set(["STAT-L07"]));
@@ -253,7 +254,7 @@ export function GalleryPage() {
           <Specimen label="DropZone" wide>
             <DropZone title={s.dropTitle} body={s.dropBody} accept="audio/*,.txt" onFiles={() => undefined} />
           </Specimen>
-          {/* >>> onboarding (feat/desktop-onboarding) >>> */}
+          {/* Onboarding */}
           <Specimen label="ChoiceCards" wide>
             <ChoiceCards
               label={t.onboarding.assistant.groupLabel}
@@ -274,7 +275,6 @@ export function GalleryPage() {
               onChange={setGoals}
             />
           </Specimen>
-          {/* <<< onboarding (feat/desktop-onboarding) <<< */}
         </div>
       </Section>
 
@@ -491,6 +491,8 @@ export function GalleryPage() {
         </div>
       </Section>
 
+      <LessonSpecimens />
+
       <Section id="g-shell" title={t.gallery.sections.shell}>
         <div className={styles.shellStage}>
           <div className={styles.sidebarFrame}>
@@ -525,7 +527,7 @@ export function GalleryPage() {
         </div>
       </Section>
 
-      {/* workspace screens: Menu, FilterChip, AnchoredPopover, search field, selected row */}
+      {/* Menu, FilterChip, AnchoredPopover, search field, selected row */}
       <Section id="g-workspace" title={t.gallery.sections.workspace}>
         <WorkspaceSpecimens />
       </Section>

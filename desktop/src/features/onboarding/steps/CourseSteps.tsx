@@ -236,7 +236,7 @@ export function StyleStep() {
     const open = async () => {
       try {
         const { data } = await rpc.call("style.preview", { course: courseCode });
-        const path = data.path ?? data.output ?? null;
+        const path = data.preview || null;
         const opened = path ? await openPath(path) : false;
         if (!opened) ui.toast({ message: s.sampleOutsideApp, tone: "neutral" });
       } catch {

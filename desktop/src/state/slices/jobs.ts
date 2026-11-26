@@ -87,8 +87,6 @@ export function jobsActions(ctx: SliceContext<"jobs">) {
     cancel: async (jobId: string) => {
       await ctx.rpc.call("job.cancel", { jobId });
     },
-    // BEGIN workspace screens: command palette
     undoLastUpdate: (course: string) => attempt(async () => (await ctx.rpc.call("notes.undo", { course })).data),
-    // END workspace screens
   };
 }

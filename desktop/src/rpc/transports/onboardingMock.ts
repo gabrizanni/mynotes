@@ -1,5 +1,5 @@
 /**
- * Mock behaviour for the onboarding methods (feat/desktop-onboarding), merged into the
+ * Mock behaviour for the onboarding methods, merged into the
  * handlers of `createMockTransport`. Like the rest of the mock, timers only run when
  * `simulate` is on; with `simulate: false` every call answers its fixture (screenshots).
  *
@@ -255,7 +255,7 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
     },
 
     "capture.connect": (raw) => {
-      const file = params(params(raw).file);
+      const file = params(params(raw).source);
       const result = fixture("capture.connect", { exitCode: 0, data: { status: "CONNECTED", sourceID: "timetable" } });
       const board = dashboard();
       if (!isObject(result) || !isObject(result.data) || result.data.status !== "CONNECTED" || !board) return result;

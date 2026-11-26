@@ -1,0 +1,6 @@
+{
+  "simulation": {
+    "outcome": "PAUSED_QUOTA",
+    "stopAt": "GENERATING"
+  }
+}

@@ -47,9 +47,9 @@ export function ScheduleStep() {
     }
     setBusy(true);
     try {
-      await rpc.call("capture.configure", { file: {} });
+      await rpc.call("capture.configure", { config: {} });
       const { data } = await rpc.call("capture.connect", {
-        file: {
+        source: {
           url: url.trim(),
           label: courseName || s.tabs.link,
           timezone,

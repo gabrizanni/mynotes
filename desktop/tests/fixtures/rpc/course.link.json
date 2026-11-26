@@ -5,24 +5,41 @@
     "course": "STAT",
     "saved": false,
     "connections": {
-      "materials": "~/Documents/University/Statistics"
+      "materials": "~/Documents/University/Statistics",
+      "personal_notes": "~/Documents/University/Statistics/Notes",
+      "recordings": "~/Documents/University/Statistics/Audio"
     },
     "note_files": {
-      "personal_notes": "~/Documents/University/Statistics/Appunti personali.docx",
+      "personal_notes": "~/Documents/University/Statistics/Notes/Appunti personali.docx",
       "handout": "~/Documents/MyNotes/Statistics/STAT_COURSE_NOTES.docx"
     },
     "inventory": {
       "resolved_folder": "~/Documents/University/Statistics",
       "file_counts": {
         "materials": 14,
-        "recordings": 2,
         "personal_notes": 0,
+        "recordings": 2,
         "transcripts": 0
       },
       "files": {
-        "materials": [],
-        "recordings": [],
+        "materials": [
+          "~/Documents/University/Statistics/Lecture 1.pdf",
+          "~/Documents/University/Statistics/Lecture 2.pdf",
+          "~/Documents/University/Statistics/Lecture 3.pdf",
+          "~/Documents/University/Statistics/Lecture 4.pdf",
+          "~/Documents/University/Statistics/Lecture 5.pdf",
+          "~/Documents/University/Statistics/Lecture 6.pdf",
+          "~/Documents/University/Statistics/Lecture 7.pdf",
+          "~/Documents/University/Statistics/Lecture 8.pdf",
+          "~/Documents/University/Statistics/Lecture 9.pdf",
+          "~/Documents/University/Statistics/Lecture 10.pdf",
+          "~/Documents/University/Statistics/Lecture 11.pdf",
+          "~/Documents/University/Statistics/Lecture 12.pdf",
+          "~/Documents/University/Statistics/Lecture 13.pdf",
+          "~/Documents/University/Statistics/Lecture 14.pdf"
+        ],
         "personal_notes": [],
+        "recordings": [],
         "transcripts": []
       }
     }

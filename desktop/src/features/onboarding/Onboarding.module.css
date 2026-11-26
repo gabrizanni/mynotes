@@ -65,8 +65,7 @@
   left: var(--space-1);
   height: 2px;
   border-radius: var(--radius-pill);
-  /* --color-control-strong arrives with the token retune; the fallback keeps today's look. */
-  background: var(--color-control-strong, var(--color-text-primary));
+  background: var(--color-control-strong);
 }
 
 .segmentCheck {
@@ -596,7 +595,7 @@
 }
 
 .playerTime {
-  font: var(--text-time, var(--text-body-strong));
+  font: var(--text-time);
   font-variant-numeric: tabular-nums;
 }
 

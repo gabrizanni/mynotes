@@ -1,0 +1,193 @@
+/* Generate notes sheet: sources, options, the live stepper and the outcome. Tokens only. */
+
+.stack {
+  display: grid;
+  gap: var(--space-6);
+}
+
+.group {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.groupTitle {
+  font: var(--text-label);
+  color: var(--color-text-primary);
+}
+
+.muted {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+/* ---------- Sources ---------- */
+
+.sourceBlock {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.sourceBlock + .sourceBlock {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-hairline);
+}
+
+.sourceLesson {
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+}
+
+.sources {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.source {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+}
+
+.sourceMark {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+}
+
+.sourceOk {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.sourceMissing {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.sourceNone {
+  box-shadow: inset 0 0 0 1.5px var(--color-border-hairline);
+}
+
+.sourceText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  min-width: 0;
+}
+
+.sourceLabel {
+  font: var(--text-body-strong);
+  color: var(--color-text-primary);
+}
+
+.sourceValue {
+  min-width: 0;
+  font: var(--text-small);
+  color: var(--color-text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* ---------- Footer line naming the provider ---------- */
+
+.disclosureLine {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.disclosureLine svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* ---------- Running ---------- */
+
+.runHead {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.elapsed {
+  font: var(--text-title);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+}
+
+/* ---------- Outcome ---------- */
+
+/* A tone badge (icon on its tint, like a chip) next to the sentence: no tinted panels. */
+.outcome {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.outcomeBadge {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+.success .outcomeBadge {
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
+.warning .outcomeBadge {
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+}
+
+.danger .outcomeBadge {
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+.outcomeText {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-top: var(--space-2);
+}
+
+.outcomeHeadline {
+  font: var(--text-heading);
+  color: var(--color-text-primary);
+  text-wrap: pretty;
+}
+
+.outcomeDetail {
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.warnings {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0 0 0 calc(40px + var(--space-4));
+  padding-left: var(--space-5);
+  font: var(--text-body);
+  color: var(--color-text-primary);
+}
+
+.warnings li::marker {
+  color: var(--color-text-muted);
+}
+
+.doneSteps {
+  display: grid;
+  gap: var(--space-2);
+}

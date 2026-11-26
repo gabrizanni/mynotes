@@ -121,7 +121,7 @@ async function runOp(rpc: RpcClient, op: SaveOp, provider: Provider | null): Pro
         const { exitCode, data } = await rpc.call("course.add", {
           name: op.payload.name,
           notesLanguage: op.payload.notesLanguage,
-          settingsJson: { ...op.payload.settingsJson },
+          settings: { ...op.payload.settingsJson },
           ...(op.payload.contextAnswer ? { contextAnswer: op.payload.contextAnswer } : {}),
         });
         const code = data.code ?? data.course?.code ?? null;
@@ -134,7 +134,7 @@ async function runOp(rpc: RpcClient, op: SaveOp, provider: Provider | null): Pro
       const settings = op.payload.settingsJson;
       const { exitCode } = await rpc.call("course.edit", {
         code: op.code,
-        file: {
+        course: {
           ...current,
           name: op.payload.name,
           kind: settings.kind,

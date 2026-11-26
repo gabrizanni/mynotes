@@ -4,7 +4,7 @@ import { useId } from "react";
 import logo from "../assets/brand/mynotes-logo-256.png";
 import { Sidebar, ToastRegion, type SidebarItem } from "../components";
 import { AssistantPanel } from "../features/assistant";
-import { CommandPalette } from "../features/palette"; // workspace screens: ⌘/Ctrl K
+import { CommandPalette } from "../features/palette"; // ⌘/Ctrl K
 import { useT } from "../i18n";
 import { routeForSection, routeToHash, sectionOf, shallowEqual, useActions, useAppState } from "../state";
 import { RecorderStatus } from "./RecorderStatus";
@@ -84,7 +84,7 @@ export function Shell() {
           <AssistantPanel />
         </div>
       )}
-      {/* workspace screens: command palette, mounted once for the whole window */}
+      {/* command palette, mounted once for the whole window */}
       <CommandPalette />
       <ToastRegion toasts={toasts} onDismiss={ui.dismissToast} />
     </div>

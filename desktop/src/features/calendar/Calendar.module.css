@@ -486,7 +486,7 @@
   border: 0;
   border-radius: var(--radius-inner);
   background: transparent;
-  color: var(--color-link, var(--color-text-brand));
+  color: var(--color-link);
   font: var(--text-caption);
   font-weight: 600;
 }
@@ -598,7 +598,7 @@
   min-height: var(--control-height-sm);
   padding: 0 var(--space-2);
   border-radius: var(--radius-input);
-  color: var(--color-link, var(--color-text-brand));
+  color: var(--color-link);
   font: var(--text-button-sm);
   text-decoration: none;
   transition: background-color var(--duration-fast) var(--ease-standard);

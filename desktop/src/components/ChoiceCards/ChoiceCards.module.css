@@ -106,10 +106,9 @@
     border-color var(--duration-fast) var(--ease-standard);
 }
 
-/* --color-control-strong (checkboxes, radios) arrives with the token retune; fallback for now. */
 .card[aria-checked="true"] .mark {
-  border-color: var(--color-control-strong, var(--color-action-primary));
-  background: var(--color-control-strong, var(--color-action-primary));
+  border-color: var(--color-control-strong);
+  background: var(--color-control-strong);
 }
 
 @media (prefers-reduced-motion: reduce) {

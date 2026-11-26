@@ -12,7 +12,7 @@
 import { RpcCode, RpcError } from "../errors";
 import type { Transport } from "../transport";
 import { dayOffset, resolveFixtures, shiftDates, type Json } from "./fixtures";
-// onboarding (feat/desktop-onboarding)
+import { createNotesMock } from "./mockNotes";
 import { onboardingMockHandlers } from "./onboardingMock";
 
 export interface MockOptions {
@@ -79,7 +79,7 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
   };
 
   const handlers: Record<string, (params: unknown) => Json> = {
-    // onboarding (feat/desktop-onboarding): setup, sign-in, course, calendar, microphone.
+    // Onboarding: setup, sign-in, course, calendar, microphone.
     ...onboardingMockHandlers({ state, simulate: options.simulate, now: options.now, stageMs: options.stageMs, later, emit }),
 
     "watch.subscribe": () => {
@@ -181,6 +181,18 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
       return { jobId };
     },
 
+    // A short job; the cached catalog fixture stays what `models.catalog` answers afterwards.
+    "models.refresh": () => {
+      jobCounter += 1;
+      const jobId = `mock-models-${jobCounter}`;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        emit("job.finished", { jobId, state: "succeeded", exitCode: 0, result: { status: "COMPLETED" }, at: iso(options.now()) });
+      }, options.latencyMs);
+      timers.add(timer);
+      return { jobId };
+    },
+
     "job.get": (params) => {
       const jobId = (params as { jobId?: string } | undefined)?.jobId;
       const list = state.get("job.list");
@@ -189,6 +201,10 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
       return found;
     },
   };
+
+  // Generate notes flow, transcription and the lesson transcript.
+  const notesMock = createNotesMock({ state, emit, simulate: options.simulate, stageMs: options.stageMs, latencyMs: options.latencyMs, now: options.now });
+  Object.assign(handlers, notesMock.handlers);
 
   return {
     kind: "mock",
@@ -207,6 +223,7 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
       return () => listeners.delete(listener);
     },
     close() {
+      notesMock.dispose();
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       listeners.clear();

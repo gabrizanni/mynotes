@@ -1,5 +1,5 @@
 /**
- * Onboarding screenshot scenes (feat/desktop-onboarding). Each scene opens one step with a
+ * Onboarding screenshot scenes. Each scene opens one step with a
  * fixture scenario, a seeded onboarding.json and, when needed, a few clicks. File names:
  * tests/shots/onboarding-<step>-<state>-<lang>-<theme>.png.
  */

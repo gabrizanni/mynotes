@@ -25,12 +25,10 @@ export function libraryActions(ctx: SliceContext<"library">) {
         ctx.set({ load: failed(error) });
       }
     },
-    // BEGIN workspace screens: Library import and checks.
-    inspectAudio: (paths: readonly string[]) => attempt(async () => (await ctx.rpc.call("library.inspectAudio", { file: { paths: [...paths] } })).data.files),
-    importAudio: (items: readonly AudioImportItem[]) => attempt(async () => (await ctx.rpc.call("library.importAudio", { file: { items: [...items] } })).data),
-    verifyFiles: () => attempt(async () => (await ctx.rpc.call("library.verifyLibrary")).data),
+    inspectAudio: (paths: readonly string[]) => attempt(async () => (await ctx.rpc.call("library.inspectAudio", { paths: [...paths] })).data.files),
+    importAudio: (items: readonly AudioImportItem[]) => attempt(async () => (await ctx.rpc.call("library.importAudio", { items: [...items] })).data),
+    verifyFiles: () => attempt(async () => (await ctx.rpc.call("library.verify")).data),
     assignCourse: (recording: string, course: string, lesson?: number) =>
-      attempt(async () => (await ctx.rpc.call("library.associate", lesson ? { recording, course, lesson } : { recording, course })).data),
-    // END workspace screens
+      attempt(async () => (await ctx.rpc.call("library.associate", lesson ? { recordingId: recording, course, lesson } : { recordingId: recording, course })).data),
   };
 }

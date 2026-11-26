@@ -13,7 +13,7 @@ import { lesson } from "./lesson";
 import { library } from "./library";
 import { nav } from "./nav";
 import { onboarding } from "./onboarding";
-import { palette } from "./palette"; // workspace screens
+import { palette } from "./palette";
 import { settings } from "./settings";
 import { status } from "./status";
 import { today } from "./today";
@@ -33,7 +33,6 @@ export const en = {
   assistant,
   capture,
   gallery,
-  // workspace screens
   palette,
 };
 
