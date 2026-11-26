@@ -1,86 +1,55 @@
-//! Tauri commands exposed to the webview.
+//! Tauri commands exposed to the webviews.
 //!
-//! `rpc_call` is the only door to the backend: it checks the method against an allowlist before
-//! anything reaches the Python process. Notifications travel the other way as the
-//! `rpc://notification` event (see `backend/supervisor.rs`).
+//! `rpc_call` is the only door to the backend: the method must be in the protocol-1 table
+//! ([`crate::backend::methods::METHODS`]) and not reserved for Rust, and the small `capsule`
+//! window may only call the three capture methods it renders. Notifications travel the other
+//! way as the `rpc://notification` event (see `events.rs`).
+//!
+//! `open_path` and `reveal_path` run the checks of [`crate::paths`] and then call
+//! `tauri-plugin-opener` from Rust. The plugin is used as a library and never registered, so the
+//! webview has no opener command to call, whatever a capability file says.
+//!
+//! Every command is also listed in `build.rs` (app manifest) and granted per window in
+//! `capabilities/*.json`.
+
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, State, WebviewWindow};
+use tauri_plugin_log::log;
 
+use crate::backend::methods::{lane_of, RUST_ONLY_METHODS};
 use crate::backend::protocol::{codes, RpcError};
-use crate::backend::supervisor::Supervisor;
+use crate::backend::supervisor::{BackendStatus, Supervisor};
+use crate::installer::{Installer, SetupRunRequest, SetupStatus};
 use crate::paths;
+
+/// Label of the floating recording capsule window.
+pub const CAPSULE_LABEL: &str = "capsule";
+/// The only methods the capsule window may call.
+pub const CAPSULE_METHODS: &[&str] = &["capture.dashboard", "capture.status", "capture.stop"];
 
 pub struct AppState {
     pub supervisor: Supervisor,
-    /// Folders `open_path` and `reveal_path` may touch; the supervisor adds course folders.
-    pub roots: paths::AllowedRoots,
+    /// Folders `open_path` and `reveal_path` may touch; course folders come from `config`.
+    pub roots: Arc<paths::AllowedRoots>,
+    pub installer: Installer,
+    /// `--action` given to the first launch, collected once by the webview.
+    pub pending_action: Mutex<Option<String>>,
 }
 
-/// Exact methods the webview may call (ARCHITECTURE.md section A, protocol 1).
-const ALLOWED_METHODS: &[&str] = &[
-    "system.hello",
-    "system.ping",
-    "system.stats",
-    "session.open",
-    "session.close",
-    "session.setVisible",
-    "watch.subscribe",
-    "watch.unsubscribe",
-    "doctor.get",
-    "provider.status",
-    "provider.login",
-    "config.get",
-    "profile.save",
-    "course.add",
-    "course.edit",
-    "course.link",
-    "course.pending",
-    "course.deferContext",
-    "memory.show",
-    "memory.update",
-    "style.show",
-    "style.preview",
-    "preferences.get",
-    "preferences.saveModels",
-    "models.catalog",
-    "transcription.status",
-    "transcription.run",
-    "notes.plan",
-    "notes.run",
-    "notes.batchStatus",
-    "notes.history",
-    "notes.undo",
-    "notes.restore",
-    "lesson.process",
-    "job.list",
-    "job.get",
-    "job.cancel",
-    "setup.status",
-    "setup.run",
-    "speech.installModel",
-    "speech.verify",
-    "word.verifyRenderer",
-];
-
-/// Families with one method per CLI subcommand (`capture.dashboard`, `queue.enqueue`, …).
-const ALLOWED_PREFIXES: &[&str] = &["capture.", "queue.", "library."];
-
-/// Never callable from the webview, even inside an allowed family.
-const DENIED_METHODS: &[&str] =
-    &["system.shutdown", "capture.run", "queue.run", "queue.worker", "queue.heartbeat", "queue.close"];
-
+/// May the webview call `method`? Known to protocol 1, well formed, not reserved for Rust.
 pub fn is_allowed(method: &str) -> bool {
-    if DENIED_METHODS.contains(&method) {
-        return false;
-    }
-    let well_formed = !method.is_empty() && method.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_');
-    well_formed
-        && (ALLOWED_METHODS.contains(&method)
-            || ALLOWED_PREFIXES.iter().any(|prefix| method.len() > prefix.len() && method.starts_with(prefix)))
+    !RUST_ONLY_METHODS.contains(&method) && lane_of(method).is_some()
 }
 
+/// Per-window rule on top of [`is_allowed`]: the capsule only stops and reads capture.
+pub fn is_allowed_for_window(label: &str, method: &str) -> bool {
+    is_allowed(method) && (label != CAPSULE_LABEL || CAPSULE_METHODS.contains(&method))
+}
+
+/// Error shape every command returns; mirrors JSON-RPC errors (`src/rpc/errors.ts`).
 #[derive(Debug, Serialize)]
 pub struct CommandError {
     pub code: i64,
@@ -95,76 +64,132 @@ impl From<RpcError> for CommandError {
     }
 }
 
+impl CommandError {
+    fn new(code: i64, message: impl Into<String>) -> Self {
+        Self { code, message: message.into(), data: None }
+    }
+}
+
 #[tauri::command]
 pub async fn rpc_call(
+    window: WebviewWindow,
     state: State<'_, AppState>,
     method: String,
     params: Option<Value>,
 ) -> Result<Value, CommandError> {
-    if !is_allowed(&method) {
-        return Err(RpcError::new(codes::METHOD_NOT_ALLOWED, format!("method not allowed: {method}")).into());
+    if !is_allowed_for_window(window.label(), &method) {
+        log::warn!("[Commands] Method refused — {{ method: {method:?}, window: {} }}", window.label());
+        return Err(CommandError::new(codes::METHOD_NOT_ALLOWED, format!("method not allowed: {method}")));
+    }
+    if params.as_ref().is_some_and(|p| !p.is_object()) {
+        return Err(CommandError::new(codes::INVALID_PARAMS, "params must be an object"));
     }
     state.supervisor.call(&method, params).await.map_err(CommandError::from)
 }
 
+#[tauri::command]
+pub fn backend_status(state: State<'_, AppState>) -> BackendStatus {
+    state.supervisor.status()
+}
+
+/// Start the backend again after the failure screen (or after setup installed the runtime).
+#[tauri::command]
+pub fn backend_restart(state: State<'_, AppState>) -> BackendStatus {
+    state.supervisor.restart();
+    state.supervisor.status()
+}
+
+fn path_error(error: paths::PathError) -> CommandError {
+    CommandError::new(codes::INVALID_PARAMS, error.to_string())
+}
+
 /// Open a document with the OS default application, after [`paths::check_openable`].
-///
-/// TODO(opener): hand the checked path to `tauri-plugin-opener` from Rust once it is added.
 #[tauri::command]
 pub fn open_path(state: State<'_, AppState>, path: String) -> Result<(), CommandError> {
-    let checked = paths::check_openable(&path, &state.roots).map_err(|error| CommandError {
-        code: codes::INVALID_PARAMS,
-        message: error.to_string(),
-        data: None,
-    })?;
-    Err(CommandError {
-        code: codes::INTERNAL_ERROR,
-        message: format!("opening is not wired yet: {}", checked.display()),
-        data: None,
-    })
+    let checked = paths::check_openable(&path, &state.roots).map_err(path_error)?;
+    log::info!("[Commands] Opening file — {{ extension: {:?} }}", checked.extension());
+    tauri_plugin_opener::open_path(&checked, None::<&str>)
+        .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not open the file: {error}")))
 }
 
 /// Show a file or folder in the system file manager, after [`paths::check_revealable`].
-///
-/// TODO(opener): `tauri-plugin-opener`'s `reveal_item_in_dir` from Rust.
 #[tauri::command]
 pub fn reveal_path(state: State<'_, AppState>, path: String) -> Result<(), CommandError> {
-    let checked = paths::check_revealable(&path, &state.roots).map_err(|error| CommandError {
+    let checked = paths::check_revealable(&path, &state.roots).map_err(path_error)?;
+    log::info!("[Commands] Revealing path — {{ is_dir: {} }}", checked.is_dir());
+    tauri_plugin_opener::reveal_item_in_dir(&checked)
+        .map_err(|error| CommandError::new(codes::INTERNAL_ERROR, format!("could not show the file: {error}")))
+}
+
+/// First-run state, the same shape as `setupStatusSchema` in `src/rpc/schema.ts`.
+#[tauri::command]
+pub fn setup_status(state: State<'_, AppState>) -> SetupStatus {
+    state.installer.status()
+}
+
+/// Run `setup_runtime.py`; progress arrives as `setup://progress` events.
+#[tauri::command]
+pub fn setup_run(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request: SetupRunRequest,
+) -> Result<SetupStatus, CommandError> {
+    state.installer.run(app, request).map_err(|error| CommandError {
         code: codes::INVALID_PARAMS,
         message: error.to_string(),
-        data: None,
-    })?;
-    Err(CommandError {
-        code: codes::INTERNAL_ERROR,
-        message: format!("revealing is not wired yet: {}", checked.display()),
-        data: None,
+        data: Some(serde_json::json!({ "reason": error.code() })),
     })
+}
+
+/// The `--action` the app was launched with, once (`record-dialog`, `show`).
+#[tauri::command]
+pub fn take_pending_action(state: State<'_, AppState>) -> Option<String> {
+    state.pending_action.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed;
+    use super::*;
 
     #[test]
-    fn allowlist_accepts_known_methods_and_families() {
-        for method in ["system.hello", "notes.run", "capture.dashboard", "queue.status", "library.importAudio"] {
+    fn allowlist_accepts_every_protocol_method_but_shutdown() {
+        for method in
+            ["system.hello", "notes.run", "capture.dashboard", "queue.status", "library.importAudio", "job.wait"]
+        {
             assert!(is_allowed(method), "{method} should be allowed");
         }
+        assert!(!is_allowed("system.shutdown"), "only Rust stops the backend");
     }
 
     #[test]
-    fn allowlist_rejects_unknown_denied_and_malformed_methods() {
+    fn allowlist_rejects_unknown_and_malformed_methods() {
         for method in [
             "",
-            "system.shutdown",
-            "capture.run",
-            "queue.heartbeat",
             "shell.exec",
             "capture.",
             "capture.dash board",
             "notes.run;rm",
+            "capture.run",
+            "queue.heartbeat",
+            "setup.run",
         ] {
             assert!(!is_allowed(method), "{method:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn the_capsule_window_only_reads_and_stops_capture() {
+        assert!(is_allowed_for_window(CAPSULE_LABEL, "capture.stop"));
+        assert!(is_allowed_for_window(CAPSULE_LABEL, "capture.dashboard"));
+        assert!(!is_allowed_for_window(CAPSULE_LABEL, "notes.run"));
+        assert!(!is_allowed_for_window(CAPSULE_LABEL, "system.shutdown"));
+        assert!(is_allowed_for_window("main", "notes.run"));
+    }
+
+    #[test]
+    fn every_capsule_method_exists_in_protocol_one() {
+        for method in CAPSULE_METHODS {
+            assert!(is_allowed(method), "{method} is not a protocol-1 method");
         }
     }
 }

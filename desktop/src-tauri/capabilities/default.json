@@ -1,7 +1,19 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: IPC to the app's own commands and event listening only. No opener, shell or filesystem permission is granted to the webview; paths are opened from Rust after validation.",
+  "description": "Main window: the app's own commands, event listening and the open-file dialog. No opener, shell or filesystem permission is granted to the webview; paths are opened from Rust after validation.",
   "windows": ["main"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "dialog:allow-open",
+    "allow-rpc-call",
+    "allow-backend-status",
+    "allow-backend-restart",
+    "allow-open-path",
+    "allow-reveal-path",
+    "allow-setup-status",
+    "allow-setup-run",
+    "allow-take-pending-action"
+  ]
 }
