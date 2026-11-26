@@ -6,6 +6,7 @@ import argparse
 import os
 import json
 import re
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -27,20 +28,46 @@ from .workspace import Workspace
 from .workflow import WorkflowError, generate_candidate, process, status
 from .providers import ProviderError
 from .asr import ASRError, ASRBusyError
-from .extraction import ExtractionError
 from .ingestion import IngestionError, discover_recordings, recording_for_lecture
-from .sourcepack import SourcePackError, build_source_pack
 from .migration import MigrationError, apply_manifest, build_manifest, load_manifest, save_manifest
 from .integrations import IntegrationError, install_integration
 from .chat import ChatError, launch_chat, login_provider
-from .publication import (
-    PublicationError,
-    build_word_candidate,
-    publication_history,
-    publish_word_candidate,
-    recover_publications,
-    restore_backup,
-)
+
+# Word, PDF and slide libraries load only for the commands that use them, so
+# that quick commands start faster. These names stay importable from here.
+_DEFERRED_NAMES = {
+    "ExtractionError": "extraction",
+    "SourcePackError": "sourcepack",
+    "PublicationError": "publication",
+    "build_word_candidate": "publication",
+    "publication_history": "publication",
+    "publish_word_candidate": "publication",
+    "recover_publications": "publication",
+    "restore_backup": "publication",
+}
+
+
+def __getattr__(name: str) -> Any:
+    module = _DEFERRED_NAMES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+    return getattr(import_module(f"{__package__}.{module}"), name)
+
+
+def _deferred_errors(*names: str) -> tuple[type[BaseException], ...]:
+    """Return the named error classes whose modules are loaded.
+
+    A module that was never imported cannot have raised its error, so matching
+    only loaded classes handles exactly the same exceptions as before.
+    """
+    loaded = (sys.modules.get(f"{__package__}.{_DEFERRED_NAMES[name]}") for name in names)
+    return tuple(getattr(module, name) for module, name in zip(loaded, names) if module is not None)
+
+
+def build_source_pack(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .sourcepack import build_source_pack as build
+    return build(*args, **kwargs)
 
 
 def _workspace(arguments: argparse.Namespace) -> Workspace:
@@ -507,6 +534,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_PARSER: argparse.ArgumentParser | None = None
+
+
+def _shared_parser() -> argparse.ArgumentParser:
+    """Build the parser once per process; parsing never changes it.
+
+    Building it takes tens of milliseconds, which `mynotes serve` would
+    otherwise pay on every in-process command.
+    """
+    global _PARSER
+    if _PARSER is None:
+        _PARSER = build_parser()
+    return _PARSER
+
+
 def _configure(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     store = workspace.configuration_store()
@@ -779,7 +821,7 @@ def _transcription(arguments: argparse.Namespace) -> int:
         result = {"status": "NEEDS_REVIEW", **identity, "message": str(error), "issues": getattr(error, "issues", []), "raw_path": str(getattr(error, "path", ""))}
         print(json.dumps(result, ensure_ascii=False))
         return 4
-    except (ASRError, ConfigurationError, SourcePackError, IngestionError, WorkflowError, OSError, ValueError) as error:
+    except (ASRError, ConfigurationError, *_deferred_errors("SourcePackError"), IngestionError, WorkflowError, OSError, ValueError) as error:
         result = {"status": "FAILED", **identity, "message": str(error)}
         print(json.dumps(result, ensure_ascii=False))
         return 2
@@ -1043,7 +1085,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if os.environ.get("MYNOTES_GENERATION_WORKER") == "1":
         print("Note-writing workers cannot invoke MyNotes. Return the structured notes from the supplied evidence; do not coordinate another workflow.")
         return 3
-    parser = build_parser()
+    parser = _shared_parser()
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "inventory":
@@ -1196,9 +1238,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(build_batch_documents(_workspace(arguments),arguments.batch_id,mode=arguments.mode),ensure_ascii=False,indent=2))
             return 0
         if arguments.command == "build":
+            from .publication import build_word_candidate
             print(json.dumps(build_word_candidate(_workspace(arguments), arguments.lecture_id, mode=arguments.mode), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "publish":
+            from .publication import publish_word_candidate
             candidate = Path(arguments.candidate).expanduser() if arguments.candidate else None
             print(json.dumps(publish_word_candidate(_workspace(arguments), arguments.lecture_id, candidate, accept_current_word=arguments.accept_current_word), ensure_ascii=False, sort_keys=True))
             return 0
@@ -1211,12 +1255,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps(undo_last_update(_workspace(arguments), arguments.course), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "history":
+            from .publication import publication_history
             print(json.dumps(publication_history(_workspace(arguments), arguments.course), ensure_ascii=False, indent=2))
             return 0
         if arguments.command == "restore":
+            from .publication import restore_backup
             print(json.dumps(restore_backup(_workspace(arguments), arguments.backup_id), ensure_ascii=False, sort_keys=True))
             return 0
         if arguments.command == "recover":
+            from .publication import recover_publications
             print(json.dumps(recover_publications(_workspace(arguments)), ensure_ascii=False, indent=2))
             return 0
         if arguments.command in {"codex", "agy", "claude"}:
@@ -1302,7 +1349,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ASRBusyError as error:
         print(json.dumps({"status": "BUSY", "message": str(error), "current": error.state}, ensure_ascii=False))
         return 3
-    except (ConfigurationError, WorkflowError, ProviderError, PublicationError, ChatError, MigrationError, IntegrationError, IngestionError, ASRError, ExtractionError, SourcePackError, OSError, ValueError) as error:
+    except (ConfigurationError, WorkflowError, ProviderError, *_deferred_errors("PublicationError"), ChatError, MigrationError, IntegrationError, IngestionError, ASRError, *_deferred_errors("ExtractionError", "SourcePackError"), OSError, ValueError) as error:
         print(f"mynotes: {error}")
         return 2
     parser.error(f"unsupported command: {arguments.command}")

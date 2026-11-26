@@ -18,9 +18,6 @@ from typing import Any, Iterator
 
 from . import file_lock
 
-from docx import Document
-from docx.oxml.ns import qn
-
 from .configuration import ConfigurationError, effective_style
 from .providers import (
     ProviderAdapter,
@@ -362,6 +359,8 @@ def _replace_block(document: Document, lecture_id: str, notes: dict[str, Any], s
         return
     if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
         raise WorkflowError("Existing lecture boundaries are ambiguous; cumulative document was not changed")
+    from docx import Document
+    from docx.oxml.ns import qn
     temporary = Document()
     _style(temporary, profile)
     _append_lesson(temporary, notes, sources)
@@ -486,6 +485,7 @@ def process(
                     "sources": sources,
                 },
             )
+            from docx import Document
             from .publication import _new_document
             profile = effective_style(configuration, course_code)
             document = Document(target) if target.exists() else _new_document(course, profile)
