@@ -346,6 +346,67 @@ def test_service_unit_quotes_paths_and_mirrors_the_launch_agent(tmp_path):
         capture_linux.unit_text(Path("python3"), workspace, tmp_path)
 
 
+def test_service_unit_carries_the_recorder_settings_of_the_enabling_shell(tmp_path):
+    settings = capture_linux.recorder_environment({"MYNOTES_CAPTURE_SOURCE": "alsa_input.usb-mic", "MYNOTES_CAPTURE_RECORDER": "ffmpeg",
+                                                   "MYNOTES_CAPTURE_NOTIFY": "0", "HOME": "/home/someone"})
+    assert settings == {"MYNOTES_CAPTURE_SOURCE": "alsa_input.usb-mic", "MYNOTES_CAPTURE_RECORDER": "ffmpeg"}
+    text = capture_linux.unit_text(Path("/opt/mynotes/venv/bin/python"), tmp_path / "w", tmp_path / "Capture", settings)
+    assert [line for line in text.splitlines() if line.startswith("Environment=")] == [
+        'Environment="MYNOTES_CAPTURE_NOTIFY=1"', 'Environment="MYNOTES_CAPTURE_RECORDER=ffmpeg"',
+        'Environment="MYNOTES_CAPTURE_SOURCE=alsa_input.usb-mic"']
+    assert capture_linux.recorder_environment({}) == {}
+    with pytest.raises(capture.CaptureError, match="pw-record or ffmpeg"):
+        capture_linux.recorder_environment({"MYNOTES_CAPTURE_RECORDER": "arecord"})
+
+
+def installed_versions(root: Path, *versions: str) -> Path:
+    """`setup_runtime.py`'s layout: versions/<v>/venv/bin/python and a `current` symlink."""
+    for version in versions:
+        python = root / "versions" / version / "venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\n")
+    (root / "current").symlink_to(root / "versions" / versions[0])
+    return root
+
+
+def test_the_service_names_the_current_version_of_an_installed_runtime(tmp_path):
+    app = installed_versions(tmp_path / "app", "0.4.1", "0.4.2")
+    selected = app / "versions/0.4.1/venv/bin/python"
+    assert capture_linux.stable_python(selected) == app / "current/venv/bin/python"
+    other = app / "versions/0.4.2/venv/bin/python"  # Installed, but not the one `current` selects.
+    assert capture_linux.stable_python(other) == other
+    checkout = tmp_path / "checkout/.venv/bin/python"
+    assert capture_linux.stable_python(checkout) == checkout
+
+
+def test_enable_rewrites_and_restarts_a_running_service_whose_unit_is_outdated(store, monkeypatch, tmp_path):
+    """After an update the old unit named versions/<old>/…/python; `capture enable` must not answer alreadyRunning."""
+    app = installed_versions(tmp_path / "app", "0.4.2")
+    monkeypatch.setattr(sys, "executable", str(app / "versions/0.4.2/venv/bin/python"))
+    monkeypatch.setattr(capture_linux, "recorder_available", lambda: True)
+    monkeypatch.setattr(capture_linux, "capture_status", lambda _store: {"running": True})
+    monkeypatch.delenv("MYNOTES_CAPTURE_SOURCE", raising=False)
+    monkeypatch.delenv("MYNOTES_CAPTURE_RECORDER", raising=False)
+    home = capture.runtime_home().resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    workspace = store.workspace.root.resolve()
+    (home / "active.json").write_text(json.dumps({"workspace": str(workspace)}))
+    unit = capture_linux.unit_path()
+    unit.parent.mkdir(parents=True, exist_ok=True)
+    unit.write_text(capture_linux.unit_text(app / "versions/0.4.1/venv/bin/python", workspace, home))
+    run, calls = fake_systemctl()
+    assert capture_linux.set_enabled(store, True, systemctl=run) == {"status": "ENABLED", "audioReadinessVerified": False}
+    assert calls == [("daemon-reload",), ("enable", "mynotes-capture.service"), ("restart", "mynotes-capture.service")]
+    assert f'ExecStart="{app / "current/venv/bin/python"}"' in unit.read_text()
+    calls.clear()
+    assert capture_linux.set_enabled(store, True, systemctl=run) == {"status": "ENABLED", "alreadyRunning": True}
+    assert calls == []  # Up to date: nothing to restart.
+    monkeypatch.setenv("MYNOTES_CAPTURE_SOURCE", "alsa_input.usb-mic")  # A new recorder setting is a change too.
+    assert "alreadyRunning" not in capture_linux.set_enabled(store, True, systemctl=run)
+    assert calls[-1] == ("restart", "mynotes-capture.service")
+    assert 'Environment="MYNOTES_CAPTURE_SOURCE=alsa_input.usb-mic"' in unit.read_text().splitlines()
+
+
 def fake_systemctl(fail=None):
     calls = []
 
