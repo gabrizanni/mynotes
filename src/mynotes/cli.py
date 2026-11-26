@@ -531,6 +531,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("message", nargs="?", help="optional natural-language request")
     login = subparsers.add_parser("provider-login", help="open the selected agent's sign-in flow")
     login.add_argument("--provider", choices=("codex", "agy", "claude"), required=True)
+    serve = subparsers.add_parser("serve", help="answer a desktop app's JSON-RPC requests in one long-lived process")
+    serve.add_argument("--stdio", action="store_true", help="newline-delimited JSON-RPC 2.0 on stdin and stdout")
+    serve.add_argument("--workspace", help="private workspace path")
+    serve.add_argument("--list-methods", action="store_true", help="print the method table without serving")
+    serve.add_argument("--json", action="store_true", help="machine-readable method table")
     return parser
 
 
@@ -1292,6 +1297,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return launch_chat(workspace, configuration, arguments.provider, arguments.message)
         if arguments.command == "provider-login":
             return login_provider(arguments.provider)
+        if arguments.command == "serve":
+            from .serve import run_cli as run_serve
+            return run_serve(arguments)
         if arguments.command == "doctor":
             from .onboarding import doctor
             workspace = Workspace.from_value(arguments.workspace)
