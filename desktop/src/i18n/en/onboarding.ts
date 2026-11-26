@@ -154,7 +154,8 @@ export const onboarding = {
   course: {
     lede: "Start with one course. Add the others later.",
     name: "Course name",
-    namePlaceholder: "Statistics",
+    namePlaceholder: "For example, Statistics",
+    sampleCourse: "Statistics",
     nameHint: "As it appears in your timetable.",
     nameRequired: "Add a name to continue.",
     nameTooLong: "Use 80 characters or fewer.",

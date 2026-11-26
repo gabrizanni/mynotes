@@ -356,7 +356,7 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
         emitDashboard();
         later(MIC_TEST_MS, () => {
           if (!isObject(board.runtime)) return;
-          board.runtime = { ...board.runtime, recording: false, exporting: true };
+          board.runtime = { ...board.runtime, recording: false, exporting: true, currentSession: { ...session, status: "EXPORTING" } };
           emitDashboard();
           later(1200, () => {
             if (!isObject(board.runtime)) return;

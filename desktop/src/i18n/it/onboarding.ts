@@ -155,7 +155,8 @@ export const onboarding: Messages["onboarding"] = {
   course: {
     lede: "Inizia con un corso. Gli altri li aggiungi dopo.",
     name: "Nome del corso",
-    namePlaceholder: "Statistica",
+    namePlaceholder: "Per esempio, Statistica",
+    sampleCourse: "Statistica",
     nameHint: "Come appare nel tuo orario.",
     nameRequired: "Aggiungi un nome per continuare.",
     nameTooLong: "Usa al massimo 80 caratteri.",

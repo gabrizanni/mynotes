@@ -120,6 +120,23 @@ export function FilesStep() {
         </Banner>
       )}
 
+      {question && folder && (
+        <div className={styles.stack}>
+          <ChoiceCards
+            label={f.question}
+            columns={1}
+            options={question.options.map((option) => ({ value: option, title: baseName(option), description: option }))}
+            value={choice}
+            onChange={(value) => {
+              setChoice(value);
+              setLinkError(false);
+              void run(folder.path, value, question);
+            }}
+          />
+          <p className={styles.note}>{f.questionHint}</p>
+        </div>
+      )}
+
       {current && (
         <Card title={f.previewTitle} padding="md">
           <List>
@@ -146,23 +163,6 @@ export function FilesStep() {
             )}
           </List>
         </Card>
-      )}
-
-      {question && folder && (
-        <div className={styles.stack}>
-          <ChoiceCards
-            label={f.question}
-            columns={1}
-            options={question.options.map((option) => ({ value: option, title: baseName(option), description: option }))}
-            value={choice}
-            onChange={(value) => {
-              setChoice(value);
-              setLinkError(false);
-              void run(folder.path, value, question);
-            }}
-          />
-          <p className={styles.note}>{f.questionHint}</p>
-        </div>
       )}
 
       {folder && (

@@ -1,5 +1,5 @@
 import { ArrowLeft, type LucideIcon } from "lucide-react";
-import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type FormEvent, type ReactNode } from "react";
 
 import { Button } from "../../components";
 import { cx } from "../../design/cx";
@@ -61,7 +61,8 @@ export function StepLayout({ title, lede, display = false, width = "narrow", pri
     heading.current?.focus({ preventScroll: true });
   }, [step]);
 
-  useEffect(() => {
+  // Listening before paint: Enter or Esc pressed as the step appears is never lost.
+  useLayoutEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const intent = keyIntent(event.key, describe(event.target), {
         defaultPrevented: event.defaultPrevented,

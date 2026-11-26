@@ -175,7 +175,7 @@ export function StylePreview({ style, course, notesLanguage }: { style: StyleDra
         <span id="style-preview-label">{ui.label}</span>
       </div>
       <div className={styles.paper} lang={notesLanguage}>
-        <p className={styles.paperKicker}>{doc.lesson(course || t.onboarding.course.namePlaceholder)}</p>
+        <p className={styles.paperKicker}>{doc.lesson(course || t.onboarding.course.sampleCourse)}</p>
         <p className={styles.paperHeading}>{doc.heading}</p>
         {style.layout !== "lists" && <p className={styles.paperText}>{style.layout === "balanced" ? doc.prose[style.detail === "detailed" ? "clear" : "concise"] : doc.prose[style.detail]}</p>}
         {style.layout !== "prose" && (

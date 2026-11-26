@@ -78,8 +78,9 @@ test("first launch walks all 13 steps, drafts answers and saves them once setup 
 
   await expect(heading(page, "Let MyNotes hear your lectures")).toBeVisible();
   await page.getByRole("button", { name: "Test microphone" }).click();
-  await expect(page.getByText("Recording", { exact: true })).toBeVisible();
-  await page.clock.fastForward(63_000);
+  await expect(page.getByRole("timer")).toBeVisible();
+  await page.clock.fastForward(61_000);
+  await page.clock.fastForward(2_000);
   await expect(page.getByText("Do you hear yourself clearly?")).toBeVisible();
   await page.getByRole("button", { name: "Yes, I hear it" }).click();
   await expect(page.getByText("Play the test before you confirm.")).toBeVisible();
@@ -120,9 +121,10 @@ test("an installed MyNotes opens Today, not onboarding", async ({ page }) => {
 test("Enter runs the primary action and Esc goes back", async ({ page }) => {
   await seed(page, null);
   await page.goto("/?lang=en&scenario=first-run&simulate=0#/welcome/language");
-  await expect(heading(page, "Your lectures, turned into study notes.")).toBeVisible();
+  // Focus lands on the heading once the step's effects (and key listeners) are in place.
+  await expect(heading(page, "Your lectures, turned into study notes.")).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(heading(page, "Choose your AI assistant")).toBeVisible();
+  await expect(heading(page, "Choose your AI assistant")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(heading(page, "Your lectures, turned into study notes.")).toBeVisible();
 });
