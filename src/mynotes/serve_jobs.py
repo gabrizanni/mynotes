@@ -3,7 +3,10 @@
 Each job is `python -I -X utf8 -m mynotes.rpc_job --record R -- <cli args>`
 in its own session (Unix) or Windows job object. Its stdout and stderr go to
 files beside the record in `state/desktop-jobs/`, never to pipes, so a job
-keeps running when the server stops. The server tails the stderr file:
+keeps running when the server stops. On Windows the job breaks away from the
+server's own job object (the desktop supervisor allows it) into a job object
+without kill-on-close: neither quitting the app nor restarting the server
+ends it, and `job.cancel` still terminates its tree. The server tails the stderr file:
 JSON lines with a "stage" become `job.progress`, other lines `job.output`.
 After the job exits, its stdout is the result, mapped like any CLI call.
 
@@ -26,7 +29,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import file_lock
+from . import file_lock, provider_process
 from .cli_invoke import Invocation
 from .serve_methods import JOB_NOT_FOUND, RpcError, cli_result, remove
 from .utils import atomic_json_write
@@ -169,12 +172,7 @@ class JobManager:
         try:
             with open(job.sibling(".out"), "wb") as stdout, open(job.sibling(".err"), "wb") as stderr:
                 options = dict(stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, cwd=str(Path(self.workspace).expanduser()))
-                if os.name == "nt":
-                    from .provider_process import WindowsJob
-                    job.windows_job = WindowsJob()
-                    job.process = job.windows_job.start(command, **options)
-                else:
-                    job.process = subprocess.Popen(command, start_new_session=True, **options)
+                self._spawn(job, command, options)
         except BaseException:
             remove(list(request_files))
             if job.windows_job is not None:
@@ -188,6 +186,19 @@ class JobManager:
         self.notify("job.started", {"jobId": identifier, "method": method, "params": params, "pid": job.process.pid})
         threading.Thread(target=self._monitor, args=(job,), name=f"job-{identifier}", daemon=True).start()
         return job.public()
+
+    @staticmethod
+    def _spawn(job: Job, command: list[str], options: dict) -> None:
+        if not provider_process.WINDOWS:
+            job.process = subprocess.Popen(command, start_new_session=True, **options)
+            return
+        # No kill-on-close: this server's exit must not end a paid run. The
+        # handle stays for job.cancel, which terminates the job's whole tree.
+        job.windows_job = provider_process.WindowsJob(kill_on_close=False)
+        job.process = job.windows_job.start(command, breakaway=True, **options)
+        if not job.windows_job.broke_away:
+            print(f"mynotes serve: job {job.id}: the parent job object refuses breakaway; "
+                  "this job ends when the app does", file=sys.stderr)
 
     # Queries -------------------------------------------------------------
     def get(self, identifier: str) -> Job:
@@ -252,21 +263,24 @@ class JobManager:
                 pass
 
     def _interrupt(self, job: Job) -> None:
-        if os.name == "nt":
+        if provider_process.WINDOWS:
             job.sibling(".cancel").touch()
         else:
             self._signal(job, signal.SIGINT)
 
     def _terminate(self, job: Job) -> None:
-        if os.name != "nt":
+        if not provider_process.WINDOWS:
             self._signal(job, signal.SIGTERM)
 
     def _kill_tree(self, job: Job) -> None:
-        if os.name == "nt":
+        if provider_process.WINDOWS:
             if job.windows_job is not None:
-                job.windows_job.close()
+                job.windows_job.terminate()  # The job object has no kill-on-close: closing it would not stop it.
             else:
-                self._signal(job, signal.SIGTERM)  # TerminateProcess
+                # Reattached after a restart, without the job object's handle:
+                # TerminateProcess. Agent CLIs run in kill-on-close job objects
+                # that this process holds, so they end with it.
+                self._signal(job, signal.SIGTERM)
             return
         pid = job.pid()
         if not pid or not job.alive():

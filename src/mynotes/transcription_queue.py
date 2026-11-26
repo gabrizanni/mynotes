@@ -678,9 +678,12 @@ def launch_runner(workspace):
     if not needed:
         return None
     root(workspace).mkdir(parents=True, exist_ok=True, mode=0o700)
+    from .provider_process import popen_detached
     with (root(workspace) / "runner.log").open("ab") as log:
-        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-        return subprocess.Popen(_worker_command(workspace, "run"), stdin=subprocess.DEVNULL, stdout=log, stderr=log, **options)
+        # Outside the caller's session or job object: the runner keeps the queue
+        # going when the app or `mynotes serve` that started it exits.
+        return popen_detached(_worker_command(workspace, "run"), popen=subprocess.Popen,
+                              stdin=subprocess.DEVNULL, stdout=log, stderr=log)
 
 
 @contextmanager

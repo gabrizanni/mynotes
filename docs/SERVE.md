@@ -160,8 +160,26 @@ interrupt is SIGINT and the termination SIGTERM; both become
 interrupt paths (a notes run saves its work and reports `INTERRUPTED`), and
 code that installs its own SIGTERM handler while an agent or a transcription
 engine runs keeps it. On Windows the job has no console for CTRL_BREAK: the
-server creates a cancel file that the job watches, and the last step closes
-the job object. `force: true` kills at once. A cancelled job ends `CANCELLED`.
+server creates a cancel file that the job watches, and the last step
+terminates the job object (`TerminateJobObject`), which ends the job's whole
+tree. A server started after the job has no handle to that object: its last
+step terminates the job's process, and the agent CLIs the job started end
+with it, because each runs in a kill-on-close job object that the job's
+process holds. `force: true` kills at once. A cancelled job ends `CANCELLED`.
+
+**Windows: what keeps a job alive.** The job is created with
+`CREATE_BREAKAWAY_FROM_JOB`, so it leaves the job object that holds
+`mynotes serve`, and is then put in its own job object without
+kill-on-close: quitting the app, a server restart or a server crash does not
+end it. The MyNotes desktop supervisor allows this by setting
+`JOB_OBJECT_LIMIT_BREAKAWAY_OK` on its own job object, which keeps
+kill-on-close for the server itself and for assistant replies. The queue
+runner is started the same way. When the parent's job object refuses
+breakaway (a terminal, a CI runner, another app), the job starts inside it,
+ends with it, and the server logs one line to stderr. On Linux,
+`tests/test_windows_breakaway.py` checks the flags, the job limits, the
+fallback and each cancel step; that a job outlives the app is observable only
+on Windows and has not been run there yet.
 
 **Restart.** Each job holds `<id>.json.lock` for its whole life and writes
 `<id>.json.exit` last. A restarted server watches again every job whose lock
