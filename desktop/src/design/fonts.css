@@ -1,0 +1,30 @@
+/*
+ * Bundled OFL fonts (no CDN). Sources and subsetting: src/assets/fonts/README.md.
+ * - EB Garamond, static 500: serif headings at 24 px and above only.
+ * - Figtree, variable 400–600: every UI string.
+ * - JetBrains Mono, static 400: timestamps and diagnostics.
+ */
+@font-face {
+  font-family: "EB Garamond";
+  src: url("../assets/fonts/eb-garamond/EBGaramond-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Figtree";
+  src: url("../assets/fonts/figtree/Figtree-Variable.woff2") format("woff2-variations"),
+    url("../assets/fonts/figtree/Figtree-Variable.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../assets/fonts/jetbrains-mono/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

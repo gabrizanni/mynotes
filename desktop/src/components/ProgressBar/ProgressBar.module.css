@@ -1,0 +1,50 @@
+.progress {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.label {
+  font: var(--text-label);
+  color: var(--color-text-primary);
+}
+
+.value {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-emphasis);
+  overflow: hidden;
+}
+
+.fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-action-primary);
+  transform-origin: left center;
+  transition: transform var(--duration-base) var(--ease-standard);
+}
+
+.inverse .label {
+  color: var(--color-text-on-inverse);
+}
+.inverse .value {
+  color: var(--color-text-on-inverse-muted);
+}
+.inverse .track {
+  background: var(--color-on-inverse-line);
+}
+.inverse .fill {
+  background: var(--color-text-on-inverse);
+}

@@ -1,0 +1,84 @@
+.region {
+  position: fixed;
+  z-index: 50;
+  left: calc(var(--sidebar-width) + var(--space-6));
+  bottom: var(--space-6);
+  display: grid;
+  gap: var(--space-2);
+  width: min(420px, calc(100vw - var(--sidebar-width) - 48px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border-radius: 14px;
+  background: var(--color-capsule-bg);
+  color: var(--color-capsule-text);
+  box-shadow: var(--shadow-e3);
+  pointer-events: auto;
+  animation: toast-in var(--duration-base) var(--ease-standard);
+}
+
+.icon {
+  flex: none;
+  color: var(--color-capsule-muted);
+}
+.success .icon {
+  color: var(--color-capsule-success);
+}
+.warning .icon {
+  color: var(--color-capsule-warning);
+}
+.danger .icon {
+  color: var(--color-capsule-rec);
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+  font: var(--text-body);
+}
+
+.action {
+  flex: none;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-capsule-link);
+  font: var(--text-button-sm);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.action:hover,
+.dismiss:hover {
+  background: var(--color-capsule-hover);
+}
+
+.dismiss {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-capsule-muted);
+}
+
+.toast :focus-visible {
+  outline-color: var(--color-capsule-link);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-enter-offset));
+  }
+}

@@ -1,0 +1,51 @@
+.stepper {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-height);
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-input);
+  background: var(--color-bg-card);
+}
+
+.step {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.step:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.step:last-child {
+  border-radius: 0 7px 7px 0;
+}
+
+.step:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.step:disabled {
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+.value {
+  min-width: 48px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  border-inline: 1px solid var(--color-border-hairline);
+  font: var(--text-body-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.value:focus-visible {
+  outline-offset: -2px;
+  border-radius: 2px;
+}

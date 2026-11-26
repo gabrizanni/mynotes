@@ -1,0 +1,163 @@
+/* Global reset, base typography, focus ring and motion rules. Imported once by main.tsx. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg-canvas);
+  color: var(--color-text-primary);
+  font: var(--text-body);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-kerning: normal;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+figure,
+dl,
+dd {
+  margin: 0;
+}
+
+:where(ul[role="list"], ol[role="list"]) {
+  list-style: none;
+  padding: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+}
+
+::selection {
+  background: var(--color-action-soft);
+  color: var(--color-text-primary);
+}
+
+/* One focus style everywhere: 2 px ring, 2 px offset, keyboard only. */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Inverse surfaces (hero, dark panel) swap the ring to a light blue that stays visible. */
+.surface-inverse {
+  --color-focus: var(--color-focus-on-inverse);
+}
+
+/* Type scale. Serif only at 24 px and up; everything else is Figtree. */
+.type-display,
+.type-h1,
+.type-h2 {
+  letter-spacing: var(--tracking-serif);
+  color: var(--color-text-brand);
+  text-wrap: balance;
+}
+.type-display {
+  font: var(--text-display);
+}
+.type-h1 {
+  font: var(--text-h1);
+}
+.type-h2 {
+  font: var(--text-h2);
+}
+.type-title {
+  font: var(--text-title);
+}
+.type-heading {
+  font: var(--text-heading);
+}
+.type-body {
+  font: var(--text-body);
+}
+.type-small {
+  font: var(--text-small);
+}
+.type-label {
+  font: var(--text-label);
+}
+.type-caption {
+  font: var(--text-caption);
+}
+.type-mono {
+  font: var(--text-mono);
+  font-variant-numeric: tabular-nums;
+}
+.text-muted {
+  color: var(--color-text-muted);
+}
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Quiet scrollbars that still show where you are. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

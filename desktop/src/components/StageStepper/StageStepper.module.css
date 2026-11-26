@@ -1,0 +1,101 @@
+.stepper {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+}
+
+/* Connector between markers. */
+.stage + .stage::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: -14px;
+  height: 28px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-border-hairline);
+}
+
+.stage.done + .stage::before {
+  background: var(--color-success);
+  opacity: 0.45;
+}
+
+.marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-bg-card);
+  box-shadow: inset 0 0 0 1.5px var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.done .marker {
+  background: var(--color-success-bg);
+  box-shadow: none;
+  color: var(--color-success);
+}
+
+.current .marker {
+  box-shadow: inset 0 0 0 2px var(--color-action-primary);
+}
+
+.current .marker::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-action-primary);
+  animation: breathe 1.8s var(--ease-standard) infinite;
+}
+
+.label {
+  font: var(--text-body);
+  color: var(--color-text-muted);
+}
+
+.done .label {
+  color: var(--color-text-primary);
+}
+
+.current .label {
+  font: var(--text-body-strong);
+  color: var(--color-text-primary);
+}
+
+.time {
+  font: var(--text-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+}
+
+.current .time {
+  color: var(--color-text-primary);
+}
+
+@keyframes breathe {
+  50% {
+    transform: scale(0.6);
+    opacity: 0.6;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .current .marker::after {
+    animation: none;
+  }
+}

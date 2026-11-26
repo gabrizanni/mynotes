@@ -1,0 +1,74 @@
+.wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-card);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e1), 0 0 0 1px var(--color-border-hairline);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--text-body);
+}
+
+.table thead th {
+  height: 40px;
+  padding: 0 var(--space-4);
+  font: var(--text-caption);
+  color: var(--color-text-muted);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--color-border-hairline);
+}
+
+.table td,
+.table tbody th {
+  height: var(--row-height);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border-hairline);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td,
+.table tbody tr:last-child th {
+  border-bottom: 0;
+}
+
+.table tbody tr {
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.table tbody tr:hover {
+  background: var(--color-bg-hover);
+}
+
+.selected {
+  background: var(--color-action-soft);
+}
+
+.table tbody tr.selected:hover {
+  background: var(--color-action-soft-hover);
+}
+
+.end {
+  text-align: right !important;
+}
+
+.check {
+  width: 48px;
+}
+
+.checkbox {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--color-action-primary);
+  cursor: pointer;
+}
+
+.table tbody th {
+  font: var(--text-body-strong);
+  text-align: left;
+  color: var(--color-text-primary);
+}

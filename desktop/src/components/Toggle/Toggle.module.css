@@ -1,0 +1,80 @@
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: var(--row-height);
+}
+
+.text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.label {
+  font: var(--text-body-strong);
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+
+.description {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.switch {
+  position: relative;
+  flex: none;
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-border-strong);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e1), 0 0 0 0.5px var(--color-border-strong);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.switch[aria-checked="true"] {
+  background: var(--color-action-primary);
+}
+
+.switch[aria-checked="true"]::after {
+  transform: translateX(16px);
+}
+
+.switch:disabled {
+  opacity: 0.45;
+}
+
+/* Off and on also differ by thumb position, never by color alone. */
+.mark {
+  position: absolute;
+  top: 50%;
+  left: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-bg-card);
+  transform: translateY(-50%);
+  opacity: 0;
+}
+
+.switch[aria-checked="true"] .mark {
+  opacity: 1;
+  border-color: var(--color-action-primary-label);
+  background: var(--color-action-primary-label);
+}

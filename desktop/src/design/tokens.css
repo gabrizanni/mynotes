@@ -1,0 +1,244 @@
+/*
+ * MyNotes Desktop design tokens. Values come from docs/UX-SPEC.md §4; contrast ratios are
+ * noted where the spec measured them. Components read only these custom properties: no raw
+ * hex values outside this file.
+ *
+ * Theme: light by default, dark when the OS asks for it, unless <html data-theme> overrides.
+ * The dark block is written twice on purpose (OS-follow and manual override) because
+ * light-dark() is missing from older WebKitGTK builds that Tauri uses on Linux.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --color-bg-canvas: #fff8ed; /* Paper */
+  --color-bg-sunken: #f6ecdc; /* sidebar */
+  --color-bg-card: #fffdf8; /* cards, inputs */
+  --color-bg-emphasis: #efe3cf; /* deep cream */
+  --color-bg-inverse: #163b66; /* hero, dark panel */
+  --color-bg-hover: rgba(19, 35, 58, 0.05);
+  --color-bg-pressed: rgba(19, 35, 58, 0.09);
+  --color-scrim: rgba(19, 35, 58, 0.36);
+
+  /* Text */
+  --color-text-primary: #13233a; /* 14.97 on canvas */
+  --color-text-brand: #163b66; /* serif headings, 10.75 */
+  --color-text-muted: #5b6472; /* 5.67 canvas, 4.72 emphasis */
+  --color-text-on-inverse: #fff8ed; /* 10.75 */
+  --color-text-on-inverse-muted: #c9d6e6;
+  --color-link-on-inverse: #8cc8ff; /* 6.38 */
+  --color-on-inverse-hover: rgba(255, 248, 237, 0.1);
+  --color-on-inverse-fill: rgba(255, 248, 237, 0.12);
+  --color-on-inverse-line: rgba(255, 248, 237, 0.16);
+
+  /* Actions */
+  --color-action-primary: #163b66;
+  --color-action-primary-label: #fff8ed; /* 10.75 */
+  --color-action-primary-hover: #1e4a7e;
+  --color-action-primary-pressed: #102d4f;
+  --color-action-soft: #dde8f6; /* selected nav, user bubble */
+  --color-action-soft-hover: #d0def1;
+  --color-action-soft-label: #163b66; /* 9.15 */
+
+  /* Lines and focus */
+  --color-focus: #2b67c6; /* 5.16, 2 px ring with 2 px offset */
+  --color-focus-on-inverse: #8cc8ff;
+  --color-border-hairline: rgba(19, 35, 58, 0.12);
+  --color-border-strong: rgba(19, 35, 58, 0.24);
+  --color-border-input: #9c8e78; /* 3.04, meets WCAG 1.4.11 */
+
+  /* Meaning (text on tint) */
+  --color-success: #1d6b40;
+  --color-success-bg: #e2f2e7; /* 5.6 */
+  --color-warning: #8a4b00;
+  --color-warning-bg: #fbebcf; /* 5.79 */
+  --color-danger: #b42318; /* also recording */
+  --color-danger-bg: #fbe4e0; /* 5.41 */
+  --color-on-danger: #fff8ed; /* label on a filled danger button, 5.9 */
+  --color-info: #163b66;
+  --color-info-bg: #dde8f6;
+  --color-neutral: #5b6472;
+  --color-neutral-bg: rgba(19, 35, 58, 0.06);
+
+  /* Ornament only: never text, never the only state cue (2.53 on canvas). */
+  --color-accent-coral: #f47b62;
+
+  /* The recording capsule stays dark in both themes. */
+  --color-capsule-bg: #13233a;
+  --color-capsule-text: #fff8ed; /* 14.97 */
+  --color-capsule-muted: #b9c4d3;
+  --color-capsule-rec: #ff8f80;
+  --color-capsule-success: #6cd39a;
+  --color-capsule-warning: #f2b84b;
+  --color-capsule-link: #8cc8ff;
+  --color-capsule-hover: rgba(255, 248, 237, 0.1);
+
+  /* Type */
+  --font-serif: "EB Garamond", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --font-sans: "Figtree", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  --text-display: 500 40px/48px var(--font-serif);
+  --text-h1: 500 32px/40px var(--font-serif);
+  --text-h2: 500 24px/32px var(--font-serif);
+  --text-title: 600 20px/28px var(--font-sans);
+  --text-heading: 600 16px/24px var(--font-sans);
+  --text-body: 400 15px/22px var(--font-sans);
+  --text-body-strong: 500 15px/22px var(--font-sans);
+  --text-small: 400 13px/20px var(--font-sans);
+  --text-label: 600 13px/16px var(--font-sans);
+  --text-caption: 500 12px/16px var(--font-sans); /* 12 px is the floor */
+  --text-mono: 400 13px/20px var(--font-mono);
+  /* Derived: button labels sit between Body and Heading. */
+  --text-button: 600 15px/20px var(--font-sans);
+  --text-button-sm: 600 13px/16px var(--font-sans);
+  --tracking-serif: -0.01em;
+
+  /* Spacing (4 px base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Radii */
+  --radius-inner: 6px;
+  --radius-input: 8px;
+  --radius-button: 12px;
+  --radius-card: 16px;
+  --radius-dialog: 20px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-e0: 0 0 0 1px var(--color-border-hairline);
+  --shadow-e1: 0 1px 2px rgba(60, 40, 10, 0.06);
+  --shadow-e2: 0 8px 24px rgba(60, 40, 10, 0.12);
+  --shadow-e3: 0 16px 48px rgba(22, 59, 102, 0.18);
+
+  /* Motion */
+  --duration-fast: 150ms; /* hover, press */
+  --duration-base: 240ms; /* panels, dialogs */
+  --duration-slow: 320ms; /* capsule expand, step change */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --motion-enter-offset: 6px;
+  --motion-enter-scale: 0.97;
+
+  /* Layout */
+  --sidebar-width: 232px;
+  --content-max: 1040px;
+  --reading-max: 760px;
+  --dock-width: 400px;
+  --dock-min: 360px;
+  --dock-max: 560px;
+  --control-height: 40px;
+  --control-height-sm: 32px;
+  --row-height: 48px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --color-bg-canvas: #0e1726;
+    --color-bg-sunken: #0a121d;
+    --color-bg-card: #16233a;
+    --color-bg-emphasis: #1d2d47;
+    --color-bg-inverse: #24406a;
+    --color-bg-hover: rgba(243, 235, 221, 0.06);
+    --color-bg-pressed: rgba(243, 235, 221, 0.1);
+    --color-scrim: rgba(3, 8, 15, 0.6);
+    --color-text-primary: #f3ebdd; /* 15.17 */
+    --color-text-brand: #f3ebdd;
+    --color-text-muted: #a7b1c0; /* 8.29 */
+    --color-text-on-inverse: #f3ebdd;
+    --color-text-on-inverse-muted: #c2cddc;
+    --color-link-on-inverse: #a9d6ff;
+    --color-action-primary: #8cc8ff;
+    --color-action-primary-label: #0b1a2c; /* 9.86 */
+    --color-action-primary-hover: #a9d6ff;
+    --color-action-primary-pressed: #78b6f0;
+    --color-action-soft: rgba(140, 200, 255, 0.14);
+    --color-action-soft-hover: rgba(140, 200, 255, 0.2);
+    --color-action-soft-label: #b9dcff;
+    --color-focus: #8cc8ff;
+    --color-focus-on-inverse: #a9d6ff;
+    --color-border-hairline: rgba(243, 235, 221, 0.1);
+    --color-border-strong: rgba(243, 235, 221, 0.2);
+    --color-border-input: #5b6e8c; /* 3.47 */
+    --color-success: #6cd39a;
+    --color-success-bg: rgba(108, 211, 154, 0.14);
+    --color-warning: #f2b84b;
+    --color-warning-bg: rgba(242, 184, 75, 0.14);
+    --color-danger: #ff8f80;
+    --color-danger-bg: rgba(255, 143, 128, 0.14);
+    --color-on-danger: #2a0d0a;
+    --color-info: #8cc8ff;
+    --color-info-bg: rgba(140, 200, 255, 0.14);
+    --color-neutral: #a7b1c0;
+    --color-neutral-bg: rgba(243, 235, 221, 0.08);
+    --shadow-e0: 0 0 0 1px var(--color-border-hairline);
+    --shadow-e1: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 48px rgba(0, 0, 0, 0.4);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-bg-canvas: #0e1726;
+  --color-bg-sunken: #0a121d;
+  --color-bg-card: #16233a;
+  --color-bg-emphasis: #1d2d47;
+  --color-bg-inverse: #24406a;
+  --color-bg-hover: rgba(243, 235, 221, 0.06);
+  --color-bg-pressed: rgba(243, 235, 221, 0.1);
+  --color-scrim: rgba(3, 8, 15, 0.6);
+  --color-text-primary: #f3ebdd;
+  --color-text-brand: #f3ebdd;
+  --color-text-muted: #a7b1c0;
+  --color-text-on-inverse: #f3ebdd;
+  --color-text-on-inverse-muted: #c2cddc;
+  --color-link-on-inverse: #a9d6ff;
+  --color-action-primary: #8cc8ff;
+  --color-action-primary-label: #0b1a2c;
+  --color-action-primary-hover: #a9d6ff;
+  --color-action-primary-pressed: #78b6f0;
+  --color-action-soft: rgba(140, 200, 255, 0.14);
+  --color-action-soft-hover: rgba(140, 200, 255, 0.2);
+  --color-action-soft-label: #b9dcff;
+  --color-focus: #8cc8ff;
+  --color-focus-on-inverse: #a9d6ff;
+  --color-border-hairline: rgba(243, 235, 221, 0.1);
+  --color-border-strong: rgba(243, 235, 221, 0.2);
+  --color-border-input: #5b6e8c;
+  --color-success: #6cd39a;
+  --color-success-bg: rgba(108, 211, 154, 0.14);
+  --color-warning: #f2b84b;
+  --color-warning-bg: rgba(242, 184, 75, 0.14);
+  --color-danger: #ff8f80;
+  --color-danger-bg: rgba(255, 143, 128, 0.14);
+  --color-on-danger: #2a0d0a;
+  --color-info: #8cc8ff;
+  --color-info-bg: rgba(140, 200, 255, 0.14);
+  --color-neutral: #a7b1c0;
+  --color-neutral-bg: rgba(243, 235, 221, 0.08);
+  --shadow-e0: 0 0 0 1px var(--color-border-hairline);
+  --shadow-e1: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-e2: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-e3: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+/* Reduced motion: opacity-only at 150 ms, no movement, no pulsing (see base.css). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-base: 150ms;
+    --duration-slow: 150ms;
+    --motion-enter-offset: 0px;
+    --motion-enter-scale: 1;
+  }
+}

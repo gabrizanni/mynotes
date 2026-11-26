@@ -1,0 +1,70 @@
+.card {
+  min-width: 0;
+  border-radius: var(--radius-card);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-e1), 0 0 0 1px var(--color-border-hairline);
+  color: var(--color-text-primary);
+}
+
+.emphasis {
+  background: var(--color-bg-emphasis);
+  box-shadow: none;
+}
+
+.inverse {
+  background: var(--color-bg-inverse);
+  box-shadow: none;
+  color: var(--color-text-on-inverse);
+}
+
+.padMd {
+  padding: var(--space-6);
+}
+.padLg {
+  padding: var(--space-8);
+}
+.padNone {
+  padding: 0;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.header:last-child {
+  margin-bottom: 0;
+}
+
+.padNone > .header {
+  padding: var(--space-5) var(--space-6) 0;
+  margin-bottom: var(--space-3);
+}
+
+.heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
+  font: var(--text-heading);
+}
+
+.description {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.inverse .description {
+  color: var(--color-text-on-inverse-muted);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-2);
+}

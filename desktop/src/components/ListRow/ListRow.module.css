@@ -1,0 +1,100 @@
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list > li + li {
+  border-top: 1px solid var(--color-border-hairline);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--row-height);
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  text-decoration: none;
+  font: inherit;
+}
+
+.interactive {
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.interactive:hover {
+  background: var(--color-bg-hover);
+}
+
+.interactive:active {
+  background: var(--color-bg-pressed);
+}
+
+.interactive:focus-visible {
+  outline-offset: -2px;
+  border-radius: var(--radius-input);
+}
+
+/* Inside a card, the first and last rows follow the card's corners. */
+.list > li:first-child > .row {
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+
+.leading {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--color-bg-emphasis);
+  color: var(--color-text-primary);
+}
+
+.text {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  font: var(--text-body-strong);
+  color: var(--color-text-primary);
+  text-wrap: pretty;
+}
+
+.description {
+  font: var(--text-small);
+  color: var(--color-text-muted);
+}
+
+.meta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chevron {
+  flex: none;
+  color: var(--color-text-muted);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.interactive:hover .chevron {
+  transform: translateX(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interactive:hover .chevron {
+    transform: none;
+  }
+}
