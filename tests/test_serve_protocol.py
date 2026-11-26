@@ -167,7 +167,7 @@ def test_registry_builds_cli_arguments(tmp_path):
     assert oct(files[0].stat().st_mode & 0o777) == "0o600"
     assert build_argv(BY_NAME["queue.job"], {"action": "retry", "jobId": "j"}, workspace)[0][:3] == ["transcription-queue", "retry", "--job"]
     assert build_argv(BY_NAME["capture.start"], {"durationMinutes": 5}, workspace)[0][-2:] == ["--wait-seconds", "0"]
-    for name in ("transcription.run", "notes.run", "capture.sync", "capture.connect", "models.refresh", "word.verifyRenderer"):
+    for name in ("transcription.run", "notes.run", "lesson.process", "capture.sync", "capture.connect", "models.refresh", "word.verifyRenderer"):
         assert BY_NAME[name].lane == "job", name
     assert {method.lane for method in METHODS} == {"fast", "slow", "job"}
 

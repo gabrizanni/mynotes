@@ -266,6 +266,9 @@ METHODS: tuple[Method, ...] = (
     Method("notes.history", "fast", ("history",), (P("course"),), summary="Restorable cumulative-Word backups."),
     Method("notes.undo", "slow", ("undo",), (P("course", required=True),), summary="Undo the last course update."),
     Method("notes.restore", "slow", ("restore",), (P("backupId", required=True),), summary="Restore one backup."),
+    Method("lesson.process", "job", ("lesson", "process"), (P("lectureId", required=True), P("audio", "--audio"), PROVIDER,
+           P("quality", "--quality"), P("instructions", "--instructions")), json_flag=True,
+           summary="Check, transcribe only if needed, prepare and write notes for one lesson."),
     Method("usage.get", "fast", ("usage",), (LESSON, P("batchId", "--batch")), json_flag=True,
            one_of=("lectureId", "batchId"), summary="Local provider attempt counters."),
     # Local components

@@ -531,6 +531,16 @@ def build_parser() -> argparse.ArgumentParser:
     chat.add_argument("message", nargs="?", help="optional natural-language request")
     login = subparsers.add_parser("provider-login", help="open the selected agent's sign-in flow")
     login.add_argument("--provider", choices=("codex", "agy", "claude"), required=True)
+    lesson = subparsers.add_parser("lesson", help="run one lesson from audio to updated notes")
+    lesson_commands = lesson.add_subparsers(dest="lesson_command", required=True)
+    lesson_process = lesson_commands.add_parser("process", help="check, transcribe only if needed, prepare and write notes")
+    lesson_process.add_argument("lecture_id", help="COURSE-LNN")
+    lesson_process.add_argument("--workspace", help="private workspace path")
+    lesson_process.add_argument("--audio", help="specific recording; otherwise reuse a transcript or resolve this lesson's audio")
+    lesson_process.add_argument("--provider", choices=("codex", "agy", "claude"))
+    lesson_process.add_argument("--quality", help="saved quality or standard")
+    lesson_process.add_argument("--instructions", help="temporary instructions; preserves saved course preferences")
+    lesson_process.add_argument("--json", action="store_true", help="structured result on stdout; progress on stderr")
     serve = subparsers.add_parser("serve", help="answer a desktop app's JSON-RPC requests in one long-lived process")
     serve.add_argument("--stdio", action="store_true", help="newline-delimited JSON-RPC 2.0 on stdin and stdout")
     serve.add_argument("--workspace", help="private workspace path")
@@ -1058,6 +1068,18 @@ def _notes(arguments: argparse.Namespace) -> int:
     return 0 if arguments.plan_only or result['status'] in {'COMPLETED', 'COMPLETED_WITH_WARNINGS', 'AWAITING_APPROVAL'} else 2
 
 
+def _lesson(arguments: argparse.Namespace) -> int:
+    from .lesson_pipeline import process_lesson
+    def progress(stage, detail):
+        print(json.dumps({'stage': stage, **detail}, ensure_ascii=False), file=sys.stderr, flush=True)
+    code, result = process_lesson(Workspace.from_value(arguments.workspace), arguments.lecture_id,
+                                  audio=Path(arguments.audio).expanduser() if arguments.audio else None,
+                                  provider=arguments.provider, quality=arguments.quality,
+                                  instructions=arguments.instructions, progress=progress)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return code
+
+
 def _natural_request(arguments: argparse.Namespace) -> int:
     workspace = _workspace(arguments)
     from .onboarding import prepare_conversation
@@ -1213,6 +1235,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _generate_batch(arguments)
         if arguments.command == "notes":
             return _notes(arguments)
+        if arguments.command == "lesson":
+            return _lesson(arguments)
         if arguments.command == "visual-review":
             from .visual_review import record_review
             result=record_review(Workspace.from_value(arguments.workspace),arguments.batch_id,_load_json(arguments.file))
