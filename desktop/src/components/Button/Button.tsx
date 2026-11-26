@@ -58,6 +58,8 @@ export interface IconButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonEle
   icon: LucideIcon;
   variant?: Extract<ButtonVariant, "ghost" | "soft" | "outline" | "ghostOnInverse">;
   size?: ButtonSize;
+  /** Focus return target for menus and popovers (feat/desktop-lessons). */
+  ref?: Ref<HTMLButtonElement>;
 }
 
 export function IconButton({ label, icon, variant = "ghost", size = "md", className, type = "button", ...rest }: IconButtonProps) {

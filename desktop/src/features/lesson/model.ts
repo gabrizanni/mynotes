@@ -30,6 +30,8 @@ export interface LessonDetail {
   transcriptPath: string | null;
   /** The queue job for this lesson's audio, if any. */
   transcription: QueueJob | null;
+  /** A `transcription.run` job this app started and that still runs. */
+  transcriptionJob: Job | null;
   state: LessonState;
   chips: { recording: Chip; transcript: Chip; notes: Chip };
   notesJob: Job | null;
@@ -126,11 +128,12 @@ export function deriveLesson(id: string, input: LessonInput, inCourseNotes = fal
   const transcriptPath = transcriptId ? (input.library?.transcripts?.find((transcript) => transcript.id === transcriptId)?.path ?? null) : null;
   const notesJob = latestNotesJob(input.jobs, id);
   const hasAudio = recordings.some((recording) => recording.audio_available !== false);
+  const transcriptionJob = input.jobs.find((job) => job.kind === "transcription" && job.state === "running" && (job.lectureIds ?? []).includes(id)) ?? null;
 
   let state: LessonState;
   if (transcriptId) state = "ready";
   else if (!hasAudio) state = "noAudio";
-  else if (transcription && TRANSCRIPTION_ACTIVE.has(transcription.status)) state = "transcribing";
+  else if (transcriptionJob || (transcription && TRANSCRIPTION_ACTIVE.has(transcription.status))) state = "transcribing";
   else if (transcription && TRANSCRIPTION_PROBLEM.has(transcription.status)) state = "transcriptProblem";
   else if (recordings.filter((recording) => recording.audio_available !== false).length > 1) state = "chooseSource";
   else state = "notTranscribed";
@@ -147,8 +150,11 @@ export function deriveLesson(id: string, input: LessonInput, inCourseNotes = fal
     transcriptId,
     transcriptPath,
     transcription,
+    transcriptionJob,
     state,
-    chips: lessonChips({ lesson, recordings, transcription, notesJob, inCourseNotes }),
+    chips: transcriptionJob
+      ? { ...lessonChips({ lesson, recordings, transcription, notesJob, inCourseNotes }), transcript: { kind: "transcription", status: "RUNNING" } }
+      : lessonChips({ lesson, recordings, transcription, notesJob, inCourseNotes }),
     notesJob,
   };
 }

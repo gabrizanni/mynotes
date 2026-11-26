@@ -177,7 +177,7 @@ const warningSchema = z.union([z.string(), z.looseObject({ message: z.string() }
 const resultWarningsSchema = z.looseObject({ warnings: z.array(z.unknown()).optional() });
 
 /** Human warning lines from `job.result.warnings` or `batch-status` (strings or `{message}`). */
-export function warningsOf(...sources: Array<{ warnings?: unknown } | null | undefined>): string[] {
+export function warningsOf(...sources: unknown[]): string[] {
   const lines: string[] = [];
   for (const source of sources) {
     const parsed = resultWarningsSchema.safeParse(source ?? {});

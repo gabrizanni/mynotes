@@ -29,3 +29,9 @@ export * from "./TextArea";
 export * from "./TextField";
 export * from "./Toast";
 export * from "./Toggle";
+// feat/desktop-lessons
+export * from "./ChoiceList";
+export * from "./Disclosure";
+export * from "./Menu";
+export * from "./Slider";
+export * from "./TabNav";
