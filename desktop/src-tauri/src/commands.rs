@@ -41,6 +41,27 @@ pub struct AppState {
     pub session: SessionIntent,
 }
 
+#[cfg(test)]
+impl AppState {
+    /// State with a supervisor that is never started, for tests of the native surfaces.
+    pub fn for_tests() -> Self {
+        use crate::backend::supervisor::{EventSink, LaunchError, SupervisorConfig};
+        struct Quiet;
+        impl EventSink for Quiet {
+            fn notification(&self, _method: &str, _params: &Value) {}
+            fn status(&self, _status: &BackendStatus) {}
+        }
+        let launch = Arc::new(|| Err(LaunchError { code: "NOT_INSTALLED".into(), message: "test".into() }));
+        Self {
+            supervisor: Supervisor::new(SupervisorConfig::default(), launch, Arc::new(Quiet)),
+            roots: Arc::new(paths::AllowedRoots::new(&[])),
+            installer: Installer::new(),
+            pending_action: Mutex::new(None),
+            session: SessionIntent::default(),
+        }
+    }
+}
+
 /// Last `session.open` / `session.setVisible` / `session.close` seen from the webview.
 ///
 /// A restarted server knows no window session, so queue jobs would stop starting (the lease

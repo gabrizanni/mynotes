@@ -130,6 +130,11 @@ pub fn run() {
             register_global_shortcut(app.handle());
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if window.label() == actions::MAIN_LABEL && matches!(event, tauri::WindowEvent::Destroyed) {
+                actions::main_window_destroyed(window.app_handle());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::rpc_call,
             commands::backend_status,

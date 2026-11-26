@@ -28,6 +28,10 @@ tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
 tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros", "rt-multi-thread"] }
 
+[dev-dependencies]
+# Tauri's mock runtime, for window-routing tests without a display.
+tauri = { version = "2", features = ["tray-icon", "test"] }
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 

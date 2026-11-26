@@ -15,7 +15,7 @@ use tauri_plugin_log::log;
 
 use crate::events::Recording;
 
-const TRAY_ID: &str = "main";
+pub const TRAY_ID: &str = "main";
 
 pub fn enabled_by_default() -> bool {
     match std::env::var("MYNOTES_DESKTOP_TRAY").as_deref() {
@@ -71,7 +71,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
             "open" => crate::actions::show_main(app),
             "record" => crate::actions::dispatch(app, "record-dialog"),
             "stop" => stop_recording(app.clone()),
-            "quit" => app.exit(0),
+            "quit" => crate::actions::quit(app),
             _ => {}
         }
     });
