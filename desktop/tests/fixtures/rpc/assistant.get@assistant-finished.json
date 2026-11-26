@@ -1,0 +1,37 @@
+{
+  "title": "Prepare notes for lesson 3",
+  "providerSession": "fixture-provider-session",
+  "turns": [
+    {
+      "id": "turn-1",
+      "message": "Prepare notes for lesson 3",
+      "context": {
+        "course": "STAT",
+        "lesson": 3
+      },
+      "state": "COMPLETED",
+      "text": "The notes for **STAT lesson 3** are now in your course notes.\n\nWhat changed:\n- A new section, *Sampling distributions*, after Lesson 2\n- Two worked examples from the slides, with every step\n\nTo open them, choose `Open in Word` on the course page, or run:\n\n```\nmynotes notes STAT --lessons 3\n```",
+      "tools": [
+        {
+          "toolId": "toolu_fixture_0",
+          "name": "Bash",
+          "summary": "Load the notes instructions",
+          "status": "completed",
+          "command": "mynotes context --activity notes --course STAT --json",
+          "durationMs": 1800
+        },
+        {
+          "toolId": "toolu_fixture_1",
+          "name": "Bash",
+          "summary": "Prepare notes for STAT lesson 3",
+          "status": "completed",
+          "command": "mynotes notes STAT --lessons 3 --json",
+          "durationMs": 132000
+        }
+      ],
+      "error": null,
+      "startedAt": 1795685400,
+      "finishedAt": 1795685540
+    }
+  ]
+}

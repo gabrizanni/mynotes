@@ -416,6 +416,108 @@ export type PreferencesResult = z.output<typeof preferencesSchema>;
 // <<< onboarding (feat/desktop-onboarding) <<<
 
 // ---------------------------------------------------------------------------------------------
+// BEGIN assistant (feat/desktop-assistant-ui)
+// The chat agent streamed through `mynotes serve` (serve_assistant.py, docs/SERVE.md
+// "Assistant"). Spread into `methods` and `notifications` below.
+// ---------------------------------------------------------------------------------------------
+
+/** The page the user is on, sent with each message as data (the server checks it again). */
+export const assistantContextSchema = z.object({
+  course: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/).optional(),
+  lesson: z.number().int().min(1).max(999).optional(),
+  lectureId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,31}-L\d{1,3}$/).optional(),
+  page: z.string().min(1).max(80).optional(),
+});
+
+/** One tool call; `status`: running · completed · failed · denied. */
+export const assistantToolSchema = z.looseObject({
+  toolId: str,
+  name: str,
+  summary: str,
+  status: str,
+  command: optStr,
+  durationMs: optNum,
+});
+
+/** `state`: RUNNING · COMPLETED · FAILED · CANCELLED · INTERRUPTED. */
+export const assistantTurnSchema = z.looseObject({
+  id: str,
+  message: str,
+  state: str,
+  text: str,
+  tools: z.array(assistantToolSchema),
+  error: z.looseObject({ code: str, message: str }).nullable().optional(),
+  startedAt: optNum,
+  finishedAt: optNum,
+});
+
+export const assistantSessionSchema = z.looseObject({
+  id: str,
+  provider: str,
+  model: optStr,
+  providerSession: optStr,
+  /** native · replay (the agent reported no resumable session) */
+  resume: optStr,
+  title: optStr,
+  updatedAt: optNum,
+  turns: z.array(assistantTurnSchema),
+});
+
+export const assistantSummarySchema = z.looseObject({
+  id: str,
+  title: optStr,
+  provider: str,
+  updatedAt: optNum,
+  turns: z.number().int(),
+  state: optStr,
+  running: z.boolean(),
+});
+
+const assistantMessage = z.string().trim().min(1).max(20_000);
+const assistantTurnRef = z.looseObject({ sessionId: str, turnId: str });
+
+const assistantMethods = {
+  "assistant.start": {
+    params: z.object({
+      message: assistantMessage,
+      provider: z.enum(["claude", "codex", "agy"]).optional(),
+      model: str.optional(),
+      effort: str.optional(),
+      context: assistantContextSchema.optional(),
+    }),
+    result: assistantTurnRef,
+  },
+  "assistant.send": { params: z.object({ sessionId: str, message: assistantMessage, context: assistantContextSchema.optional() }), result: assistantTurnRef },
+  "assistant.cancel": {
+    params: z.object({ sessionId: str, force: z.boolean().optional() }),
+    result: z.looseObject({ sessionId: str, cancelRequested: z.boolean() }),
+  },
+  "assistant.list": {
+    params: z.object({ limit: z.number().int().min(1).max(200).optional() }).optional(),
+    result: z.looseObject({ sessions: z.array(assistantSummarySchema) }),
+  },
+  "assistant.get": { params: z.object({ sessionId: str }), result: assistantSessionSchema },
+} as const;
+
+const assistantNotifications = {
+  "assistant.delta": z.looseObject({ sessionId: str, turnId: str, text: str }),
+  "assistant.tool": assistantToolSchema.extend({ sessionId: str, turnId: str }),
+  "assistant.done": z.looseObject({ sessionId: str, turnId: str, text: str, providerSession: optStr, usage: z.unknown().optional() }),
+  /** `code`: QUOTA · AUTH · NETWORK · TIMEOUT · UNAVAILABLE · CANCELLED · PROVIDER */
+  "assistant.error": z.looseObject({ sessionId: str, turnId: str, code: str, message: str }),
+} as const;
+
+export type AssistantContext = z.input<typeof assistantContextSchema>;
+export type AssistantSession = z.output<typeof assistantSessionSchema>;
+export type AssistantToolRow = z.output<typeof assistantToolSchema>;
+export type AssistantNotification = {
+  [N in keyof typeof assistantNotifications]: { readonly type: N } & z.output<(typeof assistantNotifications)[N]>;
+}[keyof typeof assistantNotifications];
+
+// END assistant (feat/desktop-assistant-ui)
+// ---------------------------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------------------------
 // Method table
 // ---------------------------------------------------------------------------------------------
 
@@ -642,6 +744,8 @@ export const methods = {
   ...onboardingMethods,
   // workspace screens (see the block above)
   ...workspaceMethods,
+  // assistant (feat/desktop-assistant-ui, see the block above)
+  ...assistantMethods,
 } as const;
 
 export type MethodName = keyof typeof methods;
@@ -663,6 +767,8 @@ export const notifications = {
   "job.progress": z.looseObject({ jobId: str, stage: str, detail: optStr, phase: optStr, elapsedSeconds: optNum, at: optStr }),
   "job.output": z.looseObject({ jobId: str, line: str }),
   "job.finished": z.looseObject({ jobId: str, state: str, exitCode: optNum, result: z.looseObject({ status: str }).nullable().optional(), at: optStr }),
+  // assistant (feat/desktop-assistant-ui)
+  ...assistantNotifications,
 } as const;
 
 export type NotificationName = keyof typeof notifications;

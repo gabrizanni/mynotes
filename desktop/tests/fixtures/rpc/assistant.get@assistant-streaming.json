@@ -1,0 +1,36 @@
+{
+  "title": "Prepare notes for lesson 3",
+  "turns": [
+    {
+      "id": "turn-1",
+      "message": "Prepare notes for lesson 3",
+      "context": {
+        "course": "STAT",
+        "lesson": 3
+      },
+      "state": "RUNNING",
+      "text": "I checked the sources for **STAT lesson 3**: the transcript and the slides are ready. Now I'm writing the notes",
+      "tools": [
+        {
+          "toolId": "toolu_fixture_0",
+          "name": "Bash",
+          "summary": "Load the notes instructions",
+          "status": "completed",
+          "command": "mynotes context --activity notes --course STAT --json",
+          "durationMs": 1800
+        },
+        {
+          "toolId": "toolu_fixture_1",
+          "name": "Bash",
+          "summary": "Prepare notes for STAT lesson 3",
+          "status": "running",
+          "command": "mynotes notes STAT --lessons 3 --json",
+          "durationMs": null
+        }
+      ],
+      "error": null,
+      "startedAt": 1795685400,
+      "finishedAt": null
+    }
+  ]
+}

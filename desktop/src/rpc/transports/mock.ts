@@ -79,6 +79,8 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
   };
 
   const handlers: Record<string, (params: unknown) => Json> = {
+    // assistant (feat/desktop-assistant-ui): a streamed reply with one tool row.
+    ...assistantMockHandlers({ state, later, emit, latencyMs: options.latencyMs }),
     // onboarding (feat/desktop-onboarding): setup, sign-in, course, calendar, microphone.
     ...onboardingMockHandlers({ state, simulate: options.simulate, now: options.now, stageMs: options.stageMs, later, emit }),
 
@@ -213,3 +215,144 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
     },
   };
 }
+
+// ---------------------------------------------------------------------------------------------
+// BEGIN assistant (feat/desktop-assistant-ui)
+// `assistant.start` / `assistant.send` answer at once, then stream like serve_assistant.py:
+// `assistant.delta` chunks, one `assistant.tool` row (running, then completed) and
+// `assistant.done`. `assistant.cancel` ends the turn with `assistant.error` CANCELLED.
+// Saved conversations come from the `assistant.get` fixture (scenario patches give the
+// streaming, finished and error states); `assistant.list` lists it when it has turns.
+// ---------------------------------------------------------------------------------------------
+
+interface AssistantMockContext {
+  state: Map<string, Json>;
+  later: (ms: number, run: () => void) => void;
+  emit: (method: string, params: Json) => void;
+  latencyMs: number;
+}
+
+const ASSISTANT_REPLY = [
+  "I checked the sources for **STAT lesson 3**: the transcript and the slides are ready.",
+  "\n\nThe notes are now in your course notes. To see them, open the course and choose ",
+  "*Open in Word*, or run:\n\n```\nmynotes notes STAT --lessons 3\n```",
+];
+const ASSISTANT_TOOL_COMMAND = "mynotes notes STAT --lessons 3 --json";
+
+function text(value: Json | undefined, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function assistantMockHandlers({ state, later, emit, latencyMs }: AssistantMockContext): Record<string, (params: unknown) => Json> {
+  const sessions = new Map<string, JsonObject>();
+  const cancelled = new Set<string>();
+  let counter = 0;
+  const step = Math.max(latencyMs, 40);
+
+  const fixture = (): JsonObject | null => {
+    const value = state.get("assistant.get");
+    return isObject(value) ? value : null;
+  };
+  const find = (sessionId: unknown): JsonObject | null => {
+    if (typeof sessionId !== "string") return null;
+    const saved = fixture();
+    return sessions.get(sessionId) ?? (saved && saved.id === sessionId ? saved : null);
+  };
+  const turnsOf = (session: JsonObject): JsonObject[] => (Array.isArray(session.turns) ? session.turns.filter(isObject) : []);
+
+  const stream = (session: JsonObject, turn: JsonObject) => {
+    const sessionId = text(session.id);
+    const turnId = text(turn.id);
+    const key = `${sessionId}/${turnId}`;
+    const ids = { sessionId, turnId };
+    const tool: JsonObject = { toolId: "toolu_mock_1", name: "Bash", summary: "Prepare notes for STAT lesson 3", status: "running", command: ASSISTANT_TOOL_COMMAND, durationMs: null };
+    const live = (run: () => void) => () => {
+      if (!cancelled.has(key)) run();
+    };
+    later(step, live(() => {
+      turn.text = ASSISTANT_REPLY[0] ?? "";
+      emit("assistant.delta", { ...ids, text: ASSISTANT_REPLY[0] ?? "" });
+    }));
+    later(step * 2, live(() => {
+      turn.tools = [{ ...tool }];
+      emit("assistant.tool", { ...ids, ...tool });
+    }));
+    later(step * 4, live(() => {
+      const done = { ...tool, status: "completed", durationMs: 132_000 };
+      turn.tools = [done];
+      emit("assistant.tool", { ...ids, ...done });
+    }));
+    ASSISTANT_REPLY.slice(1).forEach((chunk, index) => {
+      later(step * (5 + index), live(() => {
+        turn.text = `${text(turn.text)}${chunk}`;
+        emit("assistant.delta", { ...ids, text: chunk });
+      }));
+    });
+    later(step * (5 + ASSISTANT_REPLY.length), live(() => {
+      turn.state = "COMPLETED";
+      emit("assistant.done", { ...ids, text: text(turn.text), providerSession: "mock-provider-session" });
+    }));
+  };
+
+  const begin = (session: JsonObject, params: unknown): JsonObject => {
+    const message = isObject(params as Json) ? text((params as JsonObject).message) : "";
+    const turns = turnsOf(session);
+    const turn: JsonObject = { id: `turn-${turns.length + 1}`, message, state: "RUNNING", text: "", tools: [], error: null };
+    session.turns = [...turns, turn];
+    stream(session, turn);
+    return { sessionId: text(session.id), turnId: text(turn.id) };
+  };
+
+  return {
+    "assistant.start": (params) => {
+      counter += 1;
+      const id = `as-${counter.toString(16).padStart(16, "0")}`;
+      const session: JsonObject = { id, provider: "claude", model: "", providerSession: null, resume: "native", title: "", turns: [] };
+      sessions.set(id, session);
+      return begin(session, params);
+    },
+    "assistant.send": (params) => {
+      const session = find(isObject(params as Json) ? (params as JsonObject).sessionId : null);
+      if (!session) throw new RpcError("assistant.send", -32007, "Unknown assistant session");
+      return begin(session, params);
+    },
+    "assistant.cancel": (params) => {
+      const session = find(isObject(params as Json) ? (params as JsonObject).sessionId : null);
+      if (!session) throw new RpcError("assistant.cancel", -32007, "Unknown assistant session");
+      const turn = turnsOf(session).at(-1);
+      const running = turn?.state === "RUNNING";
+      if (turn && running) {
+        const ids = { sessionId: text(session.id), turnId: text(turn.id) };
+        cancelled.add(`${ids.sessionId}/${ids.turnId}`);
+        turn.state = "CANCELLED";
+        later(step, () => emit("assistant.error", { ...ids, code: "CANCELLED", message: "Stopped" }));
+      }
+      return { sessionId: text(session.id), turnId: turn ? text(turn.id) : null, cancelRequested: running };
+    },
+    "assistant.list": () => {
+      const saved = fixture();
+      const all = [...sessions.values(), ...(saved && turnsOf(saved).length > 0 ? [saved] : [])];
+      return {
+        sessions: all.map((session) => {
+          const turns = turnsOf(session);
+          const last = turns.at(-1);
+          return {
+            id: text(session.id),
+            title: text(session.title),
+            provider: text(session.provider, "claude"),
+            updatedAt: typeof session.updatedAt === "number" ? session.updatedAt : 0,
+            turns: turns.length,
+            state: last ? text(last.state) : null,
+            running: last?.state === "RUNNING",
+          };
+        }),
+      };
+    },
+    "assistant.get": (params) => {
+      const session = find(isObject(params as Json) ? (params as JsonObject).sessionId : null);
+      if (!session) throw new RpcError("assistant.get", -32007, "Unknown assistant session");
+      return session;
+    },
+  };
+}
+// END assistant (feat/desktop-assistant-ui)

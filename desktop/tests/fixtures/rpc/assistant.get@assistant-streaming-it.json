@@ -1,0 +1,36 @@
+{
+  "title": "Prepara gli appunti della lezione 3",
+  "turns": [
+    {
+      "id": "turn-1",
+      "message": "Prepara gli appunti della lezione 3",
+      "context": {
+        "course": "STAT",
+        "lesson": 3
+      },
+      "state": "RUNNING",
+      "text": "Ho controllato le fonti di **STAT, lezione 3**: la trascrizione e le slide sono pronte. Ora scrivo gli appunti",
+      "tools": [
+        {
+          "toolId": "toolu_fixture_0",
+          "name": "Bash",
+          "summary": "Load the notes instructions",
+          "status": "completed",
+          "command": "mynotes context --activity notes --course STAT --json",
+          "durationMs": 1800
+        },
+        {
+          "toolId": "toolu_fixture_1",
+          "name": "Bash",
+          "summary": "Prepare notes for STAT lesson 3",
+          "status": "running",
+          "command": "mynotes notes STAT --lessons 3 --json",
+          "durationMs": null
+        }
+      ],
+      "error": null,
+      "startedAt": 1795685400,
+      "finishedAt": null
+    }
+  ]
+}
