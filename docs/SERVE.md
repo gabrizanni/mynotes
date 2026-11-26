@@ -71,7 +71,11 @@ the CLI's stdout on the same workspace.
 Parameters are the command's flags in camelCase. Parameters of type `json`
 whose flag takes a file are written to a private file in
 `state/desktop-requests/` (mode 0600, the same place the Windows app uses),
-passed by path and deleted when the command ends.
+passed by path and deleted when the command ends. A value given to a flag is
+passed as `--flag=value`, so a value that starts with `-` (a file named
+`-x.m4a`) stays a value. A positional parameter (a lesson, a course code, a
+backup) and each key and value of an `object<string>` parameter
+(`--flag KEY VALUE`) cannot start with `-`: the call gets `-32602`.
 
 ## Errors
 
@@ -80,7 +84,7 @@ passed by path and deleted when the command ends.
 | -32700 | Invalid JSON or UTF-8 | — |
 | -32600 | Invalid request, batch, duplicate id, line over 16 MiB | — |
 | -32601 | Unknown method | — |
-| -32602 | Invalid parameters: unknown, missing, wrong type or choice | sometimes `topics` |
+| -32602 | Invalid parameters: unknown, missing, wrong type or choice, or a positional or `object<string>` value that starts with `-` | sometimes `topics` |
 | -32603 | Internal server error | — |
 | -32001 | The command failed with text such as `mynotes: Course not found: X`; `message` is that text without the prefix | `{exitCode, stdout, stderr}` |
 | -32002 | BUSY: exit 3 with `status: BUSY` | `{exitCode, data}` |

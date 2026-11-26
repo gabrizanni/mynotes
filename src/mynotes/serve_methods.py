@@ -340,6 +340,24 @@ def _check_type(param: Param, value: Any) -> None:
         raise RpcError(INVALID_PARAMS, f"{param.name} must be one of: {', '.join(param.choices)}")
     if isinstance(value, str) and "\0" in value:
         raise RpcError(INVALID_PARAMS, f"Invalid text in parameter: {param.name}")
+    if any(text.startswith("-") for text in _separate_values(param, value)):
+        raise RpcError(INVALID_PARAMS, f"{param.name} cannot start with '-'")
+
+
+def _separate_values(param: Param, value: Any) -> list[str]:
+    """Values passed as their own argv items, where argparse would read a leading '-' as an option.
+
+    A flag's single value is passed as `--flag=value`, which argparse never
+    parses as an option, so only positionals and `--flag KEY VALUE` pairs
+    (nargs=2 cannot use `=`) must not start with '-'.
+    """
+    if param.server or param.kind in {"field", "file", "subcommand"}:
+        return []
+    if param.flag is None:
+        return [value] if isinstance(value, str) else []
+    if param.kind == "pairs" and isinstance(value, dict):
+        return [text for pair in value.items() for text in pair if isinstance(text, str)]
+    return []
 
 
 def request_directory(workspace: str) -> Path:
@@ -374,20 +392,21 @@ def build_argv(method: Method, params: dict, workspace: str) -> tuple[list[str],
                 if value:
                     flags.append(param.flag)
             elif param.kind == "list":
-                for item in value:
-                    flags += [param.flag, item]
+                flags += [f"{param.flag}={item}" for item in value]
             elif param.kind == "pairs":
-                for key, text in value.items():
+                for key, text in value.items():  # validate() rejected a leading '-'.
                     flags += [param.flag, key, text]
             elif param.kind == "json":
-                flags += [param.flag, json.dumps(value, ensure_ascii=False)]
+                flags.append(f"{param.flag}={json.dumps(value, ensure_ascii=False)}")
             elif param.kind == "file":
                 files.append(_request_file(workspace, value))
                 flags += [param.flag, str(files[-1])]
             elif param.kind == "field":
                 fields[param.key or param.name] = value
             else:
-                flags += [param.flag, str(value)]
+                # `--flag=value`: a value that starts with '-' (a file named
+                # `-x.m4a`) is never parsed as an option.
+                flags.append(f"{param.flag}={value}")
         if method.request_file:
             files.append(_request_file(workspace, fields))
             flags += [method.request_file, str(files[-1])]

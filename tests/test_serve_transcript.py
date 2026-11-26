@@ -122,7 +122,7 @@ def test_notes_publish_runs_the_publish_command_as_a_job(served):
     assert method.lane == "job"
     candidate = str(tmp_path / "candidate.docx")
     assert build_argv(method, {"lecture": f"{COURSE}-L01", "candidate": candidate}, str(workspace.root))[0] == [
-        "publish", f"{COURSE}-L01", "--candidate", candidate, "--workspace", str(workspace.root)]
+        "publish", f"{COURSE}-L01", f"--candidate={candidate}", "--workspace", str(workspace.root)]
     started = client.call("notes.publish", {"lecture": f"{COURSE}-L01"})
     assert started["job"]["method"] == "notes.publish" and started["job"]["state"] == "RUNNING"
     finished = client.notification("job.finished", timeout=60, where=lambda params: params["jobId"] == started["jobId"])
