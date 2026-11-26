@@ -475,8 +475,27 @@ def verify_word_renderer() -> dict:
     return proof
 
 
-def verify_local_components(workspace: Workspace) -> dict:
+def _verify_linux_components(workspace: Workspace, sample: Path | None) -> dict:
+    """Linux setup: whisper.cpp on the bundled public sample, then the Word gate."""
+    from .asr import default_engines
+    from .windows_speech import DEFAULT_MODEL, current_proof, verify_transcription
+    whisper = default_engines(workspace, {"primary_engine": "whispercpp"}).get("whispercpp")
+    if not whisper or not find_soffice(managed_tool("soffice")):
+        raise ValueError("Setup components are missing; retry component installation.")
+    transcription = current_proof(whisper.executable, whisper.model_dir / f"ggml-{DEFAULT_MODEL}.bin")
+    if transcription is None:
+        if sample is None:
+            raise ValueError("Supply the bundled speech sample to verify local transcription.")
+        transcription = verify_transcription(whisper.executable, whisper.model_dir, audio=sample)
+    word = verify_word_renderer()
+    return {"transcription": True, "word": True, "asr_engine_version": "sha256:" + transcription["identity"]["executable_sha256"],
+            "word_pages": word["word_pages"], "test_inputs": "public whisper.cpp speech sample and generated Word; no personal sources"}
+
+
+def verify_local_components(workspace: Workspace, sample: Path | None = None) -> dict:
     """Run real local ASR and Word conversion on generated public test inputs."""
+    if is_linux():
+        return _verify_linux_components(workspace, sample)
     from docx import Document
     from .asr import ArgmaxEngine, normalize_audio
     from .publication import _render_and_validate

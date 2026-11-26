@@ -203,3 +203,26 @@ def test_linux_normalization_decodes_with_pyav_without_afconvert(tmp_path, monke
     with wave.open(str(result), "rb") as audio:
         assert (audio.getnchannels(), audio.getframerate(), audio.getsampwidth()) == (1, 16_000, 2)
         assert audio.getnframes() > 8_000
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable lookup")
+def test_linux_setup_verification_uses_the_bundled_sample(home, monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("MYNOTES_HOME", str(tmp_path / "runtime"))
+    monkeypatch.setenv("PATH", str(fake_whisper(tmp_path / "bin/whisper-cli").parent))
+    monkeypatch.setattr(onboarding, "find_soffice", lambda *_: "/usr/bin/soffice")
+    monkeypatch.setattr(onboarding, "verify_word_renderer", lambda: {"word": True, "word_pages": 1})
+    sample = write_wav(tmp_path / "jfk.wav")
+    checked = []
+
+    def verify(executable, model_dir, *, audio=None, **_):
+        checked.append((executable, model_dir, audio))
+        return {"identity": {"executable_sha256": "ab" * 32}, "transcription": True}
+    monkeypatch.setattr(windows_speech, "verify_transcription", verify)
+    workspace = Workspace(tmp_path / "workspace")
+    with pytest.raises(ValueError, match="speech sample"):
+        onboarding.verify_local_components(workspace)
+    proof = onboarding.verify_local_components(workspace, sample)
+    assert checked[-1] == (str(tmp_path / "bin/whisper-cli"), tmp_path / "runtime/speech-models/whisper.cpp", sample)
+    assert proof["transcription"] is True and proof["word"] is True and proof["word_pages"] == 1
+    assert proof["asr_engine_version"] == "sha256:" + "ab" * 32

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "platform": "linux-x86_64",
+  "python_version": "3.12.13",
+  "asr": {
+    "engine": "whispercpp",
+    "model": "large-v3-turbo"
+  },
+  "components": [
+    {
+      "id": "libreoffice",
+      "format": "system",
+      "install_hint": "Install LibreOffice Writer with your package manager, for example sudo pacman -S libreoffice-fresh (Arch) or sudo apt install libreoffice-writer (Debian, Ubuntu), then retry setup."
+    },
+    {
+      "id": "whispercpp-model",
+      "version": "98aa99a0a9db05ae2342309f5096248665f7cba3",
+      "format": "speech-models",
+      "files": [
+        {
+          "path": "whisper.cpp/ggml-large-v3-turbo.bin",
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/98aa99a0a9db05ae2342309f5096248665f7cba3/ggml-large-v3-turbo.bin",
+          "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+          "size_bytes": 1624555275
+        }
+      ]
+    }
+  ],
+  "build": {
+    "uv": {
+      "version": "0.12.9",
+      "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "ec7a99cd05e0cd7f80243f135ce1361c76835cb0ee60055d14d20eba8eba1460",
+      "licenses": {
+        "LICENSE-MIT": "860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c",
+        "LICENSE-APACHE": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    },
+    "whispercpp": {
+      "tag": "b5454",
+      "commit": "d1be6fde11ac6e0407606b4e42fe72d34add8037",
+      "repository": "https://github.com/ggml-org/whisper.cpp.git",
+      "cmake_options": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DGGML_NATIVE=OFF",
+        "-DWHISPER_BUILD_TESTS=OFF",
+        "-DWHISPER_BUILD_SERVER=OFF",
+        "-DWHISPER_SDL2=OFF",
+        "-DWHISPER_CURL=OFF"
+      ],
+      "license_sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    },
+    "speech_sample": {
+      "path": "samples/jfk.wav",
+      "url": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/d1be6fde11ac6e0407606b4e42fe72d34add8037/samples/jfk.wav",
+      "sha256": "59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e",
+      "size_bytes": 352078
+    }
+  },
+  "whispercpp_version": "b5454"
+}
