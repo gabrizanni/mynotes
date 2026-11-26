@@ -37,6 +37,34 @@ pub struct AppState {
     pub installer: Installer,
     /// `--action` given to the first launch, collected once by the webview.
     pub pending_action: Mutex<Option<String>>,
+    /// The window session the webview asked for, replayed when a restarted backend is ready.
+    pub session: SessionIntent,
+}
+
+/// Last `session.open` / `session.setVisible` / `session.close` seen from the webview.
+///
+/// A restarted server knows no window session, so queue jobs would stop starting (the lease
+/// lapses); `events.rs` sends `session.open` again with this visibility on every `ready`.
+#[derive(Debug, Default)]
+pub struct SessionIntent(Mutex<Option<bool>>);
+
+impl SessionIntent {
+    pub fn observe(&self, method: &str, params: Option<&Value>) {
+        let visible = params.and_then(|p| p.get("visible")).and_then(Value::as_bool).unwrap_or(true);
+        let mut intent = self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match method {
+            "session.open" => *intent = Some(visible),
+            "session.setVisible" if intent.is_some() => *intent = Some(visible),
+            "session.close" => *intent = None,
+            _ => {}
+        }
+    }
+
+    /// Params for `session.open`, when the webview had one open.
+    pub fn replay(&self) -> Option<Value> {
+        let intent = *self.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        intent.map(|visible| serde_json::json!({ "visible": visible }))
+    }
 }
 
 /// May the webview call `method`? Known to protocol 1, well formed, not reserved for Rust.
@@ -84,6 +112,7 @@ pub async fn rpc_call(
     if params.as_ref().is_some_and(|p| !p.is_object()) {
         return Err(CommandError::new(codes::INVALID_PARAMS, "params must be an object"));
     }
+    state.session.observe(&method, params.as_ref());
     state.supervisor.call(&method, params).await.map_err(CommandError::from)
 }
 
@@ -184,6 +213,20 @@ mod tests {
         assert!(!is_allowed_for_window(CAPSULE_LABEL, "notes.run"));
         assert!(!is_allowed_for_window(CAPSULE_LABEL, "system.shutdown"));
         assert!(is_allowed_for_window("main", "notes.run"));
+    }
+
+    #[test]
+    fn the_session_intent_follows_open_visibility_and_close() {
+        let intent = SessionIntent::default();
+        intent.observe("session.setVisible", Some(&serde_json::json!({"visible": false})));
+        assert_eq!(intent.replay(), None, "no session was opened");
+        intent.observe("session.open", Some(&serde_json::json!({"visible": true})));
+        intent.observe("capture.dashboard", None);
+        assert_eq!(intent.replay(), Some(serde_json::json!({"visible": true})));
+        intent.observe("session.setVisible", Some(&serde_json::json!({"visible": false})));
+        assert_eq!(intent.replay(), Some(serde_json::json!({"visible": false})));
+        intent.observe("session.close", None);
+        assert_eq!(intent.replay(), None);
     }
 
     #[test]

@@ -11,8 +11,9 @@
 //! - `capture.changed` → tray recording state and the recording capsule window;
 //! - `job.finished` of a notes job → the "notes ready" system notification.
 //!
-//! The Rust side subscribes to `capture` and `config` itself when the backend becomes ready, so
-//! tray, capsule and path roots never depend on the webview having subscribed.
+//! On every `ready` (first start and each restart) the Rust side reopens the webview's window
+//! session if it had one and subscribes to all four watch topics, so tray, capsule, path roots
+//! and the webview's notifications survive a backend restart.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -178,7 +179,15 @@ fn subscribe_native_topics<R: Runtime>(app: AppHandle<R>) {
         let Some(state) = app.try_state::<AppState>() else { return };
         let supervisor = state.supervisor.clone();
         let roots = Arc::clone(&state.roots);
-        let answer = supervisor.call("watch.subscribe", Some(json!({ "topics": ["capture", "config"] }))).await;
+        if let Some(params) = state.session.replay() {
+            if let Err(error) = supervisor.call("session.open", Some(params)).await {
+                log::warn!("[Events] Session not reopened — {{ code: {}, message: {} }}", error.code, error.message);
+            }
+        }
+        // All four topics: after a restart the webview's own subscription is gone with the old
+        // server, and `<topic>.changed` keeps flowing to it this way.
+        let topics = json!({ "topics": ["capture", "queue", "library", "config"] });
+        let answer = supervisor.call("watch.subscribe", Some(topics)).await;
         let snapshots = match answer {
             Ok(value) => value,
             Err(error) => {

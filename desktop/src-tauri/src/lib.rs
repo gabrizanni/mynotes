@@ -111,6 +111,7 @@ pub fn run() {
                 roots,
                 installer: installer::Installer::new(),
                 pending_action: Mutex::new(actions::parse_action(&args)),
+                session: commands::SessionIntent::default(),
             });
             tauri::async_runtime::spawn(async move { supervisor.start() });
             if tray::enabled_by_default() {
