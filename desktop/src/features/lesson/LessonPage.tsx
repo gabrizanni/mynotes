@@ -12,7 +12,7 @@ import { AudioPlayer } from "./AudioPlayer";
 import { GenerateSheet } from "./generate/GenerateSheet";
 import { LessonActions } from "./LessonActions";
 import { LessonRail, type Materials } from "./LessonRail";
-import { deriveLesson, initialPlayer, keyBelongsToControl, playerKey, playerReducer, type LessonDetail } from "./model";
+import { deriveLesson, initialPlayer, keyBelongsToControl, parseTranscript, playerKey, playerReducer, type LessonDetail } from "./model";
 import { openPath, revealPath } from "./platform";
 import { TranscriptPanel, type TranscriptHandle } from "./TranscriptPanel";
 import { useRpcData } from "./useRpcData";
@@ -255,6 +255,8 @@ interface MainStateProps {
 
 function MainState({ lesson, now, transcriptRef, transcript, position, onSeek, onTranscribe, onOpenFull }: MainStateProps) {
   const { t, format } = useI18n();
+  const text = transcript.status === "ready" ? transcript.data.data.text : null;
+  const segments = useMemo(() => (text === null ? [] : parseTranscript(text)), [text]);
   const s = t.lesson.states;
   const actions = useActions();
   const firstSeen = useRef<{ id: string; at: number } | null>(null);
@@ -267,7 +269,8 @@ function MainState({ lesson, now, transcriptRef, transcript, position, onSeek, o
         <TranscriptPanel
           ref={transcriptRef}
           status={transcript.status}
-          segments={transcript.status === "ready" ? transcript.data.data.segments : []}
+          segments={segments}
+          truncated={transcript.status === "ready" && transcript.data.data.truncated}
           position={position}
           onSeek={onSeek}
           onRetry={transcript.reload}

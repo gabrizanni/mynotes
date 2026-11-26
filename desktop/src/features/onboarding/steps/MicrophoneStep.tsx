@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Banner, Button, Card, Icon } from "../../../components";
 import { useI18n } from "../../../i18n";
+import { runJob } from "../../../rpc/jobs";
 import { shallowEqual, useActions, useAppState, useRpc } from "../../../state";
 import { useOnboarding } from "../controller";
 import { MIC_TEST_SECONDS, micPhase, type CaptureSessionLike } from "../model";
@@ -96,7 +97,7 @@ export function MicrophoneStep() {
     setStarting(true);
     try {
       // Recorder on with the schedule paused, then a fixed 60 s test (UX-SPEC §2 step 10).
-      await rpc.call("capture.enable");
+      await runJob(rpc, "capture.enable", undefined);
       await rpc.call("capture.pause");
       const { exitCode } = await rpc.call("capture.test");
       if (exitCode !== 0) throw new Error("test");

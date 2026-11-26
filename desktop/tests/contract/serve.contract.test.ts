@@ -25,7 +25,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createRpcClient, type RpcClient } from "../../src/rpc/client";
 import { RpcCode, RpcError } from "../../src/rpc/errors";
-import { methods, notifications, type MethodName, type NotificationName } from "../../src/rpc/schema";
+import { runJob, untilJobFinished } from "../../src/rpc/jobs";
+import { methods, notifications, type JobMethod, type MethodName, type NotificationName } from "../../src/rpc/schema";
 import { createStdioTransport, type StdioTransport } from "./stdioTransport";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -41,20 +42,20 @@ const SHELL_METHODS: readonly MethodName[] = ["setup.status", "setup.run"];
  * Modelled by the app but not in docs/SERVE.md yet: the server must not know them. When it
  * does, this test fails, so the entry moves to the called methods with its real shape.
  */
-const PENDING_METHODS: readonly MethodName[] = ["library.transcript", "notes.publish"];
+const PENDING_METHODS: readonly MethodName[] = [];
+/**
+ * Job-lane methods (docs/SERVE.md "Jobs") the app awaits: each is started and followed to its
+ * `job.finished` by the job-lane test below, through the app's own `runJob` / `untilJobFinished`.
+ */
+const JOB_METHODS: readonly MethodName[] = ["capture.connect", "capture.sync", "capture.enable", "capture.disable", "notes.publish", "lesson.process"];
 /** Not called here, with the reason: an agent, the recorder, the network, a download, or OS state. */
 const NOT_CALLED: Partial<Record<MethodName, string>> = {
   "notes.run": "starts an agent",
-  "lesson.process": "starts an agent",
   "provider.login": "starts an agent sign-in",
   "capture.start": "starts the recorder",
   "capture.test": "starts the recorder",
   "capture.recover": "asks the recorder",
   "capture.confirmTest": "needs a recorded test file",
-  "capture.enable": "installs the recorder's background agent",
-  "capture.disable": "removes the recorder's background agent",
-  "capture.connect": "fetches a calendar over the network",
-  "capture.sync": "called while seeding (a real job)",
   "capture.unsubscribe": "needs a connected calendar",
   "capture.setImportMode": "needs a connected calendar",
   "models.refresh": "asks the provider over the network",
@@ -145,6 +146,8 @@ function buildEnvironment(repo: string): Fixture {
   return { root, workspace: dirs.workspace, env, python };
 }
 
+const TRANSCRIPT_TEXT = "[00:00:01–00:00:09] professor: Today, sampling distributions.\n[00:00:10–00:00:15] UNKNOWN: A question.\n";
+
 let fixture: Fixture;
 let transport: StdioTransport;
 let rpc: RpcClient;
@@ -208,6 +211,9 @@ beforeAll(async () => {
     })),
   });
   await seed("library.folder", { path: join(fixture.root, "recordings") });
+  // A lesson transcript in the managed folder, named after lesson 1 (what `notes` would read).
+  mkdirSync(join(fixture.root, "recordings", "Trascrizioni"), { recursive: true });
+  writeFileSync(join(fixture.root, "recordings", "Trascrizioni", `${courseCode}-L01.txt`), TRANSCRIPT_TEXT);
   await seed("queue.configure", { parallel: 1 });
   // One real job, so job.list / job.get / job notifications carry a record.
   const started = await seed("capture.sync", { ifDue: true });
@@ -252,6 +258,7 @@ function paramsFor(method: MethodName): unknown {
     "queue.configure": { parallel: 1 },
     "library.list": {},
     "library.inspectAudio": { paths: [join(fixture.root, "recordings", "DEMO-L01.wav")] },
+    "library.transcript": { lectureId: `${courseCode}-L01` },
     "notes.plan": { course: courseCode, lessons: "1", quality: "standard" },
     "notes.batchStatus": { batchId: "batch-missing" },
     "notes.history": { course: courseCode },
@@ -305,6 +312,7 @@ const EXPECTED: Record<string, Expectation> = {
   "library.list": { parses: true },
   "library.inspectAudio": { parses: true },
   "library.verify": { parses: true },
+  "library.transcript": { parses: true },
   "notes.plan": { error: RpcCode.CliError, why: "no provider in the fixture workspace" },
   "notes.batchStatus": { error: RpcCode.CliError, why: "unknown batch id" },
   "notes.history": { parses: true },
@@ -322,6 +330,7 @@ const NOTIFICATION_EXPECTED: Partial<Record<NotificationName, Expectation>> = {
   "capture.changed": { parses: true },
   "job.started": { parses: true },
   "job.finished": { parses: true },
+  "job.progress": { parses: true },
 };
 
 interface Outcome {
@@ -364,11 +373,74 @@ describe("mynotes serve contract (protocol 1)", () => {
     for (const method of PENDING_METHODS) expect(server.has(method), `${method} now exists: model its real shape`).toBe(false);
   });
 
-  const skipped = new Set<MethodName>([...SHELL_METHODS, ...PENDING_METHODS, ...(Object.keys(NOT_CALLED) as MethodName[])]);
+  const skipped = new Set<MethodName>([...SHELL_METHODS, ...PENDING_METHODS, ...JOB_METHODS, ...(Object.keys(NOT_CALLED) as MethodName[])]);
   const called = (Object.keys(methods) as MethodName[]).filter((m) => !skipped.has(m));
   it.each(called)("%s answers in the shape the app expects", async (method) => {
     check(method, await outcomeOf(method), EXPECTED[method]);
   }, 120_000);
+
+  it("reads a lesson transcript as text, and never a file the app names", async () => {
+    const { data } = await rpc.call("library.transcript", { lectureId: `${courseCode}-L01` });
+    expect(data).toEqual({ path: join(fixture.root, "recordings", "Trascrizioni", `${courseCode}-L01.txt`), text: TRANSCRIPT_TEXT, truncated: false, encoding: "utf-8", size: Buffer.byteLength(TRANSCRIPT_TEXT) });
+    const capped = await rpc.call("library.transcript", { lectureId: `${courseCode}-L01`, maxBytes: 12 });
+    // 12 bytes: "[00:00:01" and the 3-byte dash, never half a character.
+    expect(capped.data).toMatchObject({ text: Buffer.from(TRANSCRIPT_TEXT).subarray(0, 12).toString("utf8"), truncated: true });
+    expect(capped.data.text).toBe("[00:00:01–");
+    const call = rpc.call.bind(rpc) as (name: MethodName, params?: unknown) => Promise<unknown>;
+    await expect(call("library.transcript", { lectureId: "../../../etc/passwd" })).rejects.toMatchObject({ code: RpcCode.InvalidParams });
+    await expect(call("library.transcript", { recordingId: "../../../etc/passwd" })).rejects.toMatchObject({ code: -32009 });
+    await expect(call("library.transcript", { lectureId: `${courseCode}-L09` })).rejects.toMatchObject({ code: -32009, message: "No transcript yet" });
+  });
+
+  describe("job-lane methods end in the answer the app reads (runJob)", () => {
+    const linux = process.platform === "linux";
+
+    it("capture.sync: job.finished carries {exitCode, data}", async () => {
+      const answer = await runJob(rpc, "capture.sync", { ifDue: true });
+      expect(answer.exitCode).toBe(0);
+    }, 120_000);
+
+    it("capture.connect: an http:// link is refused before any download, with the reason", async () => {
+      const { exitCode, data } = await runJob(rpc, "capture.connect", {
+        source: { url: "http://timetable.example.invalid/lessons.ics", label: "Lessons", timezone: "UTC", periodStart: "2030-01-01", periodEnd: "2030-06-30", importMode: "all_timed", mappings: [] },
+      });
+      expect(exitCode).not.toBe(0);
+      expect(data.status).toBe("FAILED");
+      expect(data.code).toMatch(/^INVALID_/);
+    }, 120_000);
+
+    // On macOS and Windows these would install or remove the real recorder service.
+    it.runIf(linux).each(["capture.enable", "capture.disable"] as const)("%s: the command's error arrives as an RpcError", async (method: JobMethod) => {
+      await expect(runJob(rpc, method, undefined)).rejects.toMatchObject({ code: RpcCode.CliError, message: "The recording app requires macOS or Windows 11" });
+    }, 120_000);
+
+    it("notes.publish: runs `mynotes publish` (no candidate yet: the CLI's own error)", async () => {
+      await expect(runJob(rpc, "notes.publish", { lecture: `${courseCode}-L01` })).rejects.toMatchObject({
+        code: RpcCode.CliError,
+        message: "No validated Word candidate exists; run mynotes build first",
+      });
+    }, 120_000);
+
+    it("lesson.process: a transcript is imported without speech recognition", async () => {
+      const path = join(fixture.root, "lesson two.txt");
+      writeFileSync(path, "Lesson two, from a text file.\n");
+      const lectureId = `${courseCode}-L02`;
+      let started = "";
+      const finished = await untilJobFinished(rpc, async () => {
+        const ref = await rpc.call("lesson.process", { lectureId, transcript: path });
+        started = ref.jobId;
+        return ref;
+      }, 120_000);
+      const stages = (seen.get("job.progress") ?? []).filter((event) => (event as { jobId?: string }).jobId === started).map((event) => (event as { stage: string }).stage);
+      expect(stages).toContain("PREPARING");
+      expect(stages).not.toContain("TRANSCRIBING");
+      // No agent in this workspace: the notes step stops before any provider call.
+      expect(finished).toMatchObject({ state: "FAILED", error: { code: RpcCode.CliError } });
+      expect((finished?.error as { message?: string } | undefined)?.message).toMatch(/^No provider is selected/);
+      const { data } = await rpc.call("library.transcript", { lectureId });
+      expect(data).toMatchObject({ path, text: "Lesson two, from a text file.\n" });
+    }, 120_000);
+  });
 
   it("seeded a workspace with a course and a finished job", () => {
     expect(courseCode).not.toBe("");

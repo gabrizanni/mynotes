@@ -9,6 +9,7 @@
  * - `job.cancel` stops a running job (`cancelled`, progress kept, batch resumable).
  * - `transcription.run` transcribes for a while, then adds the transcript to the library.
  * - `notes.plan` and `library.transcript` answer for the lessons actually asked.
+ * - `notes.publish` is a job, as on the server: `job.finished` carries `notes.publish.result.json`.
  */
 import type { Json } from "./fixtures";
 import type { JsonObject, MockJobs } from "./mockJobs";
@@ -162,11 +163,26 @@ export function createNotesMock(ctx: NotesMockContext) {
     return { exitCode: missing ? 2 : 0, data: { status: missing ? "NEEDS_TRANSCRIPT" : "READY", lessons } };
   };
 
+  // The server reads the file it has on record for the lesson; the fixture's file stands in for it.
   const transcript = (params: unknown): Json => {
-    const lectureId = str(asParams(params).lectureId) ?? "";
+    const request = asParams(params);
+    const name = str(request.lectureId)?.toUpperCase() ?? str(request.recordingId) ?? "";
     const fixture = structuredClone(ctx.state.get("library.transcript") ?? null);
-    if (isObject(fixture) && isObject(fixture.data)) fixture.data.lecture_id = lectureId;
+    if (isObject(fixture) && isObject(fixture.data) && typeof fixture.data.path === "string") {
+      fixture.data.path = fixture.data.path.replace(/[^/\\]+\.txt$/, `${name}.txt`);
+    }
     return fixture;
+  };
+
+  const publish = (params: unknown): Json => {
+    const request = asParams(params);
+    const lecture = str(request.lecture)?.toUpperCase() ?? "";
+    const candidate = str(request.candidate);
+    return ctx.jobs.quick("notes.publish", candidate ? { lecture, candidate } : { lecture }, () => {
+      const answer = ctx.jobs.result("notes.publish", { status: "PUBLISHED", lecture_id: lecture, output: null });
+      if (isObject(answer.data)) answer.data.lecture_id = lecture;
+      return answer;
+    });
   };
 
   return {
@@ -176,6 +192,7 @@ export function createNotesMock(ctx: NotesMockContext) {
       "job.cancel": cancel,
       "transcription.run": transcribe,
       "library.transcript": transcript,
+      "notes.publish": publish,
     } satisfies Record<string, (params: unknown) => Json>,
     dispose: () => {
       for (const jobId of [...timersByJob.keys()]) stop(jobId);

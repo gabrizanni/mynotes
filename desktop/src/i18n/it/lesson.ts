@@ -84,6 +84,7 @@ export const lesson: Messages["lesson"] = {
     error: "La trascrizione non si è caricata. Apri il TXT.",
     empty: "La trascrizione è vuota.",
     lecturer: "Docente",
+    truncated: "Questa è la prima parte di una trascrizione lunga. Apri il testo completo per leggerla tutta.",
   },
   states: {
     noAudioTitle: "Aggiungi la registrazione della lezione",

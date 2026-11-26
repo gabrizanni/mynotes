@@ -1,5 +1,6 @@
 /** Recorder snapshot (`capture.dashboard`, pushed by `capture.changed`). */
 import type { CaptureDashboard, CaptureSettingsPatch, LessonInput, LessonPatch, MethodParams } from "../../rpc";
+import { runJob } from "../../rpc/jobs";
 import { failed, idle, loading, ready, type Load } from "../load";
 import { attempt } from "../result";
 import type { SliceContext } from "../types";
@@ -47,8 +48,20 @@ export function captureActions(ctx: SliceContext<"capture">) {
     addLesson: (lesson: LessonInput) => attempt(async () => (await ctx.rpc.call("capture.addLesson", { lesson })).data),
     editLesson: (event: string, patch: LessonPatch) => attempt(async () => (await ctx.rpc.call("capture.editLesson", { event, patch })).data),
     resetLesson: (event: string) => attempt(async () => (await ctx.rpc.call("capture.resetLesson", { event })).data),
-    syncCalendars: (source?: string) => attempt(async () => (await ctx.rpc.call("capture.sync", source ? { source } : {})).data),
-    connectCalendar: (source: MethodParams<"capture.connect">["source"]) => attempt(async () => (await ctx.rpc.call("capture.connect", { source })).data),
+    // Job lane (docs/SERVE.md): each resolves when `job.finished` carries the command's answer.
+    // An answer with another exit code or status is a failure the screen reports, never "done".
+    syncCalendars: (source?: string) =>
+      attempt(async () => {
+        const { exitCode, data } = await runJob(ctx.rpc, "capture.sync", source ? { source } : {});
+        if (exitCode !== 0) throw new Error(data.message ?? data.status ?? "capture sync failed");
+        return data;
+      }),
+    connectCalendar: (source: MethodParams<"capture.connect">["source"]) =>
+      attempt(async () => {
+        const { data } = await runJob(ctx.rpc, "capture.connect", { source });
+        if (data.status !== "CONNECTED") throw new Error(data.code ?? data.status);
+        return data;
+      }),
     removeCalendar: (source: string) =>
       attempt(async () => {
         const { data } = await ctx.rpc.call("capture.unsubscribe", { source });
@@ -70,10 +83,11 @@ export function captureActions(ctx: SliceContext<"capture">) {
         if (dashboard) ctx.set({ dashboard: { ...dashboard, ...config } });
         return data;
       }),
-    /** Recorder on/off (`capture enable|disable`). */
+    /** Recorder on/off (`capture enable|disable`, job lane: it installs or removes an OS service). */
     setEnabled: (enabled: boolean) =>
       attempt(async () => {
-        const { data } = await ctx.rpc.call(enabled ? "capture.enable" : "capture.disable");
+        const { exitCode, data } = await runJob(ctx.rpc, enabled ? "capture.enable" : "capture.disable", undefined);
+        if (exitCode !== 0) throw new Error(data.message ?? data.status ?? "capture enable failed");
         const dashboard = ctx.get().dashboard;
         if (dashboard) ctx.set({ dashboard: { ...dashboard, enabled } });
         return data;

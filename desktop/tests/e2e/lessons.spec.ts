@@ -29,6 +29,19 @@ test("Generate notes walks the stages, then offers Word and Undo", async ({ page
   await expect(page.getByRole("status").getByRole("button", { name: "Undo" })).toBeVisible();
 });
 
+test("Approve & update Word publishes through a job, then confirms", async ({ page }) => {
+  await page.goto("/?lang=en&scenario=approval#/lessons/STAT-L06");
+  await page.getByRole("button", { name: "Review notes" }).click();
+  const dialog = sheet(page);
+  await dialog.getByRole("button", { name: "Open preview" }).click();
+  // `notes.publish` is a job (LibreOffice renders Word): the toast waits for its `job.finished`.
+  await dialog.getByRole("button", { name: "Approve & update Word" }).click();
+  await expect(dialog.getByRole("status").getByText("Lesson 6 is in your course notes.")).toBeVisible();
+  // The sheet's outcome and the toast both say it.
+  await expect(page.getByText("Lesson 6 is in your course notes.")).toHaveCount(2);
+  await expect(page.getByText("Word couldn't be updated. Close it in Word and try again.")).toHaveCount(0);
+});
+
 test("a paused job says why, keeps progress and resumes to the end", async ({ page }) => {
   await page.goto("/?lang=en&scenario=notes-quota&stage=1#/lessons/STAT-L06");
   await page.getByRole("button", { name: "See details" }).click();

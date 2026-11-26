@@ -6,6 +6,7 @@ import { Banner, Button, ChoiceList, Disclosure, Icon, Sheet, StageStepper, Step
 import { cx } from "../../../design/cx";
 import { useI18n } from "../../../i18n";
 import type { Job } from "../../../rpc";
+import { runJob } from "../../../rpc/jobs";
 import { useActions, useAppState, useRpc } from "../../../state";
 import type { StageTiming } from "../../../state/slices/jobs";
 import { courseFiles, courseRecord, reviewFirst, withPublicationMode } from "../../courses/model";
@@ -488,8 +489,10 @@ function useOutcomeParts(args: OutcomeArgs | null): { body: ReactNode; footer: R
         setBusy(true);
         try {
           const path = await candidate();
-          for (const lectureId of job?.lectureIds ?? []) {
-            await rpc.call("notes.publish", path ? { lectureId, candidate: path } : { lectureId });
+          for (const lecture of job?.lectureIds ?? []) {
+            // A job (LibreOffice renders the Word file): wait for its `job.finished` answer.
+            const published = await runJob(rpc, "notes.publish", path ? { lecture, candidate: path } : { lecture });
+            if (published.exitCode !== 0) throw new Error(published.data.status);
           }
           // The job record keeps AWAITING_APPROVAL; publishing is what completes it.
           if (job) actions.jobs.finished({ jobId: job.jobId, state: "COMPLETED", exitCode: 0, result: { exitCode: 0, data: { status: "COMPLETED" } } });

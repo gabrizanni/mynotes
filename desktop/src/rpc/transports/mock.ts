@@ -88,7 +88,15 @@ export function createMockTransport(partial: Partial<MockOptions> = {}): Transpo
     return isObject(data) ? data : null;
   };
 
-  const jobs = mockJobs({ state, emit, now: options.now });
+  // Unlike `later`, runs while frozen too: a quick job must end, or its screen waits forever.
+  const soon = (ms: number, run: () => void) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      run();
+    }, ms);
+    timers.add(timer);
+  };
+  const jobs = mockJobs({ state, emit, now: options.now, soon, quickMs: Math.max(options.latencyMs, 1) });
 
   const handlers: Record<string, (params: unknown) => Json> = {
     // Assistant: a streamed reply with one tool row.

@@ -533,19 +533,18 @@ export const audioImportSchema = z.looseObject({
 /** `transcription-queue lesson-edit` request: rename or re-date a lesson, or hide it. */
 export const lessonEditSchema = z.object({ action: z.enum(["update", "hide"]), id: str, title: str.optional(), date: str.optional() });
 
-export const transcriptSegmentSchema = z.looseObject({
-  start_seconds: z.number(),
-  end_seconds: optNum,
+/**
+ * `library.transcript` (serve_transcript.py, docs/SERVE.md "Transcript text"): the text of a
+ * lesson's transcript, read from the path MyNotes recorded for it. At most `maxBytes` bytes
+ * (2 MiB unless asked); `truncated` when the file is longer, `size` its length in bytes.
+ * `encoding`: utf-8 · utf-8-sig · latin-1. The timestamped lines are parsed in the lesson feature.
+ */
+export const transcriptTextSchema = z.looseObject({
+  path: str,
   text: str,
-  speaker: optStr,
-});
-
-/** Timestamped transcript of one lesson (asr.py segments). */
-export const lessonTranscriptSchema = z.looseObject({
-  lecture_id: str,
-  path: optStr,
-  language: optStr,
-  segments: z.array(transcriptSegmentSchema),
+  truncated: z.boolean(),
+  encoding: str,
+  size: optNum,
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -800,12 +799,14 @@ export const methods = {
   "capture.confirmTest": { params: z.object({ audio: str, audibleConfirmed: z.boolean() }), result: cli(anyObject) },
   "capture.recover": { params: z.object({ session: str.optional() }).optional(), result: cli(captureActionSchema) },
   "capture.configure": { params: z.object({ config: captureSettingsPatchSchema.optional() }).optional(), result: cli(okSchema) },
-  "capture.connect": { params: z.object({ source: anyObject }), result: cli(captureConnectSchema) },
+  /** Job lane (it downloads the calendar): read the answer with `runJob` (rpc/jobs.ts). */
+  "capture.connect": { params: z.object({ source: anyObject }), result: jobRefSchema },
   "capture.unsubscribe": { params: z.object({ source: str }), result: cli(okSchema) },
   "capture.setImportMode": { params: z.object({ source: str, mode: z.enum(["mapped", "all_timed"]) }), result: cli(okSchema) },
-  "capture.sync": { params: z.object({ ifDue: z.boolean().optional(), source: str.optional() }).optional(), result: cli(okSchema) },
-  "capture.enable": { params: none, result: cli(okSchema) },
-  "capture.disable": { params: none, result: cli(okSchema) },
+  /** Job lane, like `capture.connect`, `.enable` and `.disable` (network, OS services). */
+  "capture.sync": { params: z.object({ ifDue: z.boolean().optional(), source: str.optional() }).optional(), result: jobRefSchema },
+  "capture.enable": { params: none, result: jobRefSchema },
+  "capture.disable": { params: none, result: jobRefSchema },
   "capture.pause": { params: none, result: cli(okSchema) },
   "capture.resume": { params: none, result: cli(okSchema) },
   "capture.addLesson": { params: z.object({ lesson: lessonInputSchema }), result: cli(lessonChangeSchema) },
@@ -838,16 +839,25 @@ export const methods = {
   /** `prefer-audio`: use this recording for the lesson's transcription. */
   "library.preferAudio": { params: z.object({ recordingId: str }), result: cli(okSchema) },
   "library.editLesson": { params: z.object({ edit: lessonEditSchema }), result: cli(okSchema) },
-  /** Not in SERVE.md yet: the timestamped transcript of one lesson. */
-  "library.transcript": { params: z.object({ lectureId: str }), result: cli(lessonTranscriptSchema) },
+  /** The transcript text of one lesson or recording; the server picks the file, never the app. */
+  "library.transcript": {
+    params: z.union([
+      z.object({ lectureId: str, maxBytes: z.number().int().min(1).max(8 * 1024 * 1024).optional() }),
+      z.object({ recordingId: str, maxBytes: z.number().int().min(1).max(8 * 1024 * 1024).optional() }),
+    ]),
+    result: cli(transcriptTextSchema),
+  },
 
   // transcription, notes, lessons, jobs
   "transcription.run": {
     params: z.union([z.object({ lectureId: str, audio: str.optional() }), z.object({ recordingId: str, audio: str.optional() })]),
     result: jobRefSchema,
   },
+  /** One lesson from an audio file, or from a transcript (`transcript` skips speech recognition). */
   "lesson.process": {
-    params: z.object({ lectureId: str, audio: str.optional(), provider: providerIdSchema.optional(), quality: str.optional(), instructions: str.optional() }),
+    params: z
+      .object({ lectureId: str, audio: str.optional(), transcript: str.optional(), provider: providerIdSchema.optional(), quality: str.optional(), instructions: str.optional() })
+      .refine((value) => !(value.audio && value.transcript), { message: "Give an audio file or a transcript, not both" }),
     result: jobRefSchema,
   },
   "notes.plan": { params: notesParams, result: cli(notesPlanSchema) },
@@ -857,8 +867,8 @@ export const methods = {
   /** `undo CODE`: restores the course notes before the last update; a safety copy is kept. */
   "notes.undo": { params: z.object({ course: str }), result: cli(notesUndoSchema) },
   "notes.restore": { params: z.object({ backupId: str }), result: cli(notesRestoreSchema) },
-  /** Not in SERVE.md yet: `publish CODE-LNN --candidate PATH` (Approve & update Word). */
-  "notes.publish": { params: z.object({ lectureId: str, candidate: str.optional() }), result: cli(notesPublishSchema) },
+  /** `publish CODE-LNN [--candidate PATH]` (Approve & update Word): a job, it renders with LibreOffice. */
+  "notes.publish": { params: z.object({ lecture: str, candidate: str.optional() }), result: jobRefSchema },
   "job.list": { params: z.object({ limit: z.number().int().optional() }).optional(), result: jobListSchema },
   "job.get": { params: z.object({ jobId: str }), result: jobRecordSchema },
   "job.wait": { params: z.object({ jobId: str, timeoutSeconds: z.number().optional() }), result: jobRecordSchema },
@@ -874,6 +884,21 @@ export const methods = {
 } as const;
 
 export type MethodName = keyof typeof methods;
+
+/**
+ * What `job.finished.result` carries for the job methods the app waits on (`runJob`,
+ * rpc/jobs.ts): the command's `{exitCode, data}`, checked like a direct result.
+ */
+export const jobResults = {
+  "capture.connect": cli(captureConnectSchema),
+  "capture.sync": cli(okSchema),
+  "capture.enable": cli(okSchema),
+  "capture.disable": cli(okSchema),
+  "notes.publish": cli(notesPublishSchema),
+} as const;
+
+export type JobMethod = keyof typeof jobResults;
+export type JobResult<M extends JobMethod> = z.output<(typeof jobResults)[M]>;
 export type MethodParams<M extends MethodName> = z.input<(typeof methods)[M]["params"]>;
 export type MethodResult<M extends MethodName> = z.output<(typeof methods)[M]["result"]>;
 
@@ -938,5 +963,4 @@ export type DoctorReport = z.output<typeof doctorReportSchema>;
 export type NotesBackup = z.output<typeof notesBackupSchema>;
 export type StyleProfile = z.output<typeof styleProfileSchema>;
 export type CourseLink = z.output<typeof courseLinkSchema>;
-export type LessonTranscript = z.output<typeof lessonTranscriptSchema>;
-export type TranscriptSegment = z.output<typeof transcriptSegmentSchema>;
+export type TranscriptText = z.output<typeof transcriptTextSchema>;

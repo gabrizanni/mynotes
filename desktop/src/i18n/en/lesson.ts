@@ -83,6 +83,7 @@ export const lesson = {
     error: "The transcript couldn't load. Open the TXT instead.",
     empty: "The transcript is empty.",
     lecturer: "Lecturer",
+    truncated: "This is the first part of a long transcript. Open the full text to read it all.",
   },
   states: {
     noAudioTitle: "Add this lesson's recording",

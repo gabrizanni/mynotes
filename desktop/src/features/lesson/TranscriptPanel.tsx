@@ -4,9 +4,8 @@ import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, use
 import { Banner, Button, Card, fieldStyles, Icon, IconButton } from "../../components";
 import { cx } from "../../design/cx";
 import { useI18n } from "../../i18n";
-import type { TranscriptSegment } from "../../rpc";
 import { shortcutLabel } from "../../app/platform";
-import { activeSegment, findMatches, highlightParts, stepMatch } from "./model";
+import { activeSegment, findMatches, highlightParts, stepMatch, type TranscriptSegment } from "./model";
 import styles from "./Lesson.module.css";
 
 export interface TranscriptHandle {
@@ -17,6 +16,8 @@ export interface TranscriptHandle {
 export interface TranscriptPanelProps {
   status: "loading" | "ready" | "error";
   segments: readonly TranscriptSegment[];
+  /** The server read only the first part of a long file (`library.transcript` size cap). */
+  truncated?: boolean;
   position: number;
   onSeek: (seconds: number) => void;
   onRetry: () => void;
@@ -30,7 +31,7 @@ function prefersReducedMotion(): boolean {
 }
 
 export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps>(function TranscriptPanel(
-  { status, segments, position, onSeek, onRetry, onOpenFull, initialQuery = "" },
+  { status, segments, truncated = false, position, onSeek, onRetry, onOpenFull, initialQuery = "" },
   ref,
 ) {
   const { t, format } = useI18n();
@@ -133,12 +134,17 @@ export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps
       ) : (
         <ol ref={list} className={styles.segments} aria-label={t.lesson.transcript}>
           {segments.map((segment, index) => {
-            const time = format.clock(segment.start_seconds);
+            const start = segment.start_seconds;
+            const time = start === null ? null : format.clock(start);
             return (
-              <li key={`${segment.start_seconds}-${index}`} className={cx(styles.segment, index === playing && styles.segmentPlaying)} aria-current={index === playing ? "true" : undefined}>
-                <button type="button" className={styles.stamp} aria-label={t.lesson.transcriptPanel.playFrom(time)} onClick={() => onSeek(segment.start_seconds)}>
-                  {time}
-                </button>
+              <li key={`${start ?? "text"}-${index}`} className={cx(styles.segment, index === playing && styles.segmentPlaying)} aria-current={index === playing ? "true" : undefined}>
+                {start === null || time === null ? (
+                  <span className={styles.stamp} aria-hidden="true" />
+                ) : (
+                  <button type="button" className={styles.stamp} aria-label={t.lesson.transcriptPanel.playFrom(time)} onClick={() => onSeek(start)}>
+                    {time}
+                  </button>
+                )}
                 <p className={styles.segmentText}>
                   {highlightParts(segment.text, matches, index).map((part, partIndex) =>
                     part.match === null ? (
@@ -154,6 +160,11 @@ export const TranscriptPanel = forwardRef<TranscriptHandle, TranscriptPanelProps
             );
           })}
         </ol>
+      )}
+      {status === "ready" && truncated && (
+        <p className={cx(styles.muted, styles.transcriptState)} role="note">
+          {t.lesson.transcriptPanel.truncated}
+        </p>
       )}
     </Card>
   );

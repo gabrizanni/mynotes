@@ -79,7 +79,11 @@ fails the suite once the schema is fixed, so the entry goes away with the fix.
 
 The mock fixtures use the same wire shapes as the server (job records, watch snapshots, the
 `{exitCode, data}` envelope). Features read the app's `Job` view, built from records and job
-notifications in one place, `src/rpc/jobs.ts`.
+notifications in one place, `src/rpc/jobs.ts`. Job-lane methods the app waits on
+(`capture.connect`, `.sync`, `.enable`, `.disable`, `notes.publish`) go through `runJob`
+there: it starts the job and resolves with the `{exitCode, data}` of its `job.finished`, or
+throws the command's error. The mock runs them as jobs too, and their answers live in
+`tests/fixtures/rpc/<method>.result.json`.
 
 `MYNOTES_CONTRACT_RECORD=1 npm run test:contract` writes every real answer, temporary paths
 replaced by `/tmp/mynotes-contract`, to `tests/fixtures/rpc-real/`. They do not overwrite

@@ -9,6 +9,7 @@ import {
   highlightParts,
   initialPlayer,
   keyBelongsToControl,
+  parseTranscript,
   playerKey,
   playerReducer,
   stepMatch,
@@ -102,6 +103,34 @@ describe("transcript search", () => {
     expect(activeSegment(timed, 30)).toBe(1);
     expect(activeSegment(timed, 500)).toBe(2);
     expect(activeSegment([], 10)).toBe(-1);
+    // Header lines and plain text have no timestamp: they never play and never stop the scan.
+    expect(activeSegment([{ start_seconds: null }, { start_seconds: 5 }, { start_seconds: 12 }], 6)).toBe(1);
+  });
+});
+
+describe("transcript text", () => {
+  it("parses the lines MyNotes writes (asr.write_transcript_text)", () => {
+    const text = [
+      "Timestamp indicativi. Trascrizione automatica.",
+      "[00:00:05–00:00:20] professor: Good morning: today, hypothesis tests.",
+      "[01:02:03–01:02:09] UNKNOWN [passaggio incerto]: maybe a question",
+      "",
+    ].join("\r\n");
+    expect(parseTranscript(text)).toEqual([
+      { start_seconds: null, end_seconds: null, speaker: null, text: "Timestamp indicativi. Trascrizione automatica.", uncertain: false },
+      { start_seconds: 5, end_seconds: 20, speaker: "professor", text: "Good morning: today, hypothesis tests.", uncertain: false },
+      { start_seconds: 3723, end_seconds: 3729, speaker: null, text: "maybe a question", uncertain: true },
+    ]);
+  });
+
+  it("keeps a plain TXT transcript as untimed lines that search still finds", () => {
+    const segments = parseTranscript("Prima riga della lezione.\n\n  Seconda riga: la società.  \n");
+    expect(segments.map((segment) => [segment.start_seconds, segment.text])).toEqual([
+      [null, "Prima riga della lezione."],
+      [null, "Seconda riga: la società."],
+    ]);
+    expect(findMatches(segments, "societa")).toEqual([{ segment: 1, start: 17, end: 24 }]);
+    expect(parseTranscript("")).toEqual([]);
   });
 });
 

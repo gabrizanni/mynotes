@@ -5,7 +5,8 @@
  * Everything that turns one into the other lives here.
  */
 import type { RpcClient } from "./client";
-import type { Job, JobRecord, NotificationParams } from "./schema";
+import { RpcCode, RpcError } from "./errors";
+import { jobResults, type Job, type JobMethod, type JobRecord, type JobResult, type MethodParams, type NotificationParams } from "./schema";
 
 export type JobFinished = NotificationParams<"job.finished">;
 export type JobStarted = NotificationParams<"job.started">;
@@ -17,6 +18,17 @@ const KIND_BY_METHOD: Readonly<Record<string, string>> = {
   "provider.login": "login",
   "setup.run": "setup",
   "speech.installModel": "setup",
+  // Not a notes run: publishing approves one that already ran.
+  "notes.publish": "publish",
+};
+
+/** How long `runJob` waits by default; LibreOffice renders take longer. */
+const JOB_TIMEOUT_MS: Readonly<Record<JobMethod, number>> = {
+  "capture.connect": 120_000,
+  "capture.sync": 120_000,
+  "capture.enable": 60_000,
+  "capture.disable": 60_000,
+  "notes.publish": 300_000,
 };
 
 const STATE_BY_SERVER: Readonly<Record<string, string>> = {
@@ -144,4 +156,34 @@ export async function untilJobFinished(rpc: RpcClient, start: () => Promise<{ jo
     clearTimeout(timer);
     off();
   }
+}
+
+/**
+ * The command's answer from a `job.finished` event, as a direct call would return it: the
+ * `{exitCode, data}` result (exit codes other than 0 can still carry data, as with direct
+ * calls), else the command's error as an RpcError (`-32001` with the CLI's message, …).
+ */
+export function jobAnswer<M extends JobMethod>(method: M, finished: JobFinished | null): JobResult<M> {
+  if (!finished) throw new RpcError(method, RpcCode.Timeout, `${method} did not finish in time; it keeps running`);
+  if (finished.result) {
+    const parsed = jobResults[method].safeParse(finished.result);
+    if (!parsed.success) throw new RpcError(method, RpcCode.InvalidResult, "The backend answered in an unexpected shape", parsed.error.issues);
+    return parsed.data as JobResult<M>;
+  }
+  const error = finished.error;
+  if (isBag(error) && typeof error.code === "number" && typeof error.message === "string") {
+    throw new RpcError(method, error.code, error.message, error.data);
+  }
+  throw new RpcError(method, RpcCode.InternalError, `${method} ended ${finished.state} without a result`);
+}
+
+/**
+ * Starts a job-lane method (docs/SERVE.md "Jobs": `{jobId}` at once, then `job.progress`, then
+ * `job.finished`) and resolves with its command's `{exitCode, data}`, so a screen awaits it
+ * like a direct call and keeps the same loading, success and error states.
+ */
+export async function runJob<M extends JobMethod>(rpc: RpcClient, method: M, params: MethodParams<M>, timeoutMs: number = JOB_TIMEOUT_MS[method]): Promise<JobResult<M>> {
+  // The client's rest-parameter overloads do not resolve for a generic method name.
+  const start = rpc.call.bind(rpc) as (name: M, params: MethodParams<M>) => Promise<{ jobId: string }>;
+  return jobAnswer(method, await untilJobFinished(rpc, () => start(method, params), timeoutMs));
 }

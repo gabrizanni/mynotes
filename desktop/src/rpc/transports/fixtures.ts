@@ -3,6 +3,8 @@
  *
  * File naming in `tests/fixtures/rpc/`:
  * - `<method>.json`: the method's result (CLI-backed methods keep the `{ exitCode, data }` envelope);
+ * - `<method>.result.json`: for a job method, the command's `{ exitCode, data }` that the mock's
+ *   `job.finished` carries (`schema.ts` › `jobResults`);
  * - `<method>@<scenario>.json`: a JSON merge patch (RFC 7386) applied on top for one scenario.
  *   Objects merge key by key, arrays and scalars replace, `null` deletes a key;
  * - `_mock.json`: mock settings (`anchorDate`: the day the fixtures were written for).

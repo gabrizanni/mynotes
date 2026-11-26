@@ -152,6 +152,29 @@ test("a public Google calendar link gets one fix: the private iCal address", asy
   await expect(page.getByText("Find your private iCal address")).toBeVisible();
 });
 
+test("connecting a calendar waits for its job, then previews the lessons", async ({ page }) => {
+  await seed(page, through("schedule", "en"));
+  await page.goto("/?lang=en#/welcome/schedule");
+  await page.getByLabel("Calendar link").fill("https://timetable.example.edu/statistics.ics");
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  // `capture.connect` is a job: the summary appears once `job.finished` carries CONNECTED.
+  await expect(page.getByText("Found in your calendar")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Looks right" })).toBeVisible();
+});
+
+test("a TXT transcript makes the first notes without a recording", async ({ page }) => {
+  await seed(page, through("first-notes", "en"));
+  await page.goto("/?lang=en#/welcome/first-notes");
+  await page.getByRole("radio", { name: /I have a recording/ }).click();
+  await page.locator('input[type="file"]').setInputFiles({ name: "Lesson 1.txt", mimeType: "text/plain", buffer: Buffer.from("Today: sampling.\n") });
+  await expect(page.getByText("Lesson 1.txt")).toBeVisible();
+  await expect(page.getByText("Ready to use")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("button", { name: "Generate" }).click();
+  await expect(heading(page, "You're ready.")).toBeVisible();
+  await expect(page.getByText("Your first notes are being written.")).toBeVisible();
+});
+
 test("Back always works, even from the waiting screen", async ({ page }) => {
   await seed(page, through("files", "en", {}, false));
   await page.goto("/?lang=en&scenario=setup-running&simulate=0#/welcome/files");

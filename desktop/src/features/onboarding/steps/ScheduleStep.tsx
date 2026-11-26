@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Banner, Card, Icon, Segmented, Select, TextField } from "../../../components";
 import { useT } from "../../../i18n";
 import { useActions, useAppState, useRpc } from "../../../state";
+import { runJob } from "../../../rpc/jobs";
 import { useOnboarding } from "../controller";
 import { calendarProblem, defaultPeriod, schedulePreview, validateCalendarUrl, type CalendarCode, type CalendarFix } from "../model";
 import styles from "../Onboarding.module.css";
@@ -48,7 +49,8 @@ export function ScheduleStep() {
     setBusy(true);
     try {
       await rpc.call("capture.configure", { config: {} });
-      const { data } = await rpc.call("capture.connect", {
+      // A job: the answer arrives with `job.finished` once the calendar is downloaded.
+      const { data } = await runJob(rpc, "capture.connect", {
         source: {
           url: url.trim(),
           label: courseName || s.tabs.link,

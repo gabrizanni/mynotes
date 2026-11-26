@@ -6,12 +6,14 @@
  * - `setup.run` starts a byte-accurate download simulation that `setup.status` reports;
  * - `provider.login` turns the provider ready after a few seconds (`provider.authChanged`);
  * - `profile.save`, `course.add`, `course.link` update `config.get` (`config.changed`);
- * - `capture.connect` / `.unsubscribe` / `.enable` / `.pause` / `.resume` / `.test` update the
- *   dashboard (`capture.changed`), the microphone test lasts 60 s like the real recorder;
- * - `lesson.process` runs the stage sequence of a notes job.
+ * - `capture.connect` / `.unsubscribe` / `.enable` / `.disable` / `.pause` / `.resume` / `.test`
+ *   update the dashboard (`capture.changed`), the microphone test lasts 60 s like the real recorder;
+ * - `capture.connect`, `.sync`, `.enable` and `.disable` are jobs, as on the server: `{jobId, job}`,
+ *   then `job.finished` with `<method>.result.json` (the dashboard changes when the job ends);
+ * - `lesson.process` runs the stage sequence of a notes job (a `transcript` skips TRANSCRIBING).
  */
 import type { Json } from "./fixtures";
-import type { MockJobs } from "./mockJobs";
+import type { MockJobs, QuickOutcome } from "./mockJobs";
 
 type JsonObject = { [key: string]: Json };
 
@@ -40,6 +42,7 @@ const AFTER_DOWNLOAD = [
 ] as const;
 const MIC_TEST_MS = 60_000;
 const LESSON_STAGES = ["TRANSCRIBING", "GENERATING", "BUILDING_WORD", "UPDATING_WORD"] as const;
+const IMPORT_STAGES = ["PREPARING", "GENERATING", "BUILDING_WORD", "UPDATING_WORD"] as const;
 
 function isObject(value: Json | undefined): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -141,18 +144,80 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
     return { state: "complete", stage: "ready", title: null, bytesDone: null, bytesTotal: null, lastDataAt, error: null, overallDone: TOTAL_BYTES, overallTotal: TOTAL_BYTES, components };
   };
 
-  const startLessonJob = (lectureId: string, audio: string | null): Json => {
+  /** Audio is transcribed first; a transcript is imported instead (no TRANSCRIBING), as on the server. */
+  const startLessonJob = (lectureId: string, source: { audio: string } | { transcript: string } | null): Json => {
     jobCounter += 1;
     const jobId = `mock-lesson-${jobCounter}`;
-    const ref = jobs.start(jobId, "lesson.process", audio ? { lectureId, audio } : { lectureId }, (run) => later(10, run));
+    const stages = source && "transcript" in source ? IMPORT_STAGES : LESSON_STAGES;
+    const ref = jobs.start(jobId, "lesson.process", { lectureId, ...source }, (run) => later(10, run));
     const job = jobs.find(jobId);
     if (!job) return ref;
-    job.lastProgress = { jobId, stage: LESSON_STAGES[0], at: iso(now()) };
-    LESSON_STAGES.slice(1).forEach((stage, index) => {
+    job.lastProgress = { jobId, stage: stages[0], at: iso(now()) };
+    stages.slice(1).forEach((stage, index) => {
       later(ctx.stageMs * (index + 1), () => jobs.progress(job, stage));
     });
-    later(ctx.stageMs * LESSON_STAGES.length, () => jobs.finish(job, "COMPLETED", 0, { status: "COMPLETED" }));
+    later(ctx.stageMs * stages.length, () => jobs.finish(job, "COMPLETED", 0, { status: "COMPLETED" }));
     return ref;
+  };
+
+  const jobParams = (raw: unknown): JsonObject => (isObject(raw as Json) ? structuredClone(raw as JsonObject) : {});
+
+  /** `capture connect` once its download is done: the fixture answer, plus the imported events. */
+  const connectCalendar = (raw: unknown): QuickOutcome => {
+    const file = params(params(raw).source);
+    const result = jobs.result("capture.connect", { status: "CONNECTED", sourceID: "timetable" });
+    const board = dashboard();
+    if (!isObject(result.data) || result.data.status !== "CONNECTED" || !board) return result;
+    const sourceID = text(result.data.sourceID) ?? "timetable";
+    const courses = Array.isArray(board.courses) ? board.courses.filter(isObject) : [];
+    const course = courses[courses.length - 1];
+    const code = course && typeof course.code === "string" ? course.code : null;
+    const title = course && typeof course.name === "string" ? course.name : "Lesson";
+    const timezone = text(file.timezone) ?? "Europe/Rome";
+    const first = Date.UTC(2026, 11, 1, 8, 0);
+    const events: JsonObject[] = [];
+    for (let index = 0; index < 34; index += 1) {
+      const startsAt = new Date(first + Math.floor(index / 2) * 7 * 86_400_000 + (index % 2) * 2 * 86_400_000);
+      const endsAt = new Date(startsAt.getTime() + 90 * 60_000);
+      const orphan = index >= 31;
+      events.push({
+        id: `${sourceID}:${index}`,
+        sourceID,
+        courseCode: orphan ? null : code,
+        lessonNumber: orphan ? null : index + 1,
+        title: orphan ? "Office hours" : title,
+        startsAt: iso(startsAt),
+        endsAt: iso(endsAt),
+        timezone,
+        eligibility: index === 9 || index === 20 ? "CONFLICT" : orphan ? "NEEDS_REVIEW" : "SCHEDULED",
+        reason: "",
+        localChanges: false,
+        recordingEnabled: !orphan,
+        sourceEligibility: "SCHEDULED",
+        special: false,
+      });
+    }
+    const existing = Array.isArray(board.events) ? board.events.filter((event) => isObject(event) && event.sourceID !== sourceID) : [];
+    const sources = Array.isArray(board.sources) ? board.sources.filter((source) => isObject(source) && source.sourceID !== sourceID) : [];
+    board.events = [...existing, ...events];
+    board.sources = [
+      ...sources,
+      { sourceID, label: text(file.label) ?? "Timetable", host: "calendar", timezone, mappings: [], importMode: "all_timed", summary: { imported: 34, recognizedCourses: 1, pending: 3, excluded: 0 } },
+    ];
+    board.configured = true;
+    emitDashboard();
+    return result;
+  };
+
+  /** `capture enable|disable`: the recorder service on or off. */
+  const setRecorder = (enabled: boolean): QuickOutcome => {
+    const board = dashboard();
+    if (board) {
+      board.enabled = enabled;
+      board.running = enabled;
+      emitDashboard();
+    }
+    return jobs.result(enabled ? "capture.enable" : "capture.disable", { status: enabled ? "ENABLED" : "DISABLED", message: null });
   };
 
   return {
@@ -240,51 +305,10 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
       return result;
     },
 
-    "capture.connect": (raw) => {
-      const file = params(params(raw).source);
-      const result = fixture("capture.connect", { exitCode: 0, data: { status: "CONNECTED", sourceID: "timetable" } });
-      const board = dashboard();
-      if (!isObject(result) || !isObject(result.data) || result.data.status !== "CONNECTED" || !board) return result;
-      const sourceID = text(result.data.sourceID) ?? "timetable";
-      const courses = Array.isArray(board.courses) ? board.courses.filter(isObject) : [];
-      const course = courses[courses.length - 1];
-      const code = course && typeof course.code === "string" ? course.code : null;
-      const title = course && typeof course.name === "string" ? course.name : "Lesson";
-      const timezone = text(file.timezone) ?? "Europe/Rome";
-      const first = Date.UTC(2026, 11, 1, 8, 0);
-      const events: JsonObject[] = [];
-      for (let index = 0; index < 34; index += 1) {
-        const startsAt = new Date(first + Math.floor(index / 2) * 7 * 86_400_000 + (index % 2) * 2 * 86_400_000);
-        const endsAt = new Date(startsAt.getTime() + 90 * 60_000);
-        const orphan = index >= 31;
-        events.push({
-          id: `${sourceID}:${index}`,
-          sourceID,
-          courseCode: orphan ? null : code,
-          lessonNumber: orphan ? null : index + 1,
-          title: orphan ? "Office hours" : title,
-          startsAt: iso(startsAt),
-          endsAt: iso(endsAt),
-          timezone,
-          eligibility: index === 9 || index === 20 ? "CONFLICT" : orphan ? "NEEDS_REVIEW" : "SCHEDULED",
-          reason: "",
-          localChanges: false,
-          recordingEnabled: !orphan,
-          sourceEligibility: "SCHEDULED",
-          special: false,
-        });
-      }
-      const existing = Array.isArray(board.events) ? board.events.filter((event) => isObject(event) && event.sourceID !== sourceID) : [];
-      const sources = Array.isArray(board.sources) ? board.sources.filter((source) => isObject(source) && source.sourceID !== sourceID) : [];
-      board.events = [...existing, ...events];
-      board.sources = [
-        ...sources,
-        { sourceID, label: text(file.label) ?? "Timetable", host: "calendar", timezone, mappings: [], importMode: "all_timed", summary: { imported: 34, recognizedCourses: 1, pending: 3, excluded: 0 } },
-      ];
-      board.configured = true;
-      emitDashboard();
-      return result;
-    },
+    "capture.connect": (raw) => jobs.quick("capture.connect", jobParams(raw), () => connectCalendar(raw)),
+    "capture.sync": (raw) => jobs.quick("capture.sync", jobParams(raw), () => jobs.result("capture.sync", { status: "SYNCED", message: null })),
+    "capture.enable": (raw) => jobs.quick("capture.enable", jobParams(raw), () => setRecorder(true)),
+    "capture.disable": (raw) => jobs.quick("capture.disable", jobParams(raw), () => setRecorder(false)),
 
     "capture.unsubscribe": (raw) => {
       const source = text(params(raw).source);
@@ -295,16 +319,6 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
         emitDashboard();
       }
       return ok({ status: "UNSUBSCRIBED", sourceID: source });
-    },
-
-    "capture.enable": () => {
-      const board = dashboard();
-      if (board) {
-        board.enabled = true;
-        board.running = true;
-        emitDashboard();
-      }
-      return ok({ status: "ENABLED" });
     },
 
     "capture.pause": () => {
@@ -357,6 +371,11 @@ export function onboardingMockHandlers(ctx: OnboardingMockContext): Record<strin
       return ok({ status: "PENDING", requestID, message: null });
     },
 
-    "lesson.process": (raw) => startLessonJob(text(params(raw).lectureId) ?? "COURSE-L01", text(params(raw).audio)),
+    "lesson.process": (raw) => {
+      const request = params(raw);
+      const audio = text(request.audio);
+      const transcript = text(request.transcript);
+      return startLessonJob(text(request.lectureId) ?? "COURSE-L01", transcript ? { transcript } : audio ? { audio } : null);
+    },
   };
 }

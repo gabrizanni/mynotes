@@ -5,7 +5,7 @@
  * - transcript search (accent- and case-insensitive, Italian-friendly) and match stepping;
  * - the audio player state machine (play, ±15 s, speed, keys).
  */
-import type { CaptureDashboard, Config, Job, Library, LibraryLesson, LibraryRecording, QueueJob, QueueStatus, TranscriptSegment } from "../../rpc";
+import type { CaptureDashboard, Config, Job, Library, LibraryLesson, LibraryRecording, QueueJob, QueueStatus } from "../../rpc";
 import type { ChipKind } from "../../components/StatusChip";
 import { latestNotesJob, lessonNumberOf } from "./generate/model";
 
@@ -186,6 +186,56 @@ export function fold(text: string): { folded: string; map: number[] } {
   return { folded, map };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Transcript text (`library.transcript`)
+// ---------------------------------------------------------------------------------------------
+
+/** One transcript line; `start_seconds` is null for a line without a timestamp (a plain TXT). */
+export interface TranscriptSegment {
+  readonly start_seconds: number | null;
+  readonly end_seconds: number | null;
+  readonly speaker: string | null;
+  readonly text: string;
+  /** The speech engine marked the passage as uncertain (`[passaggio incerto]`). */
+  readonly uncertain: boolean;
+}
+
+const TIMED_LINE = /^\[(\d{1,3}:\d{2}:\d{2})\s*[–-]\s*(\d{1,3}:\d{2}:\d{2})\]\s*(.*)$/u;
+const SPEAKER = /^([^:[\]]{1,60}?)( \[passaggio incerto\])?:\s(.*)$/u;
+
+function clockSeconds(value: string): number {
+  return value.split(":").reduce((total, part) => total * 60 + Number(part), 0);
+}
+
+/**
+ * Lines of the transcript TXT that MyNotes writes (asr.write_transcript_text:
+ * `[00:01:02–00:01:09] SPEAKER: text`), or of any plain text, as segments. Empty lines are
+ * dropped; header lines and plain text keep no timestamp.
+ */
+export function parseTranscript(text: string): TranscriptSegment[] {
+  const segments: TranscriptSegment[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const timed = TIMED_LINE.exec(line);
+    if (!timed) {
+      segments.push({ start_seconds: null, end_seconds: null, speaker: null, text: line, uncertain: false });
+      continue;
+    }
+    const [, start = "0:00:00", end = "0:00:00", rest = ""] = timed;
+    const spoken = SPEAKER.exec(rest);
+    const speaker = spoken?.[1]?.trim() ?? null;
+    segments.push({
+      start_seconds: clockSeconds(start),
+      end_seconds: clockSeconds(end),
+      speaker: speaker && speaker !== "UNKNOWN" ? speaker : null,
+      text: spoken ? (spoken[3] ?? "") : rest,
+      uncertain: Boolean(spoken?.[2]),
+    });
+  }
+  return segments;
+}
+
 /** Every match of `query` across the segments, in reading order (case- and accent-insensitive). */
 export function findMatches(segments: readonly Pick<TranscriptSegment, "text">[], query: string): Match[] {
   const needle = fold(query.trim()).folded;
@@ -238,7 +288,8 @@ export function highlightParts(text: string, matches: readonly Match[], segment:
 export function activeSegment(segments: readonly Pick<TranscriptSegment, "start_seconds">[], position: number): number {
   let active = -1;
   for (let index = 0; index < segments.length; index += 1) {
-    const start = segments[index]?.start_seconds ?? Number.POSITIVE_INFINITY;
+    const start = segments[index]?.start_seconds;
+    if (start === null || start === undefined) continue; // A line without a timestamp never plays.
     if (start <= position + 0.25) active = index;
     else break;
   }

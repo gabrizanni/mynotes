@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { methods, type MethodName } from "../schema";
+import { jobResults, methods, type JobMethod, type MethodName } from "../schema";
 import { dayOffset, mergePatch, parseFixturePath, resolveFixtures, shiftDates } from "./fixtures";
 
 const modules = import.meta.glob("../../../tests/fixtures/rpc/*.json", { eager: true, import: "default" });
@@ -34,6 +34,14 @@ describe("fixtures match the schemas (mock ↔ contract)", () => {
     it(`every fixture parses in scenario "${scenario}"`, () => {
       const { results } = resolveFixtures(modules, scenario);
       for (const [method, value] of results) {
+        // `<method>.result.json`: what `job.finished.result` carries for a job method (rpc/jobs.ts runJob).
+        const job = /^(.+)\.result$/.exec(method)?.[1];
+        if (job) {
+          expect(Object.hasOwn(jobResults, job), `${job} is a job method the app waits on`).toBe(true);
+          const answer = jobResults[job as JobMethod].safeParse(value);
+          expect(answer.success, `${method}@${scenario}: ${answer.success ? "" : JSON.stringify(answer.error.issues.slice(0, 2))}`).toBe(true);
+          continue;
+        }
         expect(Object.hasOwn(methods, method), `${method} has a schema`).toBe(true);
         const spec = methods[method as MethodName];
         const outcome = spec.result.safeParse(value);

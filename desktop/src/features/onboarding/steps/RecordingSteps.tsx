@@ -1,9 +1,10 @@
-import { CalendarClock, CircleCheck, Clock, FileAudio, Info, Keyboard, X } from "lucide-react";
+import { CalendarClock, CircleCheck, Clock, FileAudio, FileText, Info, Keyboard, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Banner, Card, ChoiceCards, DropZone, Icon, IconButton, List, ListRow, StatusChip } from "../../../components";
 import { useT } from "../../../i18n";
 import type { Job } from "../../../rpc";
+import { runJob } from "../../../rpc/jobs";
 import { shallowEqual, useAppState, useRpc } from "../../../state";
 import { isMac } from "../../../app/platform";
 import { useOnboarding } from "../controller";
@@ -22,6 +23,7 @@ export function AutomaticStep() {
   const rpc = useRpc();
   const { record, complete, skip } = useOnboarding();
   const a = t.onboarding.automatic;
+  const recorderOn = useAppState((state) => state.capture.dashboard?.enabled === true);
   const [pressed, setPressed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -42,6 +44,11 @@ export function AutomaticStep() {
     setBusy(true);
     setFailed(false);
     try {
+      // The recorder service may still be off (microphone step skipped): turning it on is a job.
+      if (!recorderOn) {
+        const enabled = await runJob(rpc, "capture.enable", undefined);
+        if (enabled.exitCode !== 0) throw new Error("enable");
+      }
       const { exitCode } = await rpc.call("capture.resume");
       if (exitCode !== 0) throw new Error("resume");
       complete("automatic");
@@ -119,20 +126,21 @@ export function FirstNotesStep() {
   const { complete, skip, courseCode, providerName } = useOnboarding();
   const f = t.onboarding.firstNotes;
   const [choice, setChoice] = useState<Choice | null>(null);
-  const [file, setFile] = useState<{ name: string; path: string } | null>(null);
+  const [file, setFile] = useState<{ name: string; path: string; kind: "audio" | "transcript" } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const onFiles = (files: File[]) => {
     const first = files[0];
     if (!first) return;
-    // `lesson.process` takes an audio file (docs/SERVE.md); a TXT transcript has no server path yet.
-    if (classifyImport(first.name) !== "audio") {
+    // `lesson.process` takes an audio file (`audio`) or a TXT transcript (`transcript`, no speech recognition).
+    const kind = classifyImport(first.name);
+    if (!kind) {
       setProblem(f.unsupported);
       return;
     }
     setProblem(null);
-    setFile({ name: first.name, path: droppedPath(first) });
+    setFile({ name: first.name, path: droppedPath(first), kind });
   };
 
   const generate = async () => {
@@ -143,7 +151,8 @@ export function FirstNotesStep() {
     if (!courseCode) return;
     setBusy(true);
     try {
-      await rpc.call("lesson.process", { lectureId: lectureIdFor(courseCode), audio: file.path });
+      const lectureId = lectureIdFor(courseCode);
+      await rpc.call("lesson.process", file.kind === "transcript" ? { lectureId, transcript: file.path } : { lectureId, audio: file.path });
       complete("first-notes");
     } catch {
       setProblem(f.failed);
@@ -167,10 +176,10 @@ export function FirstNotesStep() {
         value={choice}
         onChange={setChoice}
       />
-      {choice === "have" && !file && <DropZone title={f.dropTitle} body={f.dropBody} accept="audio/*" multiple={false} onFiles={onFiles} />}
+      {choice === "have" && !file && <DropZone title={f.dropTitle} body={f.dropBody} accept="audio/*,.txt,text/plain" multiple={false} onFiles={onFiles} />}
       {choice === "have" && file && (
         <div className={styles.folderRow}>
-          <Icon icon={FileAudio} size={20} />
+          <Icon icon={file.kind === "transcript" ? FileText : FileAudio} size={20} />
           <span className={styles.folderPath}>{file.name}</span>
           <span className={`${styles.tag} ${styles.tagSuccess}`}>
             <Icon icon={CircleCheck} size={14} />
