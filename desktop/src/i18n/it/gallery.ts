@@ -14,6 +14,7 @@ export const gallery: Messages["gallery"] = {
     overlays: "Finestre",
     capsule: "Capsula del registratore",
     shell: "Struttura",
+    lessons: "Corsi e lezioni",
   },
   sample: {
     courseName: "Nome del corso",

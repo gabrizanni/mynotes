@@ -20,7 +20,8 @@ describe("mock transport", () => {
 
   it("fails like the server for a method without fixture", async () => {
     const transport = createMockTransport({ simulate: false, latencyMs: 0 });
-    await expect(transport.request("notes.history", {})).rejects.toMatchObject({ code: RpcCode.MethodNotFound });
+    // feat/desktop-lessons gave notes.history a fixture; models.catalog still has none.
+    await expect(transport.request("models.catalog", {})).rejects.toMatchObject({ code: RpcCode.MethodNotFound });
   });
 
   it("simulates a notes job through every stage with notifications", async () => {

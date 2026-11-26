@@ -12,6 +12,7 @@ export const gallery = {
     overlays: "Overlays",
     capsule: "Recorder capsule",
     shell: "Shell",
+    lessons: "Courses and lessons",
   },
   sample: {
     courseName: "Course name",

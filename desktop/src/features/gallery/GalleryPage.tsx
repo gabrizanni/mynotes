@@ -36,6 +36,7 @@ import {
 } from "../../components";
 import { useT } from "../../i18n";
 import styles from "./Gallery.module.css";
+import { LessonSpecimens } from "./LessonSpecimens"; // feat/desktop-lessons
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
@@ -429,6 +430,8 @@ export function GalleryPage() {
           ))}
         </div>
       </Section>
+
+      <LessonSpecimens />
 
       <Section id="g-shell" title={t.gallery.sections.shell}>
         <div className={styles.shellStage}>
