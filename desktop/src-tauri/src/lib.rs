@@ -104,8 +104,14 @@ pub fn run() {
         .setup(move |app| {
             let roots = Arc::new(paths::AllowedRoots::from_environment());
             let sink = Arc::new(events::TauriSink::new(app.handle().clone(), Arc::clone(&roots)));
-            let supervisor =
-                Supervisor::new(SupervisorConfig::default(), Arc::new(backend::locate::launch_from_environment), sink);
+            // Tauri's runtime, captured here: restarts come from sync commands on the main thread
+            // and from the installer's thread, where no runtime is current.
+            let supervisor = Supervisor::on_runtime(
+                tauri::async_runtime::handle().inner().clone(),
+                SupervisorConfig::default(),
+                Arc::new(backend::locate::launch_from_environment),
+                sink,
+            );
             app.manage(AppState {
                 supervisor: supervisor.clone(),
                 roots,
@@ -113,7 +119,7 @@ pub fn run() {
                 pending_action: Mutex::new(actions::parse_action(&args)),
                 session: commands::SessionIntent::default(),
             });
-            tauri::async_runtime::spawn(async move { supervisor.start() });
+            supervisor.start();
             if tray::enabled_by_default() {
                 // A missing StatusNotifier host (some Linux desktops) must not stop the app.
                 if let Err(error) = tray::build(app.handle()) {

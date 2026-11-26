@@ -110,6 +110,16 @@ fn config() -> SupervisorConfig {
 }
 
 fn harness(mode: &str, extra_env: &[(&str, String)], config: SupervisorConfig) -> Harness {
+    harness_on(None, mode, extra_env, config)
+}
+
+/// `runtime: None` builds with [`Supervisor::new`], which takes the runtime current here, if any.
+fn harness_on(
+    runtime: Option<tokio::runtime::Handle>,
+    mode: &str,
+    extra_env: &[(&str, String)],
+    config: SupervisorConfig,
+) -> Harness {
     let spawns = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&spawns);
     let mut env = vec![("FAKE_MODE".into(), mode.into())];
@@ -125,7 +135,10 @@ fn harness(mode: &str, extra_env: &[(&str, String)], config: SupervisorConfig) -
         })
     });
     let sink = Arc::new(RecordingSink::default());
-    let supervisor = Supervisor::new(config, launch, Arc::clone(&sink) as Arc<dyn EventSink>);
+    let supervisor = match runtime {
+        Some(runtime) => Supervisor::on_runtime(runtime, config, launch, Arc::clone(&sink) as Arc<dyn EventSink>),
+        None => Supervisor::new(config, launch, Arc::clone(&sink) as Arc<dyn EventSink>),
+    };
     Harness { supervisor, sink, spawns }
 }
 
@@ -343,4 +356,32 @@ async fn a_missing_runtime_fails_at_once_with_its_code() {
     let error = supervisor.call("system.ping", None).await.unwrap_err();
     assert_eq!(error.code, codes::BACKEND_UNAVAILABLE);
     supervisor.shutdown().await;
+}
+
+/// The installer's completion callback (a plain std thread) and the sync `backend_restart`
+/// command (Tauri's main thread) call `restart()` outside any Tokio runtime. It used to call
+/// `tokio::spawn` there, which panics, and the release build aborts on panic.
+#[test]
+fn restart_from_a_plain_thread_runs_the_loop_on_the_supervisors_runtime() {
+    let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+    let h = harness_on(Some(runtime.handle().clone()), "ok", &[], config());
+    let supervisor = h.supervisor.clone();
+    std::thread::spawn(move || supervisor.restart()).join().expect("restart() panicked outside a runtime");
+    let (pid, _, _) = ready_pid(&runtime.block_on(h.supervisor.wait_ready(Duration::from_secs(10))));
+    let supervisor = h.supervisor.clone();
+    std::thread::spawn(move || supervisor.restart()).join().expect("a second restart() panicked");
+    assert_eq!(h.spawns.load(Ordering::SeqCst), 1, "restart while running keeps the running loop");
+    runtime.block_on(h.supervisor.shutdown());
+    assert!(wait_gone(&[pid], Duration::from_secs(5)).is_empty(), "the backend is gone after shutdown");
+}
+
+#[test]
+fn without_any_runtime_start_fails_with_a_status_instead_of_panicking() {
+    let h = harness_on(None, "ok", &[], config()); // Built here, outside any runtime.
+    let supervisor = h.supervisor.clone();
+    std::thread::spawn(move || supervisor.start()).join().expect("start() panicked outside a runtime");
+    let status = h.supervisor.status();
+    assert!(matches!(&status, BackendStatus::Failed { code, .. } if code == failure::NO_RUNTIME), "{status:?}");
+    assert_eq!(h.spawns.load(Ordering::SeqCst), 0);
+    assert!(h.sink.statuses.lock().unwrap().iter().any(|s| matches!(s, BackendStatus::Failed { .. })));
 }

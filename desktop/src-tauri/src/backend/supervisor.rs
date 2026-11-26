@@ -133,6 +133,8 @@ impl BackendStatus {
 pub mod failure {
     pub const PROTOCOL_MISMATCH: &str = "PROTOCOL_MISMATCH";
     pub const CRASH_LOOP: &str = "CRASH_LOOP";
+    /// No Tokio runtime to run the supervision loop on (a programming error, never a panic).
+    pub const NO_RUNTIME: &str = "NO_RUNTIME";
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +244,9 @@ struct Inner {
     generation: AtomicU64,
     stderr_tail: Mutex<VecDeque<String>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Where the supervision loop runs. [`Supervisor::start`] is called from Tauri's main
+    /// thread (sync commands) and from the installer's plain thread, outside any runtime.
+    runtime: Option<tokio::runtime::Handle>,
 }
 
 /// Handle to the supervised backend; cheap to clone.
@@ -258,7 +263,28 @@ enum Outcome {
 }
 
 impl Supervisor {
+    /// A supervisor whose loop runs on the runtime current at construction, if any.
     pub fn new(config: SupervisorConfig, launch: LaunchFn, sink: Arc<dyn EventSink>) -> Self {
+        Self::build(tokio::runtime::Handle::try_current().ok(), config, launch, sink)
+    }
+
+    /// A supervisor whose loop always runs on `runtime`, whichever thread calls
+    /// [`Supervisor::start`] or [`Supervisor::restart`]. The app passes Tauri's runtime.
+    pub fn on_runtime(
+        runtime: tokio::runtime::Handle,
+        config: SupervisorConfig,
+        launch: LaunchFn,
+        sink: Arc<dyn EventSink>,
+    ) -> Self {
+        Self::build(Some(runtime), config, launch, sink)
+    }
+
+    fn build(
+        runtime: Option<tokio::runtime::Handle>,
+        config: SupervisorConfig,
+        launch: LaunchFn,
+        sink: Arc<dyn EventSink>,
+    ) -> Self {
         let (link, _) = watch::channel(None);
         let (status, _) = watch::channel(BackendStatus::Idle);
         let (stopping, _) = watch::channel(false);
@@ -274,21 +300,34 @@ impl Supervisor {
                 generation: AtomicU64::new(0),
                 stderr_tail: Mutex::new(VecDeque::new()),
                 task: Mutex::new(None),
+                runtime,
             }),
         }
     }
 
-    /// Start the supervision loop unless it is already running. Must run inside a Tokio runtime.
+    /// Start the supervision loop unless it is already running. Safe from any thread: the loop
+    /// runs on the supervisor's runtime, else on the caller's; with neither, the status turns
+    /// `failed` instead of panicking (the release build aborts on panic).
     pub fn start(&self) {
         let mut task = self.inner.task.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         if task.as_ref().is_some_and(|handle| !handle.is_finished()) {
             return;
         }
+        let Some(runtime) = self.inner.runtime.clone().or_else(|| tokio::runtime::Handle::try_current().ok()) else {
+            log::error!("[Supervisor] Start refused — {{ reason: no async runtime }}");
+            self.inner.set_status(BackendStatus::Failed {
+                code: failure::NO_RUNTIME.into(),
+                message: "MyNotes could not start its backend loop (no async runtime)".into(),
+                crashes: 0,
+                stderr_tail: Vec::new(),
+            });
+            return;
+        };
         self.inner.stopping.send_replace(false);
         // Visible at once, so a call made right after `start` waits instead of failing.
         self.inner.set_status(BackendStatus::Starting { attempt: 0 });
         let inner = Arc::clone(&self.inner);
-        *task = Some(tokio::spawn(async move { inner.run().await }));
+        *task = Some(runtime.spawn(async move { inner.run().await }));
     }
 
     /// Start again after `failed` (or `stopped`): crash counters begin from zero.
