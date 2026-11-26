@@ -29,9 +29,11 @@ mynotes serve --stdio --workspace "$WORKSPACE"
   `--version` probe, a queue runner) can neither corrupt nor read the channel.
   Child processes never inherit the channel descriptors.
 - Stderr carries human-readable logs only. Do not parse it.
-- End of stdin, or `system.shutdown`, stops the server: requests already
-  running finish and are answered, queued ones get `-32800`, the queue lease
-  lapses within 15 s as after a crash, and running jobs keep running.
+- End of stdin, or `system.shutdown`, stops the server. Assistant replies
+  are stopped first, before anything is waited for (see Assistant). Then
+  queued requests get `-32800`, requests already running finish and are
+  answered (a `job.wait` answers at once with the job as it is), the queue
+  lease lapses within 15 s as after a crash, and running jobs keep running.
 
 ## Framing
 
@@ -99,6 +101,10 @@ passed by path and deleted when the command ends.
 | slow | in the server, 2 threads | commands that write local files, probe agent CLIs (`doctor`), copy or hash audio |
 | job | `python -I -X utf8 -m mynotes.rpc_job`, own session (Unix) or Windows job object | anything that can call an agent, transcription, LibreOffice or the network, or that installs signal handlers |
 | server | in the server, 4 threads (`job.wait`: its own 8) | `system.*`, `session.*`, `watch.*`, `job.*` |
+
+`system.ping` and `system.shutdown` use no lane: the thread that reads
+requests answers them, so four slow reads in the fast lane never delay the
+supervisor's liveness check.
 
 `assistant.start` and `assistant.send` are listed in the job lane: they answer
 at once and the reply runs in a separate provider process (see Assistant).

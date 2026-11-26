@@ -158,6 +158,11 @@ class Server:
         if self.shutting_down.is_set():
             self._error(identifier, RpcError(SHUTTING_DOWN, "The server is shutting down"))
             return
+        if method == "system.ping":
+            # Answered by the reading thread: the supervisor restarts a server
+            # whose ping times out, so a busy lane must never delay it.
+            self.send({"jsonrpc": "2.0", "id": identifier, "result": self.m_system_ping({})})
+            return
         try:
             lane_name = self._lane(method, params)
         except RpcError as error:
@@ -380,15 +385,20 @@ class Server:
     # Shutdown --------------------------------------------------------------
     def close(self) -> None:
         self.shutting_down.set()
+        # First, before waiting for anything: replies use pipes to this
+        # process and none may outlive it, even if the supervisor's grace
+        # period ends while a long request is still running.
+        self.assistant.close()
         with self.pending_lock:
-            for future in list(self.pending.values()):
-                future.cancel()
+            queued = list(self.pending.values())
+        for future in queued:
+            # Outside pending_lock: cancel() runs _done, which takes it, in this thread.
+            future.cancel()
+        self.jobs.close()  # Jobs keep running; job.wait calls answer now.
         for executor in self.lanes.values():
             executor.shutdown(wait=True, cancel_futures=True)
         self.lease.close(release=False)  # The lease lapses within 15 s, as after a crash.
         self.watcher.close()
-        self.jobs.close()
-        self.assistant.close()  # Replies use pipes to this process: none outlives it.
 
 
 def _rss_bytes() -> int | None:

@@ -208,8 +208,14 @@ class JobManager:
             return sum(job.state == "RUNNING" for job in self.jobs.values())
 
     def wait(self, identifier: str, timeout: float | None = None) -> dict:
+        """The job once it ends, the timeout passes or the server closes."""
         job = self.get(identifier)
-        job.done.wait(timeout)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not job.done.is_set() and not self.closing.is_set():
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                break
+            job.done.wait(POLL_SECONDS if remaining is None else min(remaining, POLL_SECONDS))
         return job.public()
 
     # Cancellation --------------------------------------------------------
