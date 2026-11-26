@@ -73,7 +73,7 @@
   min-height: var(--control-height-sm);
   padding: 0 var(--space-2);
   border-radius: var(--radius-input);
-  color: var(--color-text-brand);
+  color: var(--color-link, var(--color-text-brand));
   font: var(--text-button-sm);
   text-decoration: none;
   transition: background-color var(--duration-fast) var(--ease-standard);
