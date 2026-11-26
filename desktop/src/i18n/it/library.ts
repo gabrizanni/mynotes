@@ -46,7 +46,7 @@ export const library: Messages["library"] = {
     assignTitle: "Scegli un corso",
     assignBody: "MyNotes aggiunge la registrazione alle lezioni del corso.",
     assignCourse: "Corso",
-    assignNumber: "Numero della lezione",
+    assignNumber: "Numero lezione",
     assign: "Aggiungi al corso",
     assigned: (course: string) => `Aggiunta a ${course}.`,
     assignFailed: "Impossibile aggiungerla al corso. Controlla il numero.",

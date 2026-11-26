@@ -1,9 +1,9 @@
 import { CircleSlash, CornerDownRight, PencilLine, Split, Tag } from "lucide-react";
-import { useLayoutEffect, useRef } from "react";
+import { Fragment, useLayoutEffect, useRef } from "react";
 
 import { chipFor, Icon } from "../../components";
 import { cx } from "../../design/cx";
-import { useT, type Messages } from "../../i18n";
+import { useI18n, useT, type Messages } from "../../i18n";
 import type { CalendarFormat } from "./format";
 import type { CalendarLesson, Placement, WeekColumn } from "./model";
 import styles from "./Calendar.module.css";
@@ -33,11 +33,13 @@ export interface BlockProps {
 }
 
 function LessonBlock({ placement, fmt, open, onOpen }: BlockProps) {
-  const t = useT();
+  const { t, lang } = useI18n();
   const lesson = placement.item;
   const top = placement.top * PX_PER_MINUTE;
   const height = Math.max(placement.height * PX_PER_MINUTE - 2, 20);
   const roomy = height >= ROOMY_PX;
+  // Side by side with another lesson (a clash): usually too narrow for a course name.
+  const shared = placement.span < placement.columnCount;
   const flag = lesson.clash
     ? { icon: Split, label: t.calendar.flags.clash }
     : lesson.needsCourse
@@ -65,27 +67,52 @@ function LessonBlock({ placement, fmt, open, onOpen }: BlockProps) {
           lesson.excluded && styles.excluded,
           !roomy && styles.compact,
           flag && styles.flagged,
+          shared && styles.shared,
         )}
         aria-label={lessonSummary(t, fmt, lesson)}
         aria-haspopup="dialog"
         aria-expanded={open}
+        title={shared ? lesson.courseName : undefined}
         onClick={(event) => onOpen(lesson, event.currentTarget)}
       >
-        <span className={styles.blockTitle}>
-          {placement.continued && <Icon icon={CornerDownRight} size={14} className={styles.blockGlyph} />}
-          {lesson.courseName}
-          {lesson.lessonNumber ? <span className={styles.blockNumber}> · {lesson.lessonNumber}</span> : null}
-        </span>
-        {roomy && (
-          <span className={styles.blockTime}>
-            {fmt.range(lesson.start, lesson.end)}
-            {lesson.localChanges && <Icon icon={PencilLine} size={14} className={styles.blockEdited} />}
+        <span className={styles.blockFull}>
+          {/* Course names are typed by the student; the UI language is the best hyphenation hint we have.
+              Each word is its own box, so lines break between words and a word is only hyphenated
+              (or ellipsized, where the engine has no dictionary) when it is wider than the block. */}
+          <span className={styles.blockTitle} lang={lang}>
+            {placement.continued && <Icon icon={CornerDownRight} size={14} className={styles.blockGlyph} />}
+            {lesson.courseName.split(/\s+/).map((word, index) => (
+              <Fragment key={index}>
+                {index > 0 && " "}
+                <span className={styles.blockWord}>{word}</span>
+              </Fragment>
+            ))}
+            {/* No break between the dot and the number: the pair moves to the next line together. */}
+            {lesson.lessonNumber ? <span className={styles.blockNumber}>{" · "}{lesson.lessonNumber}</span> : null}
           </span>
-        )}
-        {roomy && flag && (
-          <span className={styles.blockFlag}>
-            <Icon icon={flag.icon} size={14} />
-            <span className={styles.blockFlagLabel}>{flag.label}</span>
+          {roomy && (
+            <span className={styles.blockTime}>
+              {/* Same text as fmt.range; the end time is its own box so a narrow block can drop it. */}
+              <span>
+                {fmt.time(lesson.start)}
+                <span className={styles.blockTimeEnd}>–{fmt.time(lesson.end)}</span>
+              </span>
+              {lesson.localChanges && <Icon icon={PencilLine} size={14} className={styles.blockEdited} />}
+            </span>
+          )}
+          {roomy && flag && (
+            <span className={styles.blockFlag}>
+              <Icon icon={flag.icon} size={14} />
+              <span className={styles.blockFlagLabel}>{flag.label}</span>
+            </span>
+          )}
+        </span>
+        {/* Narrow face of a side-by-side block: start time and the flag icon. The full name stays in the
+            accessible name, the tooltip and the popover; the CSS swaps faces by the block's real width. */}
+        {shared && (
+          <span className={styles.blockBrief}>
+            <span className={styles.blockBriefTime}>{fmt.time(lesson.start)}</span>
+            {flag && <Icon icon={flag.icon} size={14} className={styles.blockBriefFlag} />}
           </span>
         )}
       </button>

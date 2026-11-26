@@ -25,7 +25,7 @@ export const palette: Messages["palette"] = {
   undoFor: (course: string) => `Annulla l'ultimo aggiornamento · ${course}`,
   undoTitle: (course: string) => `Annullare l'ultimo aggiornamento di ${course}?`,
   undoBody: "Il Word attuale viene prima salvato come copia di sicurezza.",
-  undoConfirm: "Annulla l'aggiornamento",
+  undoConfirm: "Ripristina la versione precedente",
   undone: (course: string) => `${course}: ultimo aggiornamento annullato. La copia di sicurezza resta.`,
   undoFailed: "Impossibile annullare l'aggiornamento. Nulla è cambiato. Riprova.",
   themeDark: "Passa al tema scuro",

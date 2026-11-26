@@ -123,6 +123,7 @@ export const settings = {
     invalidUrl: "Paste a link that starts with https:// or webcal://.",
   },
   general: {
+    intro: "Language, theme and where MyNotes keeps your files.",
     languageHint: "Also the language MyNotes uses in Word.",
     folders: "Folders",
     recordings: "Recordings",

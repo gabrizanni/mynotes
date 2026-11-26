@@ -61,7 +61,7 @@ export const gallery: Messages["gallery"] = {
     openDialog: "Annulla l'ultimo aggiornamento",
     dialogTitle: "Annullare l'ultimo aggiornamento?",
     dialogBody: "Prima il Word attuale viene salvato come copia di sicurezza.",
-    dialogConfirm: "Annulla l'aggiornamento",
+    dialogConfirm: "Ripristina la versione precedente",
     openSheet: "Crea gli appunti",
     sheetTitle: "Appunti per la lezione 3 · Statistica",
     sheetBody: "Invia la trascrizione e le slide scelte a Claude Code.",

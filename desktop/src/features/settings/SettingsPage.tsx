@@ -50,7 +50,7 @@ function intro(t: ReturnType<typeof useT>, section: SettingsSection): string {
     case "calendars":
       return t.settings.calendars.intro;
     case "general":
-      return t.settings.general.languageHint;
+      return t.settings.general.intro;
     case "profile":
       return t.settings.profile.intro;
     case "diagnostics":

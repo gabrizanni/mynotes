@@ -71,9 +71,15 @@ MYNOTES_DESKTOP_REPO=/path/to/checkout MYNOTES_WORKSPACE=/tmp/ws src-tauri/targe
 repository) on a temporary workspace with a private `HOME` and no agent CLIs on `PATH`, builds a
 course, a schedule, a recordings folder and one finished job through the API, then calls every
 method of `src/rpc/schema.ts` that needs no agent, recorder or network through the app's own
-`RpcClient` (Node stdio transport, `tests/contract/stdioTransport.ts`). The `EXPECTED` table in
-`tests/contract/serve.contract.test.ts` pins which answers the schemas accept today; a `drift`
-entry fails the suite once the schema is fixed, so the entry goes away with the fix.
+`RpcClient` (Node stdio transport, `tests/contract/stdioTransport.ts`). Every method of the table
+is classified once: called with the params the app sends, `NOT_CALLED` with its reason, answered
+by the shell, or `PENDING_METHODS` (modelled but not in SERVE.md yet; the suite fails the day the
+server knows them). The `EXPECTED` table pins which answers the schemas accept; a `drift` entry
+fails the suite once the schema is fixed, so the entry goes away with the fix.
+
+The mock fixtures use the same wire shapes as the server (job records, watch snapshots, the
+`{exitCode, data}` envelope). Features read the app's `Job` view, built from records and job
+notifications in one place, `src/rpc/jobs.ts`.
 
 `MYNOTES_CONTRACT_RECORD=1 npm run test:contract` writes every real answer, temporary paths
 replaced by `/tmp/mynotes-contract`, to `tests/fixtures/rpc-real/`. They do not overwrite

@@ -167,9 +167,11 @@
   list-style: none;
 }
 
+/* Each slot is a size container: a block picks its face from its real width (see .shared). */
 .blockSlot {
   position: absolute;
   display: flex;
+  container: lesson / inline-size;
 }
 
 .block {
@@ -180,7 +182,8 @@
   gap: 2px;
   width: 100%;
   min-width: 0;
-  padding: 6px var(--space-2);
+  /* 6 px all round: at the default window a 14-letter course name still fits on one line. */
+  padding: 6px;
   border: 1px solid var(--color-border-hairline);
   border-radius: var(--radius-input);
   color: var(--color-text-primary);
@@ -245,28 +248,124 @@
   opacity: 0.62;
 }
 
+/* Words are inline boxes, which a decoration does not reach from the title: strike each one. */
 .excluded .blockTitle,
+.excluded .blockWord,
 .excluded .chipLessonTitle {
   text-decoration: line-through;
   text-decoration-color: var(--color-text-muted);
 }
 
+/* Both faces of a block live in the markup; this wrapper keeps the full face in the block's flex flow. */
+.blockFull {
+  display: contents;
+}
+
+/*
+ * Course name on up to two lines. Lines break between words only: each word is its own box, so a
+ * word is never cut mid-word. A word wider than the block is hyphenated inside its box (lang is
+ * set on the title) or, where the engine has no dictionary for it, ends in an ellipsis.
+ */
 .blockTitle {
   display: -webkit-box;
   flex: none;
   max-width: 100%;
+  max-height: 32px; /* two lines, also when one long word wraps inside its own box */
   font: var(--text-label);
   line-height: 16px;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
-  overflow-wrap: break-word;
+  overflow-wrap: normal;
+}
+
+.blockWord {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
   hyphens: auto;
 }
 
+/* Short or flagged blocks keep one line: the name runs on and ends in an ellipsis. */
 .compact .blockTitle,
 .flagged .blockTitle {
-  -webkit-line-clamp: 1;
+  display: block;
+  max-height: none;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compact .blockWord,
+.flagged .blockWord {
+  display: inline;
+}
+
+/*
+ * Side-by-side blocks (time clash). Too narrow for a course name, they show the start time and the
+ * flag icon; the name stays in the accessible name, the tooltip and the popover. When the slot is
+ * wide enough (large window), the full face comes back. Without container queries the brief face
+ * stays, which is the legible fallback.
+ */
+.blockBrief {
+  display: none;
+}
+
+.shared {
+  padding-inline: var(--space-1);
+}
+
+.shared .blockFull {
+  display: none;
+}
+
+.shared .blockBrief {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.blockBriefTime {
+  font: var(--text-time);
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.blockBriefFlag {
+  flex: none;
+  color: var(--color-warning);
+}
+
+@container lesson (min-width: 96px) {
+  .shared {
+    padding-inline: 6px;
+  }
+
+  .shared .blockFull {
+    display: contents;
+  }
+
+  .shared .blockBrief {
+    display: none;
+  }
+}
+
+/* Small window: the full range no longer fits a block, the start time stays (the popover has both). */
+@container lesson (max-width: 90px) {
+  .blockTimeEnd {
+    display: none;
+  }
+}
+
+/* Smallest window: not even the start time fits, the flag icon is left (the popover has the rest). */
+@container lesson (max-width: 45px) {
+  .blockBriefTime {
+    display: none;
+  }
 }
 
 .blockNumber {
@@ -362,12 +461,16 @@
   text-transform: capitalize;
 }
 
-/* Six weeks fill the window; a busy day grows its row and the grid scrolls inside. */
+/*
+ * Six weeks fill the window; a busy day grows its row and the grid scrolls inside. The card ends
+ * where the week card ends (week: 292 px offset + a 71 px head; month: a 37 px head), so the six
+ * rows fit without scrolling at the default 800 px window.
+ */
 .monthGrid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-template-rows: repeat(6, minmax(88px, 1fr));
-  height: max(420px, calc(100vh - 336px));
+  height: max(420px, calc(100vh - 258px));
   margin: 0;
   padding: 0;
   overflow-y: auto;

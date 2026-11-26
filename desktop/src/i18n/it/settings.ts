@@ -10,7 +10,7 @@ export const settings: Messages["settings"] = {
     calendars: "Calendari",
     general: "Generali",
     profile: "Su di te",
-    diagnostics: "Verifica configurazione",
+    diagnostics: "Diagnostica",
   },
   theme: "Tema",
   themeSystem: "Come il sistema",
@@ -125,6 +125,7 @@ export const settings: Messages["settings"] = {
     invalidUrl: "Incolla un link che inizi con https:// o webcal://.",
   },
   general: {
+    intro: "Lingua, tema e cartelle in cui MyNotes tiene i tuoi file.",
     languageHint: "È anche la lingua che MyNotes usa nel Word.",
     folders: "Cartelle",
     recordings: "Registrazioni",
