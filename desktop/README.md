@@ -4,11 +4,16 @@ A calm, button-driven window for MyNotes: record lectures, transcribe them on th
 grow one Word handout per course, without a terminal. Tauri 2 shell, React 19 + TypeScript
 (strict) UI, plain CSS with design tokens. English and Italian.
 
-> Status: foundation. The shell, design system, component library, RPC client, store, i18n and
-> the **Today** screen are done and run against a fixture mock; the other screens are
-> placeholders. The Rust shell supervises the real `mynotes serve --stdio` (proved on Linux by
-> `--self-check` and the contract tests). The app identifier `io.github.gabrizanni.mynotes.desktop`
-> is a placeholder awaiting the maintainer's approval.
+> Status: every screen is built: Today, Calendar, Courses and course pages, Library, Activity,
+> the lesson page with its player and transcript, Settings, the first-run onboarding, the
+> assistant panel and the recording capsule. Inside the app they talk to the real
+> `mynotes serve --stdio`; in a browser they run against the fixture mock. Proved on Linux:
+> `--self-check`, the contract tests against the real server and the mocked e2e flows. The CI
+> real-app smoke under Xvfb passed once with a blank screenshot; it now fails unless text is
+> visible and prints what the page showed, and that version has not run yet. Not proved: the
+> window on macOS and Windows (CI builds their bundles, nobody has run them), and everything
+> listed as Windows-only below. The app identifier `io.github.gabrizanni.mynotes.desktop` is
+> provisional, awaiting the maintainer's approval.
 
 Product and UX spec: [`docs/UX-SPEC.md`](docs/UX-SPEC.md).
 
@@ -17,7 +22,7 @@ Product and UX spec: [`docs/UX-SPEC.md`](docs/UX-SPEC.md).
 Requirements: Node 22.12 or newer, Rust stable (for `src-tauri`), and the Tauri Linux system
 libraries (`webkit2gtk-4.1`, `libsoup3`, GTK 3, `libayatana-appindicator3` for the tray) when
 building the shell on Linux. The contract tests and the self-check also need `uv` and a checkout
-that contains `mynotes serve` (this repository once the serve work is merged).
+that contains `mynotes serve` (this repository).
 
 ```sh
 npm ci
@@ -44,7 +49,7 @@ CLIs and `uv` are found when the app is launched from a dock or launcher). It lo
 | --- | --- |
 | `MYNOTES_DESKTOP_PYTHON` | this interpreter: `<python> -I -X utf8 -m mynotes serve --stdio` |
 | `MYNOTES_DESKTOP_REPO` | a source checkout: `uv run --project <repo> mynotes serve --stdio` |
-| (none) | the installed runtime: `~/.local/share/mynotes/app/current/venv/bin/python` on Linux, `~/Library/Application Support/MyNotes/…` on macOS, `<install dir>\runtime\python.exe` on Windows; `MYNOTES_HOME` overrides the runtime home |
+| (none) | the installed runtime: `~/.local/share/mynotes/app/current/venv/bin/python` on Linux, `~/Library/Application Support/MyNotes/…` on macOS; on Windows `runtime\python.exe` next to or above this app, then the one MyNotes for Windows installs, `%LOCALAPPDATA%\Programs\MyNotes\runtime\python.exe` (`windows/setup/MyNotes.iss`). `MYNOTES_HOME` overrides the macOS and Linux runtime home |
 
 A variable that points nowhere is an error, never a silent fallback. The backend resolves its
 workspace as the CLI does (`MYNOTES_WORKSPACE`, then the default). Without a runtime the supervisor
@@ -105,6 +110,12 @@ real-app smoke test on Linux (Xvfb, `webkit2gtk-driver`, `tauri-driver`, `tests/
 
 - **Single instance.** A second launch focuses the window; `--action record-dialog` is
   forwarded to it as the `app://action` event (`src/rpc/native.ts`).
+- **Closing the window.** Closing it destroys the main webview. With a tray, MyNotes keeps
+  running (recording state, notifications) and "Open MyNotes" or a second launch builds the
+  window again from `tauri.conf.json`; an action asked for meanwhile waits for the new
+  webview (`take_pending_action`). Without a tray, closing the window quits the app, so the
+  recording capsule can never keep an app alive that nothing can show or quit. Recordings run
+  in the Capture service and continue either way.
 - **Global shortcut.** `Ctrl+Alt+Shift+R` (`⌘⌥⇧R` on macOS) asks for the record dialog on
   macOS, Windows and X11. Wayland gives apps no global shortcuts: bind the action in the
   compositor instead, for example on Hyprland
@@ -118,6 +129,20 @@ real-app smoke test on Linux (Xvfb, `webkit2gtk-driver`, `tauri-driver`, `tests/
   stays blank on some Wayland GPUs, start with `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
 - A system notification says "Notes ready" when a notes job completes while the window is not
   focused.
+- **Playback.** Recordings play through Tauri's asset protocol, whose scope starts empty.
+  Before playing, the webview asks Rust (`audio_source`): the file must be an audio file
+  inside a recording folder the backend reports (`paths.recording_dirs`, course recording
+  folders, the Capture output folder and microphone tests, the library's managed folder), and
+  only that file is added to the scope. The CSP adds the asset origin to `media-src` only.
+- **Links and settings.** Install guides open in the browser through Rust (`open_external`:
+  https only, on the guides' hosts). "Open settings" opens the microphone privacy pane on
+  macOS and Windows and the first sound settings program found on Linux (GNOME Settings, KDE
+  System Settings, then pavucontrol).
+- **When the backend gives up.** After 5 stops in 2 minutes, or a protocol mismatch, the
+  window shows why, the backend's last stderr lines, "Try again" and "Copy details" instead of
+  pages whose every call fails. A window error that would leave the page blank shows a plain
+  error screen with "Reload window"; inside the app every window error is also written to the
+  app log.
 
 ## Architecture
 
@@ -132,9 +157,11 @@ desktop/
     i18n/          en/<feature>.ts (source), it/<feature>.ts (typed against en)
     features/      one folder per screen: today/ (done), calendar/, courses/, library/,
                    activity/, lesson/, settings/, onboarding/, assistant/, capture/, gallery/
-    app/           Shell (sidebar · page · assistant dock), Routes, shortcuts, boot
-  src-tauri/       Rust shell: backend/{protocol,locate,supervisor}.rs, commands.rs,
-                   paths.rs, tray.rs, installer.rs
+    app/           Shell (sidebar · page · assistant dock), Routes, shortcuts, the backend
+                   failure screen, crashGuard.ts (no blank window); boot is src/main.tsx
+  src-tauri/       Rust shell: backend/{protocol,methods,locate,supervisor}.rs, commands.rs,
+                   events.rs, actions.rs, paths.rs, external.rs, tray.rs, capsule.rs,
+                   installer.rs, selfcheck.rs
   tests/
     fixtures/rpc/  mock answers per RPC method, plus scenario patches
     unit/          shared test helpers (unit tests sit next to their code)
@@ -156,17 +183,29 @@ tested against `mynotes serve --list-methods --json`. `backend/locate.rs` finds 
 login-shell `PATH`. `backend/supervisor.rs` runs the child in its own process group (Unix) or
 Job Object (Windows), pings it every 15 s, restarts it with backoff from 0.5 s to 30 s, stops
 after 5 crashes in 2 minutes with the last stderr lines, fails pending calls with
-`BACKEND_RESTARTED`, and on exit closes stdin before signalling the group. `events.rs` turns
-notifications into Tauri events, tray and capsule state, course folders and the notes-ready
-notification. `installer.rs` runs `setup_runtime.py` and streams its progress. The webview gets
-no opener, shell or filesystem permission; `open_path`/`reveal_path` validate paths in Rust
-first (`paths.rs`), and `capabilities/` grants each window only its commands.
+`BACKEND_RESTARTED`, and on exit closes stdin before signalling the group. Its loop runs on
+the Tokio runtime handed to it at construction (Tauri's), so `start` and `restart` are safe
+from any thread: the sync `backend_restart` command and the installer's thread call them. The
+Windows job object kills the server's tree with the app but allows breakaway, which
+`mynotes serve` asks for its jobs and queue runner only (docs/SERVE.md, "Jobs").
+`events.rs` turns notifications into Tauri events, tray and capsule state, the folders
+`open_path` and `audio_source` accept, and the notes-ready notification. `actions.rs` routes
+tray items, second launches and the global shortcut to the main window and recreates it when
+it was closed. `installer.rs` runs `setup_runtime.py` and streams its progress; `setup_run`
+starts it on a blocking worker, never on the main thread. The webview gets no opener, shell
+or filesystem permission; `open_path`/`reveal_path`/`audio_source` validate paths in Rust
+first (`paths.rs`), `open_external`/`open_system_settings` check their target
+(`external.rs`), and `capabilities/` grants each window only its commands.
+
+**Proved where.** The Rust and TypeScript tests run on every platform in CI; behaviour that
+needs Windows itself (a job outliving the app through the job objects, the Inno Setup
+runtime lookup on a real install, the settings URLs) is covered by tests of the flags, paths
+and targets, not by a run on Windows.
 
 ## Add a screen
 
-1. **Folder.** Build it in `src/features/<feature>/`; export the page from `index.tsx`. The
-   placeholder there shows where it plugs in. Keep a pure view-model in `model.ts` (like
-   `features/today/model.ts`) and test it.
+1. **Folder.** Build it in `src/features/<feature>/`; export the page from `index.tsx`. Keep a
+   pure view-model in `model.ts` (like `features/today/model.ts`) and test it.
 2. **Route.** If the screen needs a new URL, add a variant to `Route` in
    `src/state/routes.ts` (parse + format), then a case in `src/app/Routes.tsx`. The switch is
    exhaustive, so `tsc` lists what is missing.

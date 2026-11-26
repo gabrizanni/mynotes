@@ -1,6 +1,6 @@
 //! JSON-RPC 2.0 over newline-delimited UTF-8 JSON, as spoken by `mynotes serve --stdio`.
 //!
-//! Framing rules (shared with the Python server, see ARCHITECTURE.md section A1):
+//! Framing rules (shared with the Python server, see docs/SERVE.md, "Framing"):
 //! - one JSON message per line, terminated by `\n` (a trailing `\r` is tolerated);
 //! - at most [`MAX_MESSAGE_BYTES`] per message, newline excluded;
 //! - no batches;
