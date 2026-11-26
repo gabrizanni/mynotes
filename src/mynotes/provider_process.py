@@ -1,6 +1,7 @@
 """Owned Windows provider processes and bounded reads from anonymous pipes."""
 from __future__ import annotations
 
+import errno
 import os
 import queue
 import selectors
@@ -11,6 +12,60 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from typing import BinaryIO, Hashable
+
+WINDOWS = os.name == "nt"
+
+# Process creation flags (winbase.h) and job limits (winnt.h), as plain numbers
+# so that the flag construction below is the same, and testable, everywhere.
+CREATE_SUSPENDED = 0x00000004
+CREATE_NO_WINDOW = 0x08000000
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+ERROR_ACCESS_DENIED = 5
+
+
+def job_limit_flags(*, kill_on_close: bool) -> int:
+    """LimitFlags of a MyNotes job object: kill-on-close owns the tree, without it the tree survives."""
+    return JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE if kill_on_close else 0
+
+
+def creation_flags(*, console: bool, suspended: bool = True) -> int:
+    flags = CREATE_SUSPENDED if suspended else 0
+    return flags if console else flags | CREATE_NO_WINDOW
+
+
+def breakaway_refused(error: OSError) -> bool:
+    """CreateProcess denies CREATE_BREAKAWAY_FROM_JOB when the caller's job lacks BREAKAWAY_OK."""
+    return getattr(error, "winerror", None) == ERROR_ACCESS_DENIED or error.errno == errno.EACCES
+
+
+def popen_breakaway(command: list[str], flags: int, *, popen: Callable[..., subprocess.Popen] | None = None,
+                    **options) -> tuple[subprocess.Popen, bool]:
+    """Start a process outside the caller's job object when that job allows it.
+
+    Returns the process and whether it broke away. The MyNotes desktop
+    supervisor sets JOB_OBJECT_LIMIT_BREAKAWAY_OK on the job that holds
+    `mynotes serve`; a job that refuses (another host, a terminal, a CI runner)
+    gets the process inside it instead, and the process then ends with that job.
+    """
+    popen = popen or subprocess.Popen
+    try:
+        return popen(command, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB, **options), True
+    except OSError as error:
+        if not breakaway_refused(error):
+            raise
+    return popen(command, creationflags=flags, **options), False
+
+
+def popen_detached(command: list[str], *, popen: Callable[..., subprocess.Popen] | None = None,
+                   **options) -> subprocess.Popen:
+    """A background process that outlives its parent: own session (POSIX), outside the parent's job (Windows)."""
+    popen = popen or subprocess.Popen
+    if WINDOWS:
+        return popen_breakaway(command, creation_flags(console=False, suspended=False), popen=popen, **options)[0]
+    return popen(command, start_new_session=True, **options)
+
 
 if os.name == "nt":
     import ctypes
@@ -63,6 +118,7 @@ if os.name == "nt":
                             ctypes.c_void_p, wintypes.DWORD)
     _assign_job = _win_function("AssignProcessToJobObject", wintypes.BOOL, wintypes.HANDLE, wintypes.HANDLE)
     _close_handle = _win_function("CloseHandle", wintypes.BOOL, wintypes.HANDLE)
+    _terminate_job = _win_function("TerminateJobObject", wintypes.BOOL, wintypes.HANDLE, wintypes.UINT)
     _thread_snapshot = _win_function("CreateToolhelp32Snapshot", wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD)
     _first_thread = _win_function("Thread32First", wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(_ThreadEntry))
     _next_thread = _win_function("Thread32Next", wintypes.BOOL, wintypes.HANDLE, ctypes.POINTER(_ThreadEntry))
@@ -100,26 +156,35 @@ if os.name == "nt":
 
 
 class WindowsJob:
-    """Run a Windows process tree with kill-on-close ownership."""
+    """Run a Windows process tree in a job object.
 
-    def __init__(self) -> None:
+    kill_on_close (the default) owns the tree: closing the handle, or the
+    exit of the process holding it, kills it. Without it the tree survives
+    its starter, and `terminate()` stops it. `breakaway=True` starts the
+    process outside the caller's own job first (see popen_breakaway), so a
+    supervisor's kill-on-close job does not end it either.
+    """
+
+    def __init__(self, *, kill_on_close: bool = True) -> None:
         if os.name != "nt":
             raise RuntimeError("A Windows job requires native Windows")
+        self.broke_away = False
         self._handle = _create_job(None, None)
         if not self._handle:
             raise ctypes.WinError(ctypes.get_last_error())
         limits = _ExtendedJobLimits()
-        limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        limits.BasicLimitInformation.LimitFlags = job_limit_flags(kill_on_close=kill_on_close)
         if not _set_job(self._handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
             error = ctypes.WinError(ctypes.get_last_error())
             self.close()
             raise error
 
-    def start(self, command: list[str], *, console: bool = False, **options) -> subprocess.Popen:
-        flags = 0x04  # CREATE_SUSPENDED
-        if not console:
-            flags |= subprocess.CREATE_NO_WINDOW
-        process = subprocess.Popen(command, creationflags=flags, **options)
+    def start(self, command: list[str], *, console: bool = False, breakaway: bool = False, **options) -> subprocess.Popen:
+        flags = creation_flags(console=console)
+        if breakaway:
+            process, self.broke_away = popen_breakaway(command, flags, **options)
+        else:
+            process = subprocess.Popen(command, creationflags=flags, **options)
         try:
             # The supported runtime is CPython. Use its existing process
             # handle, so assignment can never target a reused numeric PID.
@@ -135,6 +200,11 @@ class WindowsJob:
             process.wait(timeout=5)
             raise
         return process
+
+    def terminate(self, exit_code: int = 1) -> None:
+        """Kill every process of the job, whatever its limits."""
+        if self._handle and not _terminate_job(self._handle, exit_code):
+            raise ctypes.WinError(ctypes.get_last_error())
 
     def close(self) -> None:
         if self._handle and not _close_handle(self._handle):

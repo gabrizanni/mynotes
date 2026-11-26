@@ -49,6 +49,8 @@ PUBLIC_FILES = (
     "docs/NOTES_FLOW.md",
     "docs/CODEX_NOTES.md",
     "docs/MODEL-CATALOG.md",
+    "docs/SERVE.md",
+    "docs/PERFORMANCE.md",
     "docs/images/open-anyway.svg",
     "docs/images/open-anyway.it.svg",
     "examples/README.md",
@@ -105,6 +107,8 @@ PUBLIC_FILES = (
     "scripts/check_public_tree.py",
     "scripts/install-mynotes.sh",
     "scripts/validate_word_pipeline.py",
+    "scripts/bench_backend.py",
+    "scripts/cli_snapshot.py",
     "THIRD_PARTY_NOTICES.md",
 )
 PUBLIC_DIRECTORIES = ("src", "tests")

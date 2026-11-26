@@ -10,6 +10,8 @@
 - `test_capture_native.py` runs standalone native recorder/recovery and synthetic audio regressions.
 - `capture_install_guard.py` protects updates and rollback with the same lease as recording/export.
 - `validate_word_pipeline.py` verifies a synthetic Word pipeline separately from provider quality.
+- `bench_backend.py` measures CLI cold starts, import time, the native apps' polling cost and the `mynotes serve` round trips on a synthetic workspace; `--compare` prints a before/after table. No provider, network, ASR or Word renderer is used.
+- `cli_snapshot.py` records the exit code, stdout and stderr of deterministic commands on a synthetic workspace, so two checkouts can be compared with `diff -u`.
 - `build_base_template.py` extracts only Word design definitions from an operator-supplied reference into a content-free template; the reference is excluded from distribution.
 
 Keep scripts generic: no personal paths, credentials, calendar tokens or course-processing content. Packaging downloads must be versioned and verified, and must not read tools from a personal legacy project. [Evidence and remaining acceptance](../docs/VALIDATION.md).
