@@ -14,6 +14,8 @@ use crate::paths;
 
 pub struct AppState {
     pub supervisor: Supervisor,
+    /// Folders `open_path` and `reveal_path` may touch; the supervisor adds course folders.
+    pub roots: paths::AllowedRoots,
 }
 
 /// Exact methods the webview may call (ARCHITECTURE.md section A, protocol 1).
@@ -109,8 +111,8 @@ pub async fn rpc_call(
 ///
 /// TODO(opener): hand the checked path to `tauri-plugin-opener` from Rust once it is added.
 #[tauri::command]
-pub fn open_path(path: String) -> Result<(), CommandError> {
-    let checked = paths::check_openable(&path).map_err(|error| CommandError {
+pub fn open_path(state: State<'_, AppState>, path: String) -> Result<(), CommandError> {
+    let checked = paths::check_openable(&path, &state.roots).map_err(|error| CommandError {
         code: codes::INVALID_PARAMS,
         message: error.to_string(),
         data: None,
@@ -126,8 +128,8 @@ pub fn open_path(path: String) -> Result<(), CommandError> {
 ///
 /// TODO(opener): `tauri-plugin-opener`'s `reveal_item_in_dir` from Rust.
 #[tauri::command]
-pub fn reveal_path(path: String) -> Result<(), CommandError> {
-    let checked = paths::check_revealable(&path).map_err(|error| CommandError {
+pub fn reveal_path(state: State<'_, AppState>, path: String) -> Result<(), CommandError> {
+    let checked = paths::check_revealable(&path, &state.roots).map_err(|error| CommandError {
         code: codes::INVALID_PARAMS,
         message: error.to_string(),
         data: None,

@@ -5,7 +5,7 @@
 //! - `backend::locate`: which Python runs `mynotes serve` (pure, tested);
 //! - `backend::supervisor`: the child process (stub, see its TODO list);
 //! - `commands`: what the webview may call (`rpc_call` allowlist, path checks);
-//! - `paths`: open/reveal validation (tested);
+//! - `paths`: open/reveal validation: local-only prefixes, allowed roots, file types (tested);
 //! - `tray`, `installer`: platform features (minimal / stub).
 
 pub mod backend;
@@ -19,7 +19,10 @@ use commands::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(AppState { supervisor: backend::supervisor::Supervisor::new() })
+        .manage(AppState {
+            supervisor: backend::supervisor::Supervisor::new(),
+            roots: paths::AllowedRoots::from_environment(),
+        })
         .setup(|app| {
             if tray::enabled_by_default() {
                 // A missing StatusNotifier host (some Linux desktops) must not stop the app.

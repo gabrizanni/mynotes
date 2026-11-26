@@ -14,7 +14,9 @@
 //! - ping every 15 s; restart with exponential backoff from 0.5 s to 30 s; after 5 crashes in
 //!   2 minutes stop and surface a failure screen with the logs;
 //! - on restart fail every pending call with [`super::protocol::codes::BACKEND_RESTARTED`];
-//! - forward notifications to the webview as the `rpc://notification` Tauri event.
+//! - forward notifications to the webview as the `rpc://notification` Tauri event;
+//! - on `config.changed`, pass the linked course folders to
+//!   [`crate::paths::AllowedRoots::set_course_folders`] so `open_path` can reach them.
 
 use std::time::Duration;
 
