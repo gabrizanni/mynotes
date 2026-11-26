@@ -330,7 +330,7 @@ describe("previews", () => {
   it("reads a ready folder preview", () => {
     const preview = folderPreview({
       status: "READY",
-      note_files: { personal_notes: "/home/student/Statistics/Appunti personali.docx", handout: "/home/student/MyNotes/STAT_COURSE_NOTES.docx" },
+      note_files: { personal_notes: "~/Statistics/Appunti personali.docx", handout: "~/MyNotes/STAT_COURSE_NOTES.docx" },
       inventory: { file_counts: { materials: 14, recordings: 2 }, files: { personal_notes: [] } },
     });
     expect(preview).toEqual({
