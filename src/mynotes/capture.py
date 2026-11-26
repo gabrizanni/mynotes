@@ -671,6 +671,9 @@ def capture_executable() -> Path:
     if sys.platform == "win32":
         from .capture_windows import executable
         return executable()
+    if is_linux():
+        from .capture_linux import executable
+        return executable()
     return app_path() / "Contents/MacOS/MyNotesCapture"
 
 
@@ -678,6 +681,9 @@ def set_enabled(store: CaptureStore, enabled: bool) -> dict:
     if sys.platform == "win32":
         from .capture_windows import set_enabled as enable_windows_capture
         return enable_windows_capture(store, enabled)
+    if is_linux():
+        from .capture_linux import set_enabled as enable_linux_capture
+        return enable_linux_capture(store, enabled)
     import plistlib
     if sys.platform != "darwin":
         raise CaptureError("The recording app requires macOS or Windows 11")
@@ -849,6 +855,11 @@ def standalone_supported(store) -> bool:
             return "standalone-recordings-v1" in read_json(store.runtime_path, {}).get("capabilities", [])
         from .capture_windows import installed
         return installed()
+    if is_linux():
+        if capture_status(store)["running"] is not False:
+            return "standalone-recordings-v1" in read_json(store.runtime_path, {}).get("capabilities", [])
+        from .capture_linux import installed
+        return installed()
     if ("standalone-recordings-v1" in read_json(store.runtime_path, {}).get("capabilities", [])
             and capture_status(store)["running"] is True):
         return True
@@ -871,6 +882,9 @@ def calendar_recordings_supported(store) -> bool:
         return "calendar-recordings-v1" in runtime.get("capabilities", [])
     if sys.platform == "win32":
         from .capture_windows import installed
+        return installed()
+    if is_linux():
+        from .capture_linux import installed
         return installed()
     import plistlib
     info = Path(sys.executable).parent.parent.parent / "MyNotes Capture.app/Contents/Info.plist"
